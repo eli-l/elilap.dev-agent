@@ -38,9 +38,10 @@ export POSTIZ_API_URL=https://postiz.mist.lv/api
 export GHOST_API_URL=...
 export GHOST_API_KEY=...
 
-go run ./cmd/ingest
-go run ./cmd/embed
-go run ./cmd/query "when did I write about burnout"
+go build -o agent ./cmd/agent
+./agent ingest
+./agent embed
+./agent query "when did I write about burnout"
 ```
 
 ## What is NOT in this repo
