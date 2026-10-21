@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+# ask — one-shot wrapper: rag query → LLM call.
+#
+# Real implementation lands in Phase 2.
+# See ../PLAN.md for the build plan.
+
+set -euo pipefail
+
+if [ "${1:-}" = "" ]; then
+  echo "usage: ask <question>" >&2
+  exit 2
+fi
+
+echo "ask: not implemented (Phase 2). Question was: $1" >&2
+exit 1

@@ -1,0 +1,27 @@
+# Build artifacts
+/bin/
+/dist/
+/tmp/
+*.test
+*.out
+
+# Local RAG index (DO NOT COMMIT — single-writer SQLite file)
+/index.db
+/index.db-journal
+/index.db-wal
+/index.db-shm
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+
+# Local config / secrets (never commit)
+/.env
+/.env.*
+/config.local.yaml
+
+# Editor / OS
+.DS_Store
+.idea/
+.vscode/
+*.swp
