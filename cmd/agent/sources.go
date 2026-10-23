@@ -197,7 +197,7 @@ func runSourcesValidate(args []string, stdout, stderr io.Writer) int {
 
 	fmt.Fprintf(stdout, "%s: ok (version %d, %d source(s), %d enabled, %d provider type(s) validated)\n",
 		path, cfg.Version, len(cfg.Sources), len(cfg.Enabled()), len(reg.KnownTypes()))
-	if len(missing) > 0 {
+	if len(missing) > 0 && !strict {
 		fmt.Fprintf(stdout, "warning: %d credential environment variable(s) not set: %s\n",
 			len(missing), strings.Join(missing, ", "))
 	}

@@ -146,7 +146,7 @@ func (s Source) OptionsInto(v any) error {
 		if errors.Is(err, io.EOF) {
 			return nil
 		}
-		return fmt.Errorf("source %q: invalid options: %w", s.ID, err)
+		return fmt.Errorf("invalid options: %w", err)
 	}
 	return nil
 }
