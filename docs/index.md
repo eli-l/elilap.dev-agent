@@ -5,6 +5,9 @@ okf_version: "0.2"
 # Docs
 
 * [API shapes](api-shapes.md) - Index of captured upstream API response shapes (Ghost, Postiz) that migrations/0001_init.sql must stay honest to.
+* [Ghost Admin API shape (live capture)](ghost.md) - Placeholder for the captured Ghost Admin posts response; the honest schema source for migrations/0001_init.sql once Phase 0 lands.
+* [Postiz API shape (live capture)](postiz.md) - Placeholder for the captured Postiz posts response; the honest schema source for migrations/0001_init.sql once Phase 0 lands.
+* [Self-hosted LocalAI endpoint](localai.md) - Verified facts about the LocalAI instance at http://192.168.78.243:8080: version, model ids, embedding dimensions, and chat behaviour.
 
 # Runs
 
