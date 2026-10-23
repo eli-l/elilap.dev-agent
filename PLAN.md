@@ -36,6 +36,8 @@ agent only and the model host is an external dependency.
 7. Environment-independent: the app runs from one `docker compose up` on any
    host with a container runtime, talking to a self-hosted LocalAI over the
    LAN — no host Go toolchain, no ollama, no codex required.
+8. Config-driven imports: every provider is declared in one file, so it can
+   be enabled, disabled, and reconfigured without touching Go code.
 
 **Non-goals (deliberately not in scope)**
 
@@ -47,6 +49,9 @@ agent only and the model host is an external dependency.
 * Real-time streaming indexes. Hourly polling is fine.
 * Model serving at scale (multi-GPU, clustering) — the single self-hosted
   LocalAI instance is the ceiling; this repo never operates a model server.
+* Crawling Eli's website as a source — **deferred 2026-10-23**. The
+  provider registry (§2.6) is the seam that makes adding it a config change
+  later, so deferring costs nothing but one package.
 
 ---
 
@@ -66,6 +71,9 @@ agent only and the model host is an external dependency.
 | 9 | Container runtime | Multi-stage Dockerfile (builder `golang:1.27` → minimal runtime) + `compose.yaml` with the agent service only (LocalAI is external — Decision 10) | Whole system runs on any Docker host; builder tag floats to the latest 1.27 patch ≥ go.mod's `1.27` |
 | 10 | Model serving | **Existing self-hosted LocalAI instance** at `http://192.168.78.243:8080` (LAN host `dev`, LocalAI `v4.12.0`) — models already loaded: `embeddinggemma-300m`, `spark-x2.5-4b`, `spark-x2.5-1.7b-q4`; `/readyz` → 200 (verified 2026-10-23) | One server covers embeddings + chat; nothing to pull on first boot; compose no longer runs LocalAI |
 | 11 | SQLite placement | `AGENT_DB_PATH` env: `/data/index.db` in container, `./index.db` on host; named volume `agent-data` by default | Keeps `index.db` + WAL/SHM siblings on one mount; clean, durable host mapping |
+| 12 | Import config file | One `sources.yaml` at the repo root (YAML, strict decode: `KnownFields(true)`, `version:` field) | Providers are declared in one place and can be enabled/disabled/reconfigured without a rebuild; TOML rejected — the repo already speaks YAML (`eval/queries.yaml`) and YAML carries comments in a hand-edited file (decided 2026-10-23) |
+| 13 | Provider model | One `Provider` interface (`List` cheap → `Fetch` full) + a registry keyed by config `type`; unknown type or bad options = startup error | One code path for every source; the `List`/`Fetch` split is what makes incremental ingest cheap and fixtures-testable without credentials |
+| 14 | Ingest modes | Default = incremental against a state ledger (`source_state` + `source_items`); `--full` = re-fetch + re-chunk + **re-embed** (decided 2026-10-23) | On a full reindex the index is rebuilt exactly as the sources stand today, and the corpus is small enough (≤1,500 chunks) that the CPU cost is acceptable |
 
 ### 1.5 Verified environment (audited 2026-10-21; Go floor re-verified 2026-10-23)
 
@@ -121,6 +129,7 @@ elilap.dev-agent/
 ├── Dockerfile                        # multi-stage: golang:1.27 → minimal runtime
 ├── .dockerignore
 ├── compose.yaml                      # agent service only; LocalAI is external
+├── sources.yaml                      # static import config: providers, enable/disable, options
 ├── go.mod
 ├── cmd/
 │   └── agent/
@@ -129,15 +138,19 @@ elilap.dev-agent/
 │                                     # embed.go, query.go, stats.go, serve.go)
 ├── internal/
 │   ├── sources/
+│   │   ├── provider.go               # Provider / Item / Document interfaces
+│   │   ├── registry.go               # type → constructor, option binding
 │   │   ├── ghost/                    # Ghost Admin client
 │   │   ├── postiz/                   # Postiz HTTP client
 │   │   └── shared/                   # common chunker + hash + types
 │   ├── store/                        # SQLite, migrations, FTS5 glue, sqlite-vec
 │   ├── embed/                        # batching/resume logic over the llm connector
+│   ├── config/                       # sources.yaml loader + strict validation
 │   ├── llm/                          # one OpenAI-compatible HTTP client (LocalAI default)
 │   └── retrieval/                    # hybrid FTS + vec + RRF
 ├── migrations/
-│   └── 0001_init.sql
+│   ├── 0001_init.sql
+│   └── 0002_state.sql                # source_state + source_items ledger
 ├── eval/                             # Phase 2: queries.yaml + ground truth
 ├── scripts/
 │   ├── ask                           # thin wrapper over `agent ask` (Phase 2+)
@@ -215,6 +228,113 @@ one-line swap. We do not ship LocalAI in the image — it runs on
 depends on that host's build, not ours. If the fallback service is ever
 added here, pin it to a **versioned tag, not `latest`**.
 
+### 2.6 Import configuration, provider registry, and ingest modes
+
+**The config file** — `sources.yaml` at the repo root: one static file
+that declares every import provider. Secrets are never in it; each
+credential names an env var to read.
+
+```yaml
+version: 1
+
+defaults:
+  chunking: { target_tokens: 400, overlap_tokens: 60 }
+  user_agent: "elilap-dev-agent/0.1 (+https://elilap.dev)"
+
+sources:
+  - id: ghost
+    type: ghost
+    enabled: true
+    credentials:
+      api_url: { env: GHOST_API_URL }
+      api_key:  { env: GHOST_API_KEY }
+    options: { include_drafts: false, limit: 500 }
+
+  - id: postiz
+    type: postiz
+    enabled: true
+    credentials:
+      api_url: { env: POSTIZ_API_URL }
+      api_key:  { env: POSTIZ_API_KEY }
+    options: { platforms: [instagram, linkedin, x], include_scheduled: false }
+```
+
+Rules: `version:` is checked (unknown version = error); the YAML is decoded
+strictly (`KnownFields(true)`) so a typo is a hard error, never a silently
+ignored key; `enabled: false` disables a provider without deleting it;
+credentials are `{ env: VAR }` references, and the loader fails fast when a
+referenced variable is unset — without printing its value. `--config`
+overrides the path (default `./sources.yaml`).
+
+**The provider interface** — one interface, one registry:
+
+```go
+type Provider interface {
+    Type() string
+    List(ctx context.Context, since time.Time) ([]Item, error) // cheap candidates
+    Fetch(ctx context.Context, it Item) (Document, error)      // full content
+}
+```
+
+`List` is cheap (an Admin API list); `Fetch` is expensive (full body).
+Providers are constructed from the registry by config `type`; an unknown
+`type` or invalid options is a startup error, never a runtime surprise.
+
+**The ledger** — `migrations/0002_state.sql`:
+
+```sql
+CREATE TABLE source_state (
+  source_id    TEXT PRIMARY KEY,   -- config id
+  type         TEXT NOT NULL,
+  config_hash  TEXT NOT NULL,      -- hash of the resolved provider config
+  last_run_at  TEXT,
+  last_full_at TEXT,
+  item_count   INTEGER DEFAULT 0
+);
+
+CREATE TABLE source_items (
+  source_id     TEXT NOT NULL,
+  item_id       TEXT NOT NULL,     -- Ghost uuid / Postiz id
+  url           TEXT,
+  content_hash  TEXT,
+  etag          TEXT,
+  last_modified TEXT,
+  first_seen_at TEXT NOT NULL,
+  last_seen_at  TEXT NOT NULL,
+  seen_run_id   TEXT NOT NULL,     -- run that last saw the item
+  PRIMARY KEY (source_id, item_id)
+);
+```
+
+`chunks` gains `source_id` (the config id, not just the provider kind) and
+`chunk_hash`, so a re-run can tell "text unchanged" from "text changed".
+
+**Ingest modes**
+
+* **Incremental (default)** — `List(since = last_run_at − overlap)` gives
+  candidates; each is cheap-compared against the ledger (ETag,
+  `updated_at`, or a content hint). Unchanged items are skipped: no fetch,
+  no chunk, no embed. Changed or new items are fetched, normalized,
+  chunked, and upserted. Items the ledger knows but this run did not see
+  were deleted upstream — their chunks go with them (drift detection).
+* **Full reindex (`--full`)** — re-fetch, re-chunk, and **re-embed**
+  everything (decided 2026-10-23). `--source <id>` scopes either mode to
+  one provider.
+
+```
+agent ingest                      # incremental, all enabled providers
+agent ingest --source ghost       # one provider
+agent ingest --full               # full reindex: re-fetch + re-chunk + re-embed
+agent ingest --full --source postiz
+agent ingest --dry-run            # what would change, no writes
+agent sources list                # enabled/disabled + resolved options (no secrets)
+agent sources validate            # strict parse + provider option validation
+```
+
+The website (HTML) is **not** a provider yet — deferred 2026-10-23. When
+it comes back it is one `sources.yaml` entry plus one package, because the
+registry is the seam.
+
 ---
 
 ## 3. Phased build plan
@@ -238,6 +358,10 @@ actual response shapes before writing any schema.
       the four source credentials plus runtime config — `LOCALAI_BASE_URL`,
       `LOCALAI_API_KEY` (optional), `EMBED_MODEL`, `CHAT_MODEL`,
       `AGENT_DB_PATH`.
+- [ ] Author `sources.yaml` (§2.6) with one entry per provider (`ghost`,
+      `postiz`), `enabled: true`, credentials as `{ env: VAR }` references
+      and no values. `agent sources validate` must pass before any
+      credential exists.
 - [ ] Obtain **both** credentials (Postiz and Ghost) — neither exists on
       this host today. They enter via env / `.env` only; we will not echo,
       log, or commit them.
@@ -274,6 +398,20 @@ intentionally a separate command.
 - [ ] Collapse `cmd/{ingest,embed,query,stats,serve}/main.go` stubs into
       `cmd/agent/` with subcommand dispatch (Decision 7). `go build`
       still green after.
+- [ ] `internal/config`: load `sources.yaml` (YAML, `KnownFields(true)`,
+      `version` check), validate per-provider options, resolve `{ env: VAR }`
+      credentials without printing values, fail fast on a missing variable.
+- [ ] `internal/sources/provider.go` + `registry.go`: the `Provider`
+      interface and the `type → constructor` registry; an unknown type is a
+      startup error.
+- [ ] `migrations/0002_state.sql`: the `source_state` + `source_items`
+      ledger; `chunks` gains `source_id` + `chunk_hash`.
+- [ ] `agent sources list` / `agent sources validate`: show enabled
+      providers and resolved options (never secrets); validate the file
+      with no credentials present.
+- [ ] `agent ingest` modes: incremental by default against the ledger;
+      `--full` re-fetches, re-chunks and re-embeds; `--source <id>` scopes
+      to one provider; `--dry-run` reports the plan without writing.
 - [ ] Driver spike (small, first): pin `mattn/go-sqlite3` + sqlite-vec Go
       bindings in `go.mod`; prove FTS5 BM25 query + `vec0` insert/KNN
       round-trip in a scratch DB on this Mac **and inside
@@ -405,6 +543,9 @@ until `publish_at <= now` (configurable; default skip).
   an agent container that reaches the model host (`/readyz` on
   `192.168.78.243:8080`) with `agent embed` working from a clean
   container — no host Go toolchain, no ollama, no codex.
+- A second incremental run is a near no-op (no re-fetch, no re-embed).
+- `agent ingest --full` rebuilds every chunk and every embedding from the
+  sources as they stand today.
 - All keys stay in env; no secret leaks in `git log -p` or stdout.
 
 **Estimated effort**: 3–4 focused days (containerization + connector added).
@@ -553,7 +694,10 @@ No public web exposure by default.
 | Docker daemon unreachable from the agent sandbox (verified) | Certain in-sandbox | Slow dev loop for container steps | Run container commands with explicit permission or outside the sandbox; never bake keys into the image |
 | SQLite on a macOS bind mount (VirtioFS) is slow / has locking quirks | Low | Degraded perf when DB is host-visible | Named volume is the default; bind mount documented for export only |
 | Contentless-FTS5 trap (caught in refinement) | Fixed | Would have broken query join-back | Self-contained FTS5 in `0001_init.sql` |
-| Embedding quality too low | Low | Phase 2 eval falls short | Swap embed model in `localai/models/` or point `LOCALAI_BASE_URL` at a stronger server; `embedded_with` audit makes re-runs cheap |
+| Embedding quality too low | Low | Phase 2 eval falls short | Point `LOCALAI_BASE_URL` at a stronger server or change the model id; the `embedded_with` audit makes re-runs cheap |
+| Config typo silently disables a provider | Medium | A source goes dark without an error | Strict YAML decode (`KnownFields(true)`) + `agent sources validate`; the enabled set is printed before each run |
+| Full reindex re-embeds the whole corpus | Medium | CPU time on the model host | Deliberate (2026-10-23); ≤1,500 chunks at 768d; `--source` to scope; incremental stays the default |
+| Ledger and index disagree after a manual DB edit | Low | Silent wrong results | `source_state.config_hash` records the config that produced the index; a mismatch forces a full reindex |
 | Posts scheduled into future not yet live get indexed | Medium | Stale context | Skip `status='scheduled'` by default |
 | Index drift silent | Medium | Wrong answers | `agent stats` diffs count against source |
 | A2A token leaked | Low | Read-only exposure of published corpus | Tokens are scoped read-only; rotated monthly |
@@ -577,6 +721,17 @@ No public web exposure by default.
    use is external (`192.168.78.243`, currently `v4.12.0`), so its version
    is that host's concern. We depend on the OpenAI-compatible surface, not
    on a specific build.
+6. The website (HTML) as a source — **deferred 2026-10-23**. Facts already
+   captured: `elilap.dev` is an Astro static site with a single `<main>`
+   landmark per page; `robots.txt` allows all crawlers and explicitly
+   allows AI bots; `sitemap.xml` is an index → `sitemap-0.xml` (26 URLs on
+   `elilap.dev`) + `sitemap-posts.xml` (34 post URLs on `read.elilap.dev` —
+   the same posts Ghost serves). If revived: restrict it to non-blog
+   `elilap.dev` pages, exclude `/tag/*`, and let Ghost stay canonical for
+   posts.
+7. Config file location — **decided 2026-10-23**: `sources.yaml` at the
+   repo root, with `--config` overriding the path so it is never
+   hardcoded.
 
 ---
 
