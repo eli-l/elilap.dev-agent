@@ -1,0 +1,30 @@
+# sources.yaml - static import configuration.
+#
+# Declares which providers exist and how they are configured. Secrets are
+# never stored here: every credential names an environment variable to read
+# at runtime. See PLAN.md §2.6 and docs/sources-config.md.
+#
+# Validate with: ./agent sources validate
+
+version: 1
+
+defaults:
+  chunking: { target_tokens: 400, overlap_tokens: 60 }
+  user_agent: "elilap-dev-agent/0.1 (+https://elilap.dev)"
+
+sources:
+  - id: ghost
+    type: ghost
+    enabled: true
+    credentials:
+      api_url: { env: GHOST_API_URL }
+      api_key: { env: GHOST_API_KEY }
+    options: { include_drafts: false, limit: 500 }
+
+  - id: postiz
+    type: postiz
+    enabled: true
+    credentials:
+      api_url: { env: POSTIZ_API_URL }
+      api_key: { env: POSTIZ_API_KEY }
+    options: { platforms: [instagram, linkedin, x], include_scheduled: false }
