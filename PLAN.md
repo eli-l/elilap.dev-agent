@@ -105,8 +105,9 @@ Facts checked on the actual dev machines, so the plan stops guessing:
   plain `curl` against `POSTIZ_API_URL` (or is run wherever the CLI exists);
   nothing in this repo may depend on a `postiz` binary.
 * **No systemd** (darwin): Phase 3 scheduling is launchd or user cron.
-  No `AGENTS.md` exists in this repo either — earlier references to
-  openclaw/AGENTS.md constraints were from another machine and are dropped.
+  `AGENTS.md` is the repo-root authority in this repo — earlier references
+  to openclaw/AGENTS.md constraints were from another machine and are
+  dropped.
 
 ---
 
@@ -553,7 +554,7 @@ No public web exposure by default.
 | Docker daemon unreachable from the agent sandbox (verified) | Certain in-sandbox | Slow dev loop for container steps | Run container commands with explicit permission or outside the sandbox; never bake keys into the image |
 | SQLite on a macOS bind mount (VirtioFS) is slow / has locking quirks | Low | Degraded perf when DB is host-visible | Named volume is the default; bind mount documented for export only |
 | Contentless-FTS5 trap (caught in refinement) | Fixed | Would have broken query join-back | Self-contained FTS5 in `0001_init.sql` |
-| Embedding quality too low | Low | Phase 2 eval falls short | Swap embed model in `localai/models/` or point `LOCALAI_BASE_URL` at a stronger server; `embedded_with` audit makes re-runs cheap |
+| Embedding quality too low | Low | Phase 2 eval falls short | Point `LOCALAI_BASE_URL` at a stronger server (model configs live on the model host, not in this repo — see §2); `embedded_with` audit makes re-runs cheap |
 | Posts scheduled into future not yet live get indexed | Medium | Stale context | Skip `status='scheduled'` by default |
 | Index drift silent | Medium | Wrong answers | `agent stats` diffs count against source |
 | A2A token leaked | Low | Read-only exposure of published corpus | Tokens are scoped read-only; rotated monthly |

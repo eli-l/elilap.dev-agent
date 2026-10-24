@@ -23,7 +23,7 @@ Postiz (social)     ─┘                                  ▲
                                           LocalAI (self-hosted)
 ```
 
-* **One Go binary** with subcommands: `ingest`, `embed`, `query`, `stats`.
+* **One Go binary** with subcommands: `ingest`, `embed`, `query`, `stats`, `serve`.
 * **One SQLite file** (`index.db`) you can `cp` to back up.
 * **Hybrid retrieval**: BM25 (FTS5) + vector (sqlite-vec) with RRF merging.
 * **Model-agnostic**: self-hosted LocalAI by default

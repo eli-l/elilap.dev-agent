@@ -1,5 +1,9 @@
 # Directory Update Log
 
+## 2026-10-24
+
+* **Update**: Corrected the LocalAI capture's `generated.by` to the bundle's `human:<id>` actor convention; the bare id matched none of the three allowed actor forms. [Self-hosted LocalAI endpoint](/localai.md)
+
 ## 2026-10-23
 
 * **Creation**: Added the verified self-hosted LocalAI endpoint concept - endpoint, version, model catalog, the 768d embedding check, and the reasoning-model token caveat. [Self-hosted LocalAI endpoint](/localai.md)
