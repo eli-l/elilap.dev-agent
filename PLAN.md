@@ -5,13 +5,18 @@ This document is the source of truth for scope, sequencing, and exit criteria.
 Update it as we learn.
 
 **Last refined**: 2026-10-21, audited against the bootstrap scaffold (commit
-`7338ecf`) and the actual dev host (§1.5). First pass corrected the host
+`7338ecf`) and the actual dev host (§1.5). Third pass (2026-10-23) pinned the
+model backend to the running LocalAI instance on `192.168.78.243` and raised
+the Go floor to 1.27. First pass corrected the host
 assumptions, the CLI shape (one binary, not five), and a contentless-FTS5
 bug in the original schema. Second pass (same day) made the runtime
 **environment-independent**: a self-hosted LocalAI replaces ollama/codex as
 the model backend behind one OpenAI-compatible connector, and the app ships
 as a multi-stage Docker image with a volume-mapped SQLite index — see §2.5
-and §3.
+and §3. **Refined 2026-10-23**: the model backend is a concrete, already
+running LocalAI instance at `http://192.168.78.243:8080` (embed
+`embeddinggemma-300m`, chat `spark-x2.5-4b`), so the compose stack runs the
+agent only and the model host is an external dependency.
 
 ---
 
@@ -28,9 +33,9 @@ and §3.
    invoke; does not pin a single LLM.
 6. Built so that an A2A surface can be added later without rewriting the
    retrieval layer.
-7. Environment-independent: the app plus a self-hosted LocalAI run from one
-   `docker compose up` on any host with a container runtime — no host Go
-   toolchain, no ollama, no codex required.
+7. Environment-independent: the app runs from one `docker compose up` on any
+   host with a container runtime, talking to a self-hosted LocalAI over the
+   LAN — no host Go toolchain, no ollama, no codex required.
 
 **Non-goals (deliberately not in scope)**
 
@@ -40,8 +45,8 @@ and §3.
 * A web UI. The CLI is the surface; a UI is a future concern.
 * Mutating upstream content. This repo never writes to Ghost or Postiz.
 * Real-time streaming indexes. Hourly polling is fine.
-* Model serving at scale (multi-GPU, clustering) — one LocalAI container is
-  the ceiling.
+* Model serving at scale (multi-GPU, clustering) — the single self-hosted
+  LocalAI instance is the ceiling; this repo never operates a model server.
 
 ---
 
@@ -51,15 +56,15 @@ and §3.
 |---|---|---|---|
 | 1 | Language | Go 1.27 (language floor) | Single binary, no runtime, easy ops |
 | 2 | Index store | SQLite + `sqlite-vec` (one file) | Corpus ≤1,500 chunks — service overkill, file-portable, FTS5 free |
-| 3 | Embedder + chat model | Self-hosted **LocalAI** behind one OpenAI-compatible connector (`/v1/embeddings`, `/v1/chat/completions`); default embed model `nomic-embed-text` (768d) | Self-hosted and environment-independent; swapping providers = changing `LOCALAI_BASE_URL` |
+| 3 | Embedder + chat model | Self-hosted **LocalAI** behind one OpenAI-compatible connector (`/v1/embeddings`, `/v1/chat/completions`); embed model **`embeddinggemma-300m`** (768d, verified 2026-10-23), chat model **`spark-x2.5-4b`** | Self-hosted and environment-independent; swapping providers = changing `LOCALAI_BASE_URL` |
 | 4 | Retrieval | Hybrid: FTS5 BM25 + vec cosine, RRF merge | Neither alone is good enough on mixed prose+social |
 | 5 | Repos / sources | Ghost Admin API + Postiz HTTP API | Live, queryable, idempotent on `(source_kind, source_id)` |
 | 2b | Go driver | CGO: `mattn/go-sqlite3` (`-tags sqlite_fts5`) + sqlite-vec Go bindings (asg017), pinned | FTS5 + vec0 in one DB handle; exact binding import path confirmed in the Phase 1 driver spike, not before |
 | 6 | Repo location | `/Users/ilja/projects/elilap.dev-agent` (this host); remote `git@github.com:eli-l/elilap.dev-agent.git` — both verified 2026-10-21 | Previous plan revision assumed a different machine (`/home/openbot/...`, systemd); corrected |
 | 7 | CLI surface | One binary `agent`, subcommands `ingest`, `embed`, `query`, `stats`, `serve` | Matches `./agent ingest` muscle memory; the five separate `cmd/*/main.go` stubs collapse into `cmd/agent/` in Phase 1 |
 | 8 | Auth posture | env-loaded keys; never printed; gitignored index | Defense by default |
-| 9 | Container runtime | Multi-stage Dockerfile (builder `golang:1.27` → minimal runtime) + `compose.yaml` with agent + localai services | Whole system runs on any Docker host; builder tag floats to the latest 1.27 patch ≥ go.mod's `1.27` |
-| 10 | Model serving | LocalAI container, **versioned** image tag (CPU image default; GPU tags exist per platform) | One server covers embeddings + chat; `/readyz` healthcheck; OpenAI-compatible API |
+| 9 | Container runtime | Multi-stage Dockerfile (builder `golang:1.27` → minimal runtime) + `compose.yaml` with the agent service only (LocalAI is external — Decision 10) | Whole system runs on any Docker host; builder tag floats to the latest 1.27 patch ≥ go.mod's `1.27` |
+| 10 | Model serving | **Existing self-hosted LocalAI instance** at `http://192.168.78.243:8080` (LAN host `dev`, LocalAI `v4.12.0`) — models already loaded: `embeddinggemma-300m`, `spark-x2.5-4b`, `spark-x2.5-1.7b-q4`; `/readyz` → 200 (verified 2026-10-23) | One server covers embeddings + chat; nothing to pull on first boot; compose no longer runs LocalAI |
 | 11 | SQLite placement | `AGENT_DB_PATH` env: `/data/index.db` in container, `./index.db` on host; named volume `agent-data` by default | Keeps `index.db` + WAL/SHM siblings on one mount; clean, durable host mapping |
 
 ### 1.5 Verified environment (audited 2026-10-21; Go floor re-verified 2026-10-23)
@@ -82,21 +87,27 @@ Facts checked on the actual dev machines, so the plan stops guessing:
 * **Docker**: CLI 28.0.1 + Compose v2.33.1 (Docker Desktop) installed. The
   agent sandbox cannot reach the Docker daemon socket — container builds
   and `compose up` run with explicit permission or outside the sandbox.
-* **LocalAI** (facts from official docs, checked 2026-10-21): serves
-  OpenAI-compatible `/v1/chat/completions`, `/v1/completions`,
-  `/v1/embeddings`, `/v1/models`; official image `localai/localai` (CPU)
-  with GPU variants (`-gpu-nvidia-cuda-12`, `-gpu-hipblas`,
-  `-gpu-vulkan`); volumes `/models`, `/backends`, `/configuration`,
-  `/data`; liveness via `GET /readyz`; current release line v4.11.x. Docs
-  warn Docker on Apple Silicon runs a Linux VM without Metal → CPU-only
-  there. Acceptable for embeddings at ≤1,500 chunks; chat latency targets
-  in Phase 2 account for CPU.
+* **LocalAI** — **an instance is already running at
+  `http://192.168.78.243:8080`** (LAN host `dev`; the AI Node is
+  `192.168.78.242`). Verified from the node 2026-10-23: `GET /readyz` →
+  200; `GET /version` → `v4.12.0 (15e37df9)`; `GET /v1/models` →
+  `embeddinggemma-300m`, `spark-x2.5-4b`, `spark-x2.5-1.7b-q4`;
+  `POST /v1/embeddings` with `embeddinggemma-300m` returns **768** dims
+  (matches `chunks_vec.embedding float[768]`); `POST /v1/chat/completions`
+  with `spark-x2.5-4b` answers. `spark-x2.5-4b` is a **reasoning** model —
+  the response carries a `reasoning` field, so `max_tokens` must budget
+  for reasoning or `content` comes back empty (observed at
+  `max_tokens=10`). This is the model backend: we consume it, we do not
+  deploy it. The container-image facts (CPU `localai/localai`, GPU
+  variants, `/readyz` liveness) are kept only as a documented fallback if
+  the LAN host goes away.
 * **`postiz` CLI**: **not installed** here. Phase 0 capture therefore uses
   plain `curl` against `POSTIZ_API_URL` (or is run wherever the CLI exists);
   nothing in this repo may depend on a `postiz` binary.
 * **No systemd** (darwin): Phase 3 scheduling is launchd or user cron.
-  No `AGENTS.md` exists in this repo either — earlier references to
-  openclaw/AGENTS.md constraints were from another machine and are dropped.
+  `AGENTS.md` is the repo-root authority in this repo — earlier references
+  to openclaw/AGENTS.md constraints were from another machine and are
+  dropped.
 
 ---
 
@@ -110,7 +121,7 @@ elilap.dev-agent/
 ├── .gitignore                        # index.db / .env / model weights
 ├── Dockerfile                        # multi-stage: golang:1.27 → minimal runtime
 ├── .dockerignore
-├── compose.yaml                      # agent + localai services, volumes, healthchecks
+├── compose.yaml                      # agent service only; LocalAI is external
 ├── go.mod
 ├── cmd/
 │   └── agent/
@@ -126,8 +137,6 @@ elilap.dev-agent/
 │   ├── embed/                        # batching/resume logic over the llm connector
 │   ├── llm/                          # one OpenAI-compatible HTTP client (LocalAI default)
 │   └── retrieval/                    # hybrid FTS + vec + RRF
-├── localai/
-│   └── models/                       # LocalAI model YAMLs (committed; GGUFs gitignored)
 ├── migrations/
 │   └── 0001_init.sql
 ├── eval/                             # Phase 2: queries.yaml + ground truth
@@ -147,37 +156,41 @@ Current state vs. target: the five `cmd/*/main.go` stubs exist and compile;
 they are collapsed into `cmd/agent/` as the first Phase 1 task. Everything
 under `internal/` is empty (`.gitkeep`). `migrations/0001_init.sql`,
 `scripts/*`, and `docs/*.md` exist as Phase-0/1 placeholders.
-The container files (`Dockerfile`, `.dockerignore`, `compose.yaml`,
-`localai/`) do not exist yet — they are Phase 1 deliverables.
+The container files (`Dockerfile`, `.dockerignore`, `compose.yaml`) do not
+exist yet — they are Phase 1 deliverables. `localai/` is no longer part of
+this layout: the model server is external (Decision 10), so its model
+configs and weights live on `192.168.78.243`, not in this repo.
 
 ### 2.5 Container topology (target)
 
-One `docker compose up` brings up the whole system on any Docker host:
+One `docker compose up` brings up the agent on any Docker host; the model
+server is external (Decision 10):
 
 ```yaml
 services:
-  localai:
-    image: localai/localai:<pinned-version>   # CPU image default; GPU tags per host
-    volumes:
-      - ./localai/models:/models              # YAML configs committed; GGUFs fetched once, gitignored
-      - localai-data:/data
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8080/readyz"]
   agent:
     build: .
     environment:
-      LOCALAI_BASE_URL: http://localai:8080/v1
+      LOCALAI_BASE_URL: http://192.168.78.243:8080/v1   # self-hosted LocalAI on host `dev`
+      EMBED_MODEL: embeddinggemma-300m
+      CHAT_MODEL: spark-x2.5-4b
       AGENT_DB_PATH: /data/index.db
     volumes:
       - agent-data:/data
-    depends_on:
-      localai:
-        condition: service_healthy
 
 volumes:
-  localai-data:
   agent-data:
 ```
+
+**LocalAI is external now.** The compose stack runs the agent only; the
+model server is the pre-existing instance on `192.168.78.243` (Decision 10).
+Two consequences: (a) the container needs a route to that LAN address —
+true on the node's default bridge, but it is now a hard dependency on
+another host, so the agent must probe `/readyz` itself and fail fast with
+a clear message; (b) there is no `depends_on` health gate any more, so the
+readiness probe moves into the agent's own startup path. If `dev` ever goes
+away, the fallback is to add a `localai` service back here (CPU image,
+pinned to a versioned tag) and point `LOCALAI_BASE_URL` at it.
 
 **SQLite mapping contract** (the clean way):
 
@@ -198,8 +211,10 @@ volumes:
 patch) → runtime `debian:bookworm-slim` carrying only the binary plus CA
 certs and tzdata. If the Phase 1 driver spike lands a static or pure-Go
 build (ncruces), the runtime collapses to `distroless`/`scratch` as a
-one-line swap. LocalAI is pinned to a **versioned tag, not `latest`**, so
-model behavior doesn't drift under us.
+one-line swap. We do not ship LocalAI in the image — it runs on
+`192.168.78.243` (Decision 10, currently `v4.12.0`), so model behavior
+depends on that host's build, not ours. If the fallback service is ever
+added here, pin it to a **versioned tag, not `latest`**.
 
 ---
 
@@ -271,15 +286,24 @@ intentionally a separate command.
 - [ ] `internal/llm` connector: one small OpenAI-compatible HTTP client
       (plain `net/http`, no SDK) — `POST /v1/embeddings`,
       `POST /v1/chat/completions`, `GET /v1/models`. Config:
-      `LOCALAI_BASE_URL` (default `http://localai:8080/v1`),
-      `LOCALAI_API_KEY` (optional), `EMBED_MODEL`, `CHAT_MODEL`. LocalAI is
-      the default; any OpenAI-compatible server (llama.cpp server, vLLM,
-      OpenAI itself) works by changing the base URL.
+      `LOCALAI_BASE_URL` (default `http://192.168.78.243:8080/v1` — the
+      verified self-hosted instance), `LOCALAI_API_KEY` (optional),
+      `EMBED_MODEL` (default `embeddinggemma-300m`), `CHAT_MODEL`
+      (default `spark-x2.5-4b`). LocalAI is the default; any
+      OpenAI-compatible server (llama.cpp server, vLLM, OpenAI itself)
+      works by changing the base URL. Two behaviours the client must
+      honour: embeddings are **768d** (the schema says `float[768]` —
+      assert the dimension before writing, or refuse to write), and
+      `spark-x2.5-4b` is a **reasoning** model whose response carries a
+      `reasoning` field — `max_tokens` must budget for reasoning or
+      `content` comes back empty.
 - [ ] Containerize (§2.5): `Dockerfile`, `.dockerignore`, `compose.yaml`
-      with agent + localai services, `/readyz` healthcheck, `agent-data`
-      volume, `AGENT_DB_PATH` wiring. LocalAI model configs pinned under
-      `localai/models/` — embed model `nomic-embed-text` (768d, matches the
-      `vec0` schema); GGUF weights gitignored, fetched on first boot.
+      with the agent service, `agent-data` volume, `AGENT_DB_PATH` wiring,
+      and `LOCALAI_BASE_URL` pointing at `http://192.168.78.243:8080/v1`.
+      No LocalAI service and no `/readyz` healthcheck in compose — the
+      agent probes `/readyz` on the model host itself at startup and fails
+      fast with a clear error. Embed model `embeddinggemma-300m` (768d,
+      matches the `vec0` schema).
 - [ ] Store layer: migration runner that loads the sqlite-vec extension
       *before* applying `0001_init.sql` (the `vec0` DDL fails without it).
       `scripts/check-ddl.py` stays green as the schema evolves.
@@ -316,7 +340,7 @@ CREATE TABLE chunks (
   body           TEXT NOT NULL,
   body_tokens    INTEGER NOT NULL,
   meta_json      TEXT NOT NULL DEFAULT '{}', -- tags, status, release id, etc.
-  embedded_with  TEXT,                       -- e.g. 'localai:nomic-embed-text@<git-sha>'
+  embedded_with  TEXT,                       -- e.g. 'localai:embeddinggemma-300m@<git-sha>'
   embedded_at    TEXT                       -- ISO-8601
 );
 
@@ -375,11 +399,13 @@ until `publish_at <= now` (configurable; default skip).
   with no source changes).
 - Deleting an upstream post and re-running reduces the corresponding chunks
   (drift detection works).
-- `agent embed` finishes in <5 min on this hardware against the LocalAI
-  container (embed model loaded; first-boot model download excluded).
-- `docker compose build` produces the image and `docker compose up`
-  reaches a healthy LocalAI (`/readyz`) with `agent embed` working from a
-  clean container — no host Go toolchain, no ollama, no codex.
+- `agent embed` finishes in <5 min on this hardware against the
+  self-hosted LocalAI at `192.168.78.243` (embed model already loaded
+  there — no first-boot download).
+- `docker compose build` produces the image and `docker compose up` yields
+  an agent container that reaches the model host (`/readyz` on
+  `192.168.78.243:8080`) with `agent embed` working from a clean
+  container — no host Go toolchain, no ollama, no codex.
 - All keys stay in env; no secret leaks in `git log -p` or stdout.
 
 **Estimated effort**: 3–4 focused days (containerization + connector added).
@@ -522,12 +548,13 @@ No public web exposure by default.
 | Ghost response shape differs from expectations | Low | Same as above | Phase 0 captures one real post |
 | sqlite-vec CGO build trouble on darwin/arm64 | Medium | Build fragility | Phase 1 driver spike decides mattn vs ncruces before store code lands; pin versions |
 | CGO/sqlite-vec misbehaves inside the container | Medium | Image build breaks | Driver spike must prove `docker compose build` + KNN round-trip in-container before store code lands |
-| LocalAI first-boot model download is slow or fails | Medium | `embed`/`ask` blocked until models load | Pinned configs in `localai/models/`; `/readyz` gates the agent container; weights cached in the volume after first fetch |
-| Apple-Silicon Docker is CPU-only (no Metal; per LocalAI docs) | Certain on this Mac | Slow chat | Small default chat model; CPU latency targets in Phase 2; native LocalAI binary as a Mac escape hatch |
+| Model host `dev` (192.168.78.243) down or unreachable from the container | Medium | `embed`/`ask` blocked | Agent probes `/readyz` at startup and fails fast with a clear message; models are pre-loaded, so no first-boot wait; documented fallback is a local `localai` compose service |
+| Model host is CPU-only (no GPU confirmed for `dev`) | Medium | Slow chat | `spark-x2.5-4b` is a 4B model — acceptable at this corpus size; Phase 2 latency targets are measured against the real host, not guessed |
+| `spark-x2.5-4b` is a reasoning model — the token budget is eaten by `reasoning` | Medium | Empty `content` in `agent ask` | `max_tokens` must budget for reasoning; `agent ask` reads the `reasoning` field and errors loudly on empty content; `spark-x2.5-1.7b-q4` is the lighter fallback |
 | Docker daemon unreachable from the agent sandbox (verified) | Certain in-sandbox | Slow dev loop for container steps | Run container commands with explicit permission or outside the sandbox; never bake keys into the image |
 | SQLite on a macOS bind mount (VirtioFS) is slow / has locking quirks | Low | Degraded perf when DB is host-visible | Named volume is the default; bind mount documented for export only |
 | Contentless-FTS5 trap (caught in refinement) | Fixed | Would have broken query join-back | Self-contained FTS5 in `0001_init.sql` |
-| Embedding quality too low | Low | Phase 2 eval falls short | Swap embed model in `localai/models/` or point `LOCALAI_BASE_URL` at a stronger server; `embedded_with` audit makes re-runs cheap |
+| Embedding quality too low | Low | Phase 2 eval falls short | Point `LOCALAI_BASE_URL` at a stronger server (model configs live on the model host, not in this repo — see §2); `embedded_with` audit makes re-runs cheap |
 | Posts scheduled into future not yet live get indexed | Medium | Stale context | Skip `status='scheduled'` by default |
 | Index drift silent | Medium | Wrong answers | `agent stats` diffs count against source |
 | A2A token leaked | Low | Read-only exposure of published corpus | Tokens are scoped read-only; rotated monthly |
@@ -544,12 +571,13 @@ No public web exposure by default.
    without body)? **Default**: no; tags appear in FTS5 path.
 3. Phase 4 token storage: env-only (simplest) vs. a `0600` token file.
    **Default**: env-driven pairs; decide when Phase 4 starts, not before.
-4. Default LocalAI chat model: pick the smallest instruct model that passes
-   the Phase 2 eval inside the CPU-only container (candidates from the
-   LocalAI gallery). **Default**: decide at Phase 2 with the eval as the
-   arbiter, not by preference.
-5. Pin LocalAI by versioned tag (docs currently show v4.11.x) or by digest?
-   **Default**: versioned tag; digest pinning only if tag drift bites.
+4. ~~Default LocalAI chat model~~ — **decided 2026-10-23**: `spark-x2.5-4b`
+   (self-hosted on `dev`). `spark-x2.5-1.7b-q4` is the fallback if the
+   Phase 2 eval shows the 4B is too slow on that host.
+5. ~~Pin LocalAI by versioned tag~~ — **moot 2026-10-23**: the instance we
+   use is external (`192.168.78.243`, currently `v4.12.0`), so its version
+   is that host's concern. We depend on the OpenAI-compatible surface, not
+   on a specific build.
 
 ---
 

@@ -1,5 +1,14 @@
 # Directory Update Log
 
+## 2026-10-24
+
+* **Update**: Corrected the LocalAI capture's `generated.by` to the bundle's `human:<id>` actor convention; the bare id matched none of the three allowed actor forms. [Self-hosted LocalAI endpoint](/localai.md)
+
+## 2026-10-23
+
+* **Creation**: Added the verified self-hosted LocalAI endpoint concept - endpoint, version, model catalog, the 768d embedding check, and the reasoning-model token caveat. [Self-hosted LocalAI endpoint](/localai.md)
+* **Update**: Bundle manifest now lists every concept file; the Ghost and Postiz captures were previously missing from the index. [index.md](/index.md)
+
 ## 2026-10-21
 
 * **Creation**: Authored the OKF v0.2 skill description and usage workflow for future agent runs. [AGENTS.md](../AGENTS.md)

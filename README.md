@@ -20,13 +20,17 @@ Ghost (blog)        ─┐
                      ├─►  ingest  ─►  SQLite + sqlite-vec  ─►  query  ─►  LLM
 Postiz (social)     ─┘                                  ▲
                                                         │
-                                              ollama / OpenAI
+                                          LocalAI (self-hosted)
 ```
 
-* **One Go binary** with subcommands: `ingest`, `embed`, `query`, `stats`.
+* **One Go binary** with subcommands: `ingest`, `embed`, `query`, `stats`, `serve`.
 * **One SQLite file** (`index.db`) you can `cp` to back up.
 * **Hybrid retrieval**: BM25 (FTS5) + vector (sqlite-vec) with RRF merging.
-* **Model-agnostic**: ollama (default, local) or OpenAI (one config switch).
+* **Model-agnostic**: self-hosted LocalAI by default
+  (`http://192.168.78.243:8080`) or any OpenAI-compatible server — one
+  config switch.
+* **Models**: embeddings `embeddinggemma-300m` (768d), chat `spark-x2.5-4b`.
+  Both self-hosted; no API keys, no cloud calls.
 * **A2A-ready**: retrieval is exposed over JSON-RPC in a later phase; the CLI
   surface is the source of truth.
 
