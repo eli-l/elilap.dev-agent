@@ -4,19 +4,24 @@ Build plan for a local-first RAG agent over Eli's published writing.
 This document is the source of truth for scope, sequencing, and exit criteria.
 Update it as we learn.
 
-**Last refined**: 2026-10-21, audited against the bootstrap scaffold (commit
-`7338ecf`) and the actual dev host (§1.5). Third pass (2026-10-23) pinned the
-model backend to the running LocalAI instance on `192.168.78.243` and raised
-the Go floor to 1.27. First pass corrected the host
+**How to read this plan**: everything normative is stated as **requirements
+and capabilities**, not as facts about one machine. Hosts, addresses, model
+endpoints, and the database location are configuration points (environment
+variables or config keys), never literals. Facts that were verified against a
+specific environment are kept, but the machine-specific detail lives in the
+non-normative appendix (§7).
+
+**Revision history**: first pass (2026-10-21) corrected wrong host
 assumptions, the CLI shape (one binary, not five), and a contentless-FTS5
 bug in the original schema. Second pass (same day) made the runtime
-**environment-independent**: a self-hosted LocalAI replaces ollama/codex as
-the model backend behind one OpenAI-compatible connector, and the app ships
-as a multi-stage Docker image with a volume-mapped SQLite index — see §2.5
-and §3. **Refined 2026-10-23**: the model backend is a concrete, already
-running LocalAI instance at `http://192.168.78.243:8080` (embed
-`embeddinggemma-300m`, chat `spark-x2.5-4b`), so the compose stack runs the
-agent only and the model host is an external dependency.
+environment-independent: one OpenAI-compatible connector in front of a
+self-hosted model server, and a multi-stage Docker image with a
+volume-mapped SQLite index — see §2.5 and §3. Third pass (2026-10-23)
+pinned the model backend to an already running self-hosted LocalAI instance
+(appendix §7) and raised the Go floor to 1.27. Fourth pass (2026-10-24)
+made the plan platform-agnostic: every host-specific fact moved out of the
+normative text into §7, and environment mechanics (scheduling, volumes, DB
+placement) are stated as requirements with portable implementations.
 
 ---
 
@@ -34,8 +39,8 @@ agent only and the model host is an external dependency.
 6. Built so that an A2A surface can be added later without rewriting the
    retrieval layer.
 7. Environment-independent: the app runs from one `docker compose up` on any
-   host with a container runtime, talking to a self-hosted LocalAI over the
-   LAN — no host Go toolchain, no ollama, no codex required.
+   host with a container runtime, talking to any OpenAI-compatible model
+   server over HTTP — no host Go toolchain required in container mode.
 8. Config-driven imports: every provider is declared in one file, so it can
    be enabled, disabled, and reconfigured without touching Go code.
 
@@ -47,8 +52,9 @@ agent only and the model host is an external dependency.
 * A web UI. The CLI is the surface; a UI is a future concern.
 * Mutating upstream content. This repo never writes to Ghost or Postiz.
 * Real-time streaming indexes. Hourly polling is fine.
-* Model serving at scale (multi-GPU, clustering) — the single self-hosted
-  LocalAI instance is the ceiling; this repo never operates a model server.
+* Operating a model server. The model backend is an external dependency this
+  repo consumes over HTTP; multi-GPU, clustering, and model hosting are out
+  of scope.
 * Crawling Eli's website as a source — **deferred 2026-10-23**. The
   provider registry (§2.6) is the seam that makes adding it a config change
   later, so deferring costs nothing but one package.
@@ -61,60 +67,42 @@ agent only and the model host is an external dependency.
 |---|---|---|---|
 | 1 | Language | Go 1.27 (language floor) | Single binary, no runtime, easy ops |
 | 2 | Index store | SQLite + `sqlite-vec` (one file) | Corpus ≤1,500 chunks — service overkill, file-portable, FTS5 free |
-| 3 | Embedder + chat model | Self-hosted **LocalAI** behind one OpenAI-compatible connector (`/v1/embeddings`, `/v1/chat/completions`); embed model **`embeddinggemma-300m`** (768d, verified 2026-10-23), chat model **`spark-x2.5-4b`** | Self-hosted and environment-independent; swapping providers = changing `LOCALAI_BASE_URL` |
+| 3 | Embedder + chat model | Self-hosted, OpenAI-compatible model server behind one connector (`/v1/embeddings`, `/v1/chat/completions`); embed model `embeddinggemma-300m` (768d), chat model `spark-x2.5-4b` — both overridable via env | Swapping providers = changing one base URL; no LLM SDK |
 | 4 | Retrieval | Hybrid: FTS5 BM25 + vec cosine, RRF merge | Neither alone is good enough on mixed prose+social |
 | 5 | Repos / sources | Ghost Admin API + Postiz HTTP API | Live, queryable, idempotent on `(source_kind, source_id)` |
 | 2b | Go driver | CGO: `mattn/go-sqlite3` (`-tags sqlite_fts5`) + sqlite-vec Go bindings (asg017), pinned | FTS5 + vec0 in one DB handle; exact binding import path confirmed in the Phase 1 driver spike, not before |
-| 6 | Repo location | `/Users/ilja/projects/elilap.dev-agent` (this host); remote `git@github.com:eli-l/elilap.dev-agent.git` — both verified 2026-10-21 | Previous plan revision assumed a different machine (`/home/openbot/...`, systemd); corrected |
+| 6 | Repo location | Any checkout of the git remote (`git@github.com:eli-l/elilap.dev-agent.git`); nothing in the repo may assume an absolute path | Previous plan revisions hardcoded a developer machine's path and later corrected it; paths are not plan material |
 | 7 | CLI surface | One binary `agent`, subcommands `ingest`, `embed`, `query`, `stats`, `serve` | Matches `./agent ingest` muscle memory; the five separate `cmd/*/main.go` stubs collapse into `cmd/agent/` in Phase 1 |
 | 8 | Auth posture | env-loaded keys; never printed; gitignored index | Defense by default |
-| 9 | Container runtime | Multi-stage Dockerfile (builder `golang:1.27` → minimal runtime) + `compose.yaml` with the agent service only (LocalAI is external — Decision 10) | Whole system runs on any Docker host; builder tag floats to the latest 1.27 patch ≥ go.mod's `1.27` |
-| 10 | Model serving | **Existing self-hosted LocalAI instance** at `http://192.168.78.243:8080` (LAN host `dev`, LocalAI `v4.12.0`) — models already loaded: `embeddinggemma-300m`, `spark-x2.5-4b`, `spark-x2.5-1.7b-q4`; `/readyz` → 200 (verified 2026-10-23) | One server covers embeddings + chat; nothing to pull on first boot; compose no longer runs LocalAI |
-| 11 | SQLite placement | `AGENT_DB_PATH` env: `/data/index.db` in container, `./index.db` on host; named volume `agent-data` by default | Keeps `index.db` + WAL/SHM siblings on one mount; clean, durable host mapping |
+| 9 | Container runtime | Multi-stage Dockerfile (builder `golang:1.27` → minimal runtime) + `compose.yaml` with the agent service only (model server is external — Decision 10) | Whole system runs on any Docker host; builder tag floats to the latest 1.27 patch ≥ go.mod's `1.27` |
+| 10 | Model serving | An **external, already running** OpenAI-compatible model server (LocalAI in the reference environment, §7), reached via `LOCALAI_BASE_URL`; required models: `embeddinggemma-300m` (768d embeddings) and a chat model (`spark-x2.5-4b` default) | One server covers embeddings + chat; nothing to pull on first boot; compose never runs the model server |
+| 11 | SQLite placement | `AGENT_DB_PATH` env (default `./index.db`); `/data/index.db` in the shipped compose file with a named volume | Keeps `index.db` + WAL/SHM siblings on one mount; same binary, same behavior on host and in container |
 | 12 | Import config file | One `sources.yaml` at the repo root (YAML, strict decode: `KnownFields(true)`, `version:` field) | Providers are declared in one place and can be enabled/disabled/reconfigured without a rebuild; TOML rejected — the repo already speaks YAML (`eval/queries.yaml`) and YAML carries comments in a hand-edited file (decided 2026-10-23) |
 | 13 | Provider model | One `Provider` interface (`List` cheap → `Fetch` full) + a registry keyed by config `type`; unknown type or bad options = startup error | One code path for every source; the `List`/`Fetch` split is what makes incremental ingest cheap and fixtures-testable without credentials |
 | 14 | Ingest modes | Default = incremental against a state ledger (`source_state` + `source_items`); `--full` = re-fetch + re-chunk + **re-embed** (decided 2026-10-23) | On a full reindex the index is rebuilt exactly as the sources stand today, and the corpus is small enough (≤1,500 chunks) that the CPU cost is acceptable |
 
-### 1.5 Verified environment (audited 2026-10-21; Go floor re-verified 2026-10-23)
+### 1.5 Runtime requirements
 
-Facts checked on the actual dev machines, so the plan stops guessing:
+The plan makes no assumptions about a specific machine. Any environment that
+runs this project must provide:
 
-* **Host**: macOS (darwin/arm64), repo clean at bootstrap commit `7338ecf`.
-* **Toolchain**: Go 1.27 (the `go.mod` floor; verified on the AI Node with go1.27.3 — `go build ./...`, `go vet ./...`, and `gofmt -l .` all clean). The Mac-side version has not been re-verified since 2026-10-21.
-* **Credentials**: **none present** — `POSTIZ_API_KEY`, `POSTIZ_API_URL`,
-  `GHOST_API_URL`, `GHOST_API_KEY` are all unset and there is no `.env`
-  file. The old plan's "current on-disk key 401s" note is stale; on this
-  host there is no key to be stale. Both keys are the Phase 0 blocker.
-* **ollama**: CLI installed (`/usr/local/bin/ollama`) but the server is not
-  running and no models are pulled. **No longer load-bearing** — LocalAI
-  (below) is the default embed + chat backend. ollama stays an optional dev
-  shortcut; nothing in this repo depends on it.
-* **`codex`**: present at `/Users/ilja/.local/bin/codex`. No longer
-  load-bearing either — `agent ask` goes through the same OpenAI-compatible
-  connector instead of shelling out to codex.
-* **Docker**: CLI 28.0.1 + Compose v2.33.1 (Docker Desktop) installed. The
-  agent sandbox cannot reach the Docker daemon socket — container builds
-  and `compose up` run with explicit permission or outside the sandbox.
-* **LocalAI** — **an instance is already running at
-  `http://192.168.78.243:8080`** (LAN host `dev`; the AI Node is
-  `192.168.78.242`). Verified from the node 2026-10-23: `GET /readyz` →
-  200; `GET /version` → `v4.12.0 (15e37df9)`; `GET /v1/models` →
-  `embeddinggemma-300m`, `spark-x2.5-4b`, `spark-x2.5-1.7b-q4`;
-  `POST /v1/embeddings` with `embeddinggemma-300m` returns **768** dims
-  (matches `chunks_vec.embedding float[768]`); `POST /v1/chat/completions`
-  with `spark-x2.5-4b` answers. `spark-x2.5-4b` is a **reasoning** model —
-  the response carries a `reasoning` field, so `max_tokens` must budget
-  for reasoning or `content` comes back empty (observed at
-  `max_tokens=10`). This is the model backend: we consume it, we do not
-  deploy it. The container-image facts (CPU `localai/localai`, GPU
-  variants, `/readyz` liveness) are kept only as a documented fallback if
-  the LAN host goes away.
-* **`postiz` CLI**: **not installed** here. Phase 0 capture therefore uses
-  plain `curl` against `POSTIZ_API_URL` (or is run wherever the CLI exists);
-  nothing in this repo may depend on a `postiz` binary.
-* **No systemd** (darwin): Phase 3 scheduling is launchd or user cron.
-  No `AGENTS.md` exists in this repo either — earlier references to
-  openclaw/AGENTS.md constraints were from another machine and are dropped.
+* **Toolchain (host mode only)**: Go ≥ 1.27 (the `go.mod` floor) with CGO
+  enabled for the SQLite driver. Container mode needs no host toolchain.
+* **Container runtime (container mode only)**: Docker with Compose v2 (or an
+  equivalent OCI runtime); the daemon socket must be reachable from wherever
+  builds run.
+* **Model server**: an OpenAI-compatible HTTP endpoint reachable from the
+  agent (host or container), serving one 768-dimension embedding model and
+  one chat model; LocalAI is the reference implementation (§7). The agent
+  probes `/readyz` at startup and fails fast when the endpoint is down.
+* **Credentials**: Ghost and Postiz API credentials in the environment. On
+  a fresh machine none exist; obtaining them is the Phase 0 blocker. They
+  are never written into this repo.
+* **Scheduler (Phase 3 only)**: any job scheduler — cron, systemd timers,
+  launchd, or a container orchestrator. The requirement is "run ingest
+  periodically"; the mechanism is the operator's choice (§3, Phase 3).
+* **Not required**: ollama, a `codex` CLI, a `postiz` CLI, systemd, or any
+  particular OS. Nothing in this repo may depend on those.
 
 ---
 
@@ -124,11 +112,12 @@ Facts checked on the actual dev machines, so the plan stops guessing:
 elilap.dev-agent/
 ├── PLAN.md                           # this file
 ├── README.md
-├── .env.example                      # Phase 0: var names, no values
+├── Makefile                          # build / test / check / setup / doctor entry points
+├── .env.example                      # var names, no values
 ├── .gitignore                        # index.db / .env / model weights
 ├── Dockerfile                        # multi-stage: golang:1.27 → minimal runtime
 ├── .dockerignore
-├── compose.yaml                      # agent service only; LocalAI is external
+├── compose.yaml                      # agent service only; the model server is external
 ├── sources.yaml                      # static import config: providers, enable/disable, options
 ├── go.mod
 ├── cmd/
@@ -146,7 +135,7 @@ elilap.dev-agent/
 │   ├── store/                        # SQLite, migrations, FTS5 glue, sqlite-vec
 │   ├── embed/                        # batching/resume logic over the llm connector
 │   ├── config/                       # sources.yaml loader + strict validation
-│   ├── llm/                          # one OpenAI-compatible HTTP client (LocalAI default)
+│   ├── llm/                          # one OpenAI-compatible HTTP client
 │   └── retrieval/                    # hybrid FTS + vec + RRF
 ├── migrations/
 │   ├── 0001_init.sql
@@ -155,23 +144,24 @@ elilap.dev-agent/
 ├── scripts/
 │   ├── ask                           # thin wrapper over `agent ask` (Phase 2+)
 │   ├── check-ddl.py                  # schema smoke check (runs under plain python3)
-│   └── ingest-all.sh                 # cron-friendly
+│   └── ingest-all.sh                 # scheduler-friendly
 └── docs/
     ├── architecture.md               # Phase 2, kept thin
     ├── api-shapes.md                 # Phase 0 output
     ├── ghost.md                      # Phase 0 capture
     ├── postiz.md                     # Phase 0 capture
+    ├── mvp-review.md                 # bring-up review (2026-10-24)
     └── runbook.md                    # Phase 3: ops + evaluation
 ```
 
-Current state vs. target: the five `cmd/*/main.go` stubs exist and compile;
-they are collapsed into `cmd/agent/` as the first Phase 1 task. Everything
-under `internal/` is empty (`.gitkeep`). `migrations/0001_init.sql`,
-`scripts/*`, and `docs/*.md` exist as Phase-0/1 placeholders.
-The container files (`Dockerfile`, `.dockerignore`, `compose.yaml`) do not
-exist yet — they are Phase 1 deliverables. `localai/` is no longer part of
-this layout: the model server is external (Decision 10), so its model
-configs and weights live on `192.168.78.243`, not in this repo.
+Current state vs. target: `cmd/agent/` exists with subcommand dispatch, the
+`sources` subcommands, the config loader, and the provider registry, with
+tests. `internal/{store,embed,llm,retrieval}` and the network clients are
+still empty (`.gitkeep`). `migrations/`, `scripts/`, and `docs/` exist in
+Phase-0/1 form. The container files (`Dockerfile`, `.dockerignore`,
+`compose.yaml`) do not exist yet — they are Phase 1 deliverables. No model
+configs or weights live in this repo: the model server is external
+(Decision 10).
 
 ### 2.5 Container topology (target)
 
@@ -183,9 +173,9 @@ services:
   agent:
     build: .
     environment:
-      LOCALAI_BASE_URL: http://192.168.78.243:8080/v1   # self-hosted LocalAI on host `dev`
-      EMBED_MODEL: embeddinggemma-300m
-      CHAT_MODEL: spark-x2.5-4b
+      LOCALAI_BASE_URL: ${LOCALAI_BASE_URL:-http://localhost:8080/v1}
+      EMBED_MODEL: ${EMBED_MODEL:-embeddinggemma-300m}
+      CHAT_MODEL: ${CHAT_MODEL:-spark-x2.5-4b}
       AGENT_DB_PATH: /data/index.db
     volumes:
       - agent-data:/data
@@ -194,27 +184,30 @@ volumes:
   agent-data:
 ```
 
-**LocalAI is external now.** The compose stack runs the agent only; the
-model server is the pre-existing instance on `192.168.78.243` (Decision 10).
-Two consequences: (a) the container needs a route to that LAN address —
-true on the node's default bridge, but it is now a hard dependency on
-another host, so the agent must probe `/readyz` itself and fail fast with
-a clear message; (b) there is no `depends_on` health gate any more, so the
-readiness probe moves into the agent's own startup path. If `dev` ever goes
-away, the fallback is to add a `localai` service back here (CPU image,
-pinned to a versioned tag) and point `LOCALAI_BASE_URL` at it.
+**The model server is external.** The compose stack runs the agent only.
+Two consequences: (a) the container needs a network route to
+`LOCALAI_BASE_URL` — an address that works from the host does not
+automatically work from inside a container (`localhost` inside a container
+is the container itself; a LAN address must be routable from the container
+network), so the agent must probe `/readyz` itself and fail fast with a
+clear message; (b) there is no `depends_on` health gate, so the readiness
+probe lives in the agent's own startup path. If no external model server is
+available, the documented fallback is to add a model-server service to this
+compose file (CPU image, pinned to a versioned tag) and point
+`LOCALAI_BASE_URL` at it.
 
 **SQLite mapping contract** (the clean way):
 
 * The DB path is one env var, `AGENT_DB_PATH` — `/data/index.db` inside the
-  container, `./index.db` in a host run. Same binary, same behavior.
+  container, `./index.db` by default in a host run. Same binary, same
+  behavior.
 * `/data` is a **named volume** (`agent-data`) by default: durable across
   container recreations, fast on every platform, and it keeps `index.db`,
   `index.db-wal`, `index.db-shm` together on one filesystem (required by
   SQLite WAL — never split them across mounts).
 * A bind mount (`-v "$PWD/data:/data"`) is supported when the file must be
-  host-visible (inspection, backup). On macOS bind mounts are slower
-  (VirtioFS) — fine occasionally, not the default.
+  host-visible (inspection, backup). Bind mounts can be markedly slower on
+  some platforms (e.g. macOS VirtioFS) — fine occasionally, not the default.
 * Backup: `agent backup` (online `VACUUM INTO`, Phase 3) or stop + copy the
   volume. Documented in the runbook.
 
@@ -223,10 +216,10 @@ pinned to a versioned tag) and point `LOCALAI_BASE_URL` at it.
 patch) → runtime `debian:bookworm-slim` carrying only the binary plus CA
 certs and tzdata. If the Phase 1 driver spike lands a static or pure-Go
 build (ncruces), the runtime collapses to `distroless`/`scratch` as a
-one-line swap. We do not ship LocalAI in the image — it runs on
-`192.168.78.243` (Decision 10, currently `v4.12.0`), so model behavior
-depends on that host's build, not ours. If the fallback service is ever
-added here, pin it to a **versioned tag, not `latest`**.
+one-line swap. We do not ship a model server in the image (Decision 10), so
+model behavior depends on the external server's build, not ours. If the
+fallback service is ever added here, pin it to a **versioned tag, not
+`latest`**.
 
 ### 2.6 Import configuration, provider registry, and ingest modes
 
@@ -353,22 +346,21 @@ actual response shapes before writing any schema.
 
 **Tasks**
 
-- [ ] Create `.env.example` with the variable names (no values) and
-      document load order (`.env` for humans, real env for cron/launchd):
-      the four source credentials plus runtime config — `LOCALAI_BASE_URL`,
-      `LOCALAI_API_KEY` (optional), `EMBED_MODEL`, `CHAT_MODEL`,
-      `AGENT_DB_PATH`.
-- [ ] Author `sources.yaml` (§2.6) with one entry per provider (`ghost`,
+- [ ] Keep `.env.example` in sync with the real variable surface (no
+      values) and document load order (`.env` for humans, real env for
+      schedulers/containers): the four source credentials plus runtime
+      config — `LOCALAI_BASE_URL`, `LOCALAI_API_KEY` (optional),
+      `EMBED_MODEL`, `CHAT_MODEL`, `AGENT_DB_PATH`.
+- [x] Author `sources.yaml` (§2.6) with one entry per provider (`ghost`,
       `postiz`), `enabled: true`, credentials as `{ env: VAR }` references
       and no values. `agent sources validate` must pass before any
       credential exists.
-- [ ] Obtain **both** credentials (Postiz and Ghost) — neither exists on
-      this host today. They enter via env / `.env` only; we will not echo,
-      log, or commit them.
-- [ ] Confirm `POSTIZ_API_KEY` works against `https://postiz.mist.lv/api`
-      using `curl` (no `postiz` CLI on this host). Capture the real
-      `/posts` (or equivalent) response shape: post id, content text,
-      integrations (per-platform), status, publish date, media, release id.
+- [ ] Obtain **both** credentials (Postiz and Ghost). They enter via env /
+      `.env` only; we will not echo, log, or commit them.
+- [ ] Confirm `POSTIZ_API_KEY` works against the Postiz API base URL using
+      `curl` (no dependency on a `postiz` CLI). Capture the real `/posts`
+      (or equivalent) response shape: post id, content text, integrations
+      (per-platform), status, publish date, media, release id.
 - [ ] Write the captured Postiz response shape into `docs/postiz.md`.
 - [ ] Confirm `GHOST_API_URL` + `GHOST_API_KEY` work; one full post JSON
       captured for schema reference (with `html`, `plaintext`,
@@ -395,18 +387,18 @@ intentionally a separate command.
 
 **Tasks**
 
-- [ ] Collapse `cmd/{ingest,embed,query,stats,serve}/main.go` stubs into
+- [x] Collapse `cmd/{ingest,embed,query,stats,serve}/main.go` stubs into
       `cmd/agent/` with subcommand dispatch (Decision 7). `go build`
       still green after.
-- [ ] `internal/config`: load `sources.yaml` (YAML, `KnownFields(true)`,
+- [x] `internal/config`: load `sources.yaml` (YAML, `KnownFields(true)`,
       `version` check), validate per-provider options, resolve `{ env: VAR }`
       credentials without printing values, fail fast on a missing variable.
-- [ ] `internal/sources/provider.go` + `registry.go`: the `Provider`
+- [x] `internal/sources/provider.go` + `registry.go`: the `Provider`
       interface and the `type → constructor` registry; an unknown type is a
       startup error.
-- [ ] `migrations/0002_state.sql`: the `source_state` + `source_items`
+- [x] `migrations/0002_state.sql`: the `source_state` + `source_items`
       ledger; `chunks` gains `source_id` + `chunk_hash`.
-- [ ] `agent sources list` / `agent sources validate`: show enabled
+- [x] `agent sources list` / `agent sources validate`: show enabled
       providers and resolved options (never secrets); validate the file
       with no credentials present.
 - [ ] `agent ingest` modes: incremental by default against the ledger;
@@ -414,7 +406,7 @@ intentionally a separate command.
       to one provider; `--dry-run` reports the plan without writing.
 - [ ] Driver spike (small, first): pin `mattn/go-sqlite3` + sqlite-vec Go
       bindings in `go.mod`; prove FTS5 BM25 query + `vec0` insert/KNN
-      round-trip in a scratch DB on this Mac **and inside
+      round-trip in a scratch DB on the dev host **and inside
       `docker compose build`** — the container is where CGO toolchain
       surprises actually bite. If CGO misbehaves, decide the fallback
       (ncruces driver) at this spike, not mid-build. The spike also fixes
@@ -423,24 +415,23 @@ intentionally a separate command.
 - [ ] `internal/llm` connector: one small OpenAI-compatible HTTP client
       (plain `net/http`, no SDK) — `POST /v1/embeddings`,
       `POST /v1/chat/completions`, `GET /v1/models`. Config:
-      `LOCALAI_BASE_URL` (default `http://192.168.78.243:8080/v1` — the
-      verified self-hosted instance), `LOCALAI_API_KEY` (optional),
-      `EMBED_MODEL` (default `embeddinggemma-300m`), `CHAT_MODEL`
-      (default `spark-x2.5-4b`). LocalAI is the default; any
-      OpenAI-compatible server (llama.cpp server, vLLM, OpenAI itself)
-      works by changing the base URL. Two behaviours the client must
-      honour: embeddings are **768d** (the schema says `float[768]` —
-      assert the dimension before writing, or refuse to write), and
-      `spark-x2.5-4b` is a **reasoning** model whose response carries a
-      `reasoning` field — `max_tokens` must budget for reasoning or
-      `content` comes back empty.
+      `LOCALAI_BASE_URL` (default `http://localhost:8080/v1`),
+      `LOCALAI_API_KEY` (optional), `EMBED_MODEL` (default
+      `embeddinggemma-300m`), `CHAT_MODEL` (default `spark-x2.5-4b`).
+      Any OpenAI-compatible server (LocalAI, llama.cpp server, vLLM,
+      OpenAI itself) works by changing the base URL. Two behaviours the
+      client must honour: embeddings are **768d** (the schema says
+      `float[768]` — assert the dimension before writing, or refuse to
+      write), and the default chat model is a **reasoning** model whose
+      response can carry a `reasoning` field — `max_tokens` must budget
+      for reasoning or `content` comes back empty.
 - [ ] Containerize (§2.5): `Dockerfile`, `.dockerignore`, `compose.yaml`
       with the agent service, `agent-data` volume, `AGENT_DB_PATH` wiring,
-      and `LOCALAI_BASE_URL` pointing at `http://192.168.78.243:8080/v1`.
-      No LocalAI service and no `/readyz` healthcheck in compose — the
-      agent probes `/readyz` on the model host itself at startup and fails
-      fast with a clear error. Embed model `embeddinggemma-300m` (768d,
-      matches the `vec0` schema).
+      and `LOCALAI_BASE_URL` passed through from the environment. No
+      model-server service and no `/readyz` healthcheck in compose — the
+      agent probes `/readyz` on the model endpoint itself at startup and
+      fails fast with a clear error. Embed model `embeddinggemma-300m`
+      (768d, matches the `vec0` schema).
 - [ ] Store layer: migration runner that loads the sqlite-vec extension
       *before* applying `0001_init.sql` (the `vec0` DDL fails without it).
       `scripts/check-ddl.py` stays green as the schema evolves.
@@ -536,13 +527,12 @@ until `publish_at <= now` (configurable; default skip).
   with no source changes).
 - Deleting an upstream post and re-running reduces the corresponding chunks
   (drift detection works).
-- `agent embed` finishes in <5 min on this hardware against the
-  self-hosted LocalAI at `192.168.78.243` (embed model already loaded
-  there — no first-boot download).
+- `agent embed` finishes in <5 min against the configured model server
+  (models already loaded there — no first-boot download).
 - `docker compose build` produces the image and `docker compose up` yields
-  an agent container that reaches the model host (`/readyz` on
-  `192.168.78.243:8080`) with `agent embed` working from a clean
-  container — no host Go toolchain, no ollama, no codex.
+  an agent container that reaches the model endpoint (`/readyz` on
+  `LOCALAI_BASE_URL`) with `agent embed` working from a clean container —
+  no host Go toolchain.
 - A second incremental run is a near no-op (no re-fetch, no re-embed).
 - `agent ingest --full` rebuilds every chunk and every embedding from the
   sources as they stand today.
@@ -572,8 +562,8 @@ wrapper on top.
       connector — builds the strict prompt below with the retrieved chunks
       and POSTs to `/v1/chat/completions` on the configured base URL
       (LocalAI default; any OpenAI-compatible server). No state, no
-      retries, no host `codex` dependency. `scripts/ask` stays as a thin
-      wrapper around `./agent ask` for muscle memory.
+      retries. `scripts/ask` stays as a thin wrapper around `./agent ask`
+      for muscle memory.
 
 **Prompt template (for `agent ask`)**:
 
@@ -595,7 +585,7 @@ body
 
 - 20-query eval reaches ≥15/20 with verified chunk_ids.
 - p50 retrieval latency <300ms; end-to-end `ask` p50 <8s on a GPU-capable
-  host, ≤60s on the CPU-only Docker setup (small chat model).
+  model host, ≤60s against a CPU-only model server (small chat model).
 - A second human can read `README.md` + `docs/runbook.md` and run `ask`
   without help — including via `docker compose up` on a clean host.
 
@@ -609,16 +599,24 @@ body
 
 **Tasks**
 
-- [ ] `scripts/ingest-all.sh`: cron/launchd-friendly wrapper (already a
-      stub; make it call the built binary, not `go run`, once Phase 1 ships).
-      Container mode: `docker compose run --rm agent agent ingest`.
+- [ ] `scripts/ingest-all.sh`: scheduler-friendly wrapper (already a stub;
+      it calls the built binary and fails clearly while Phase 1 is
+      unimplemented). Container mode: `docker compose run --rm agent agent ingest`.
 - [ ] `agent ingest --watch`: poll upstream every N minutes during work
       hours, no-op when nothing changed. In container mode the `agent`
       service runs long-lived with `restart: unless-stopped`.
 - [ ] `agent backup`: online `VACUUM INTO` snapshot of the SQLite file
-      into `/data` (safe while the writer is live).
-- [ ] Schedule on this Mac: **launchd** agent or user cron (no systemd on
-      darwin) invoking the container command above. Hourly default.
+      into the data volume (safe while the writer is live).
+- [ ] Scheduled ingest: the requirement is "run `agent ingest` (host mode)
+      or `docker compose run --rm agent agent ingest` (container mode) on
+      a schedule" — hourly by default. Portable option that works
+      everywhere: a user crontab entry
+      (`0 * * * * /path/to/repo/scripts/ingest-all.sh`). Platform-native
+      alternatives: a systemd user timer on Linux (`systemd --user`), a
+      launchd agent on macOS (`~/Library/LaunchAgents`), or a
+      `restart: unless-stopped` long-running container doing
+      `agent ingest --watch`. Pick one; the repo ships the wrapper script,
+      not a scheduler unit.
 - [ ] Wherever your agent memory lives, note: "for questions about my
       positions, history, or thinking, use `ask` from this repo."
 - [ ] One week of shadow usage: run `ask` on real questions at least once
@@ -683,16 +681,16 @@ No public web exposure by default.
 
 | Risk | Likelihood | Impact | Mitigation |
 |---|---|---|---|
-| Credentials missing entirely (verified 2026-10-21) | Certain today | Phase 0+ blocked | Keys are the one human blocker; Phase 1 store/chunker work can start in parallel against fixtures |
+| Credentials missing entirely | Certain on a fresh machine | Phase 0+ blocked | Keys are the one human blocker; Phase 1 store/chunker work can start in parallel against fixtures |
 | Postiz response shape differs from docs | Medium | Phase 1 schema rework | Phase 0 captures real shape first |
 | Ghost response shape differs from expectations | Low | Same as above | Phase 0 captures one real post |
-| sqlite-vec CGO build trouble on darwin/arm64 | Medium | Build fragility | Phase 1 driver spike decides mattn vs ncruces before store code lands; pin versions |
+| sqlite-vec CGO build trouble (any platform) | Medium | Build fragility | Phase 1 driver spike decides mattn vs ncruces before store code lands; pin versions |
 | CGO/sqlite-vec misbehaves inside the container | Medium | Image build breaks | Driver spike must prove `docker compose build` + KNN round-trip in-container before store code lands |
-| Model host `dev` (192.168.78.243) down or unreachable from the container | Medium | `embed`/`ask` blocked | Agent probes `/readyz` at startup and fails fast with a clear message; models are pre-loaded, so no first-boot wait; documented fallback is a local `localai` compose service |
-| Model host is CPU-only (no GPU confirmed for `dev`) | Medium | Slow chat | `spark-x2.5-4b` is a 4B model — acceptable at this corpus size; Phase 2 latency targets are measured against the real host, not guessed |
-| `spark-x2.5-4b` is a reasoning model — the token budget is eaten by `reasoning` | Medium | Empty `content` in `agent ask` | `max_tokens` must budget for reasoning; `agent ask` reads the `reasoning` field and errors loudly on empty content; `spark-x2.5-1.7b-q4` is the lighter fallback |
-| Docker daemon unreachable from the agent sandbox (verified) | Certain in-sandbox | Slow dev loop for container steps | Run container commands with explicit permission or outside the sandbox; never bake keys into the image |
-| SQLite on a macOS bind mount (VirtioFS) is slow / has locking quirks | Low | Degraded perf when DB is host-visible | Named volume is the default; bind mount documented for export only |
+| Model endpoint down or unreachable from the container | Medium | `embed`/`ask` blocked | Agent probes `/readyz` at startup and fails fast with a clear message; `LOCALAI_BASE_URL` must be reachable from inside the container network (`localhost` in compose means the container itself); documented fallback is a local model-server compose service |
+| Model host is CPU-only | Medium | Slow chat | `spark-x2.5-4b` is a 4B model — acceptable at this corpus size; Phase 2 latency targets are measured against the real endpoint, not guessed |
+| The chat model is a reasoning model — the token budget is eaten by `reasoning` | Medium | Empty `content` in `agent ask` | `max_tokens` must budget for reasoning; `agent ask` reads the `reasoning` field and errors loudly on empty content; a smaller instruct model is the documented fallback |
+| Docker daemon unreachable from an agent sandbox | Certain in-sandbox | Slow dev loop for container steps | Run container commands with explicit permission or outside the sandbox; never bake keys into the image |
+| SQLite on a host bind mount is slow / has locking quirks on some platforms | Low | Degraded perf when DB is host-visible | Named volume is the default; bind mount documented for export only |
 | Contentless-FTS5 trap (caught in refinement) | Fixed | Would have broken query join-back | Self-contained FTS5 in `0001_init.sql` |
 | Embedding quality too low | Low | Phase 2 eval falls short | Point `LOCALAI_BASE_URL` at a stronger server or change the model id; the `embedded_with` audit makes re-runs cheap |
 | Config typo silently disables a provider | Medium | A source goes dark without an error | Strict YAML decode (`KnownFields(true)`) + `agent sources validate`; the enabled set is printed before each run |
