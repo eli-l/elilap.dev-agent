@@ -49,7 +49,7 @@ and §3.
 
 | # | Decision | Choice | Rationale (one line) |
 |---|---|---|---|
-| 1 | Language | Go 1.26.6 (as installed on host) | Single binary, no runtime, easy ops |
+| 1 | Language | Go 1.27 (language floor) | Single binary, no runtime, easy ops |
 | 2 | Index store | SQLite + `sqlite-vec` (one file) | Corpus ≤1,500 chunks — service overkill, file-portable, FTS5 free |
 | 3 | Embedder + chat model | Self-hosted **LocalAI** behind one OpenAI-compatible connector (`/v1/embeddings`, `/v1/chat/completions`); default embed model `nomic-embed-text` (768d) | Self-hosted and environment-independent; swapping providers = changing `LOCALAI_BASE_URL` |
 | 4 | Retrieval | Hybrid: FTS5 BM25 + vec cosine, RRF merge | Neither alone is good enough on mixed prose+social |
@@ -58,17 +58,16 @@ and §3.
 | 6 | Repo location | `/Users/ilja/projects/elilap.dev-agent` (this host); remote `git@github.com:eli-l/elilap.dev-agent.git` — both verified 2026-10-21 | Previous plan revision assumed a different machine (`/home/openbot/...`, systemd); corrected |
 | 7 | CLI surface | One binary `agent`, subcommands `ingest`, `embed`, `query`, `stats`, `serve` | Matches `./agent ingest` muscle memory; the five separate `cmd/*/main.go` stubs collapse into `cmd/agent/` in Phase 1 |
 | 8 | Auth posture | env-loaded keys; never printed; gitignored index | Defense by default |
-| 9 | Container runtime | Multi-stage Dockerfile (builder `golang:1.26` → minimal runtime) + `compose.yaml` with agent + localai services | Whole system runs on any Docker host; builder tag floats to the latest 1.26 patch ≥ go.mod's `1.26.6` |
+| 9 | Container runtime | Multi-stage Dockerfile (builder `golang:1.27` → minimal runtime) + `compose.yaml` with agent + localai services | Whole system runs on any Docker host; builder tag floats to the latest 1.27 patch ≥ go.mod's `1.27` |
 | 10 | Model serving | LocalAI container, **versioned** image tag (CPU image default; GPU tags exist per platform) | One server covers embeddings + chat; `/readyz` healthcheck; OpenAI-compatible API |
 | 11 | SQLite placement | `AGENT_DB_PATH` env: `/data/index.db` in container, `./index.db` on host; named volume `agent-data` by default | Keeps `index.db` + WAL/SHM siblings on one mount; clean, durable host mapping |
 
-### 1.5 Verified environment (2026-10-21, this host)
+### 1.5 Verified environment (audited 2026-10-21; Go floor re-verified 2026-10-23)
 
-Facts checked on the actual dev machine, so the plan stops guessing:
+Facts checked on the actual dev machines, so the plan stops guessing:
 
 * **Host**: macOS (darwin/arm64), repo clean at bootstrap commit `7338ecf`.
-* **Toolchain**: Go 1.26.6; `go build ./...` and `go vet ./...` pass on the
-  stub scaffold. Remote matches Decision 6.
+* **Toolchain**: Go 1.27 (the `go.mod` floor; verified on the AI Node with go1.27.3 — `go build ./...`, `go vet ./...`, and `gofmt -l .` all clean). The Mac-side version has not been re-verified since 2026-10-21.
 * **Credentials**: **none present** — `POSTIZ_API_KEY`, `POSTIZ_API_URL`,
   `GHOST_API_URL`, `GHOST_API_KEY` are all unset and there is no `.env`
   file. The old plan's "current on-disk key 401s" note is stale; on this
@@ -109,7 +108,7 @@ elilap.dev-agent/
 ├── README.md
 ├── .env.example                      # Phase 0: var names, no values
 ├── .gitignore                        # index.db / .env / model weights
-├── Dockerfile                        # multi-stage: golang:1.26 → minimal runtime
+├── Dockerfile                        # multi-stage: golang:1.27 → minimal runtime
 ├── .dockerignore
 ├── compose.yaml                      # agent + localai services, volumes, healthchecks
 ├── go.mod
@@ -194,8 +193,8 @@ volumes:
 * Backup: `agent backup` (online `VACUUM INTO`, Phase 3) or stop + copy the
   volume. Documented in the runbook.
 
-**Image contract**: multi-stage `Dockerfile` — builder `golang:1.26`
-(Debian variant: CGO on, toolchain present, tag floats to the newest 1.26
+**Image contract**: multi-stage `Dockerfile` — builder `golang:1.27`
+(Debian variant: CGO on, toolchain present, tag floats to the newest 1.27
 patch) → runtime `debian:bookworm-slim` carrying only the binary plus CA
 certs and tzdata. If the Phase 1 driver spike lands a static or pure-Go
 build (ncruces), the runtime collapses to `distroless`/`scratch` as a
