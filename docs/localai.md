@@ -39,10 +39,11 @@ check and reports each part separately.
 
 ## Embeddings
 
-* **Dimension is fixed at 768** in this project: `chunks_vec.embedding` is
-  declared `float[768]` in `migrations/0001_init.sql`. The connector must
-  assert the returned vector length before writing, and **refuse to write**
-  on a mismatch rather than silently truncate or pad.
+* **Dimension is fixed at 768** in this project: every stored vector records
+  its own dimension in `chunk_vectors.dim`, and the model contract fixes that
+  dimension at 768. The connector must assert the returned vector length
+  before writing, and **refuse to write** on a mismatch rather than silently
+  truncate or pad.
 * The default embedding model is `embeddinggemma-300m` (`EMBED_MODEL`). Any
   server-side model that returns 768-dimension vectors works.
 * Batch input in one request when the server supports it; the corpus is

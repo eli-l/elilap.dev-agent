@@ -28,6 +28,12 @@ facts the platform-agnostic pass removed are still on the record, clearly
 marked non-normative, so nobody has to re-derive them and nobody can
 mistake them for requirements.
 
+Sixth pass (2026-10-25) settled the persistence stack after the driver spike:
+the driver is the pure-Go `github.com/ncruces/go-sqlite3` with its `ext/fts5`
+extension, and the sqlite-vec `vec0` virtual table is replaced by the plain
+`chunk_vectors` table (a float32 BLOB scored in Go). Decision 2b, the §3
+schema, and the risk table now say so.
+
 ---
 
 ## 0. Goals & non-goals
@@ -71,11 +77,11 @@ mistake them for requirements.
 | # | Decision | Choice | Rationale (one line) |
 |---|---|---|---|
 | 1 | Language | Go 1.27 (language floor) | Single binary, no runtime, easy ops |
-| 2 | Index store | SQLite + `sqlite-vec` (one file) | Corpus ≤1,500 chunks — service overkill, file-portable, FTS5 free |
+| 2 | Index store | SQLite + FTS5 + in-Go cosine scoring (one file) | Corpus ≤1,500 chunks — service overkill, file-portable, FTS5 free; a native vector extension would have to ship beside every binary |
 | 3 | Embedder + chat model | Self-hosted, OpenAI-compatible model server behind one connector (`/v1/embeddings`, `/v1/chat/completions`); embed model `embeddinggemma-300m` (768d), chat model `spark-x2.5-4b` — both overridable via env | Swapping providers = changing one base URL; no LLM SDK |
 | 4 | Retrieval | Hybrid: FTS5 BM25 + vec cosine, RRF merge | Neither alone is good enough on mixed prose+social |
 | 5 | Repos / sources | Ghost Admin API + Postiz HTTP API | Live, queryable, idempotent on `(source_kind, source_id)` |
-| 2b | Go driver | CGO: `mattn/go-sqlite3` (`-tags sqlite_fts5`) + sqlite-vec Go bindings (asg017), pinned | FTS5 + vec0 in one DB handle; exact binding import path confirmed in the Phase 1 driver spike, not before |
+| 2b | Go driver | Pure Go: `github.com/ncruces/go-sqlite3` (SQLite compiled to WebAssembly) + its `ext/fts5` extension | No C toolchain, so the binary cross-compiles for linux/amd64, linux/arm64 and darwin/arm64 with `CGO_ENABLED=0`; FTS5 comes from the driver's own extension; embeddings are a float32 BLOB scored in Go, so no native extension has to ship |
 | 6 | Repo location | Any checkout of the git remote (`git@github.com:eli-l/elilap.dev-agent.git`); nothing in the repo may assume an absolute path | Previous plan revisions hardcoded a developer machine's path and later corrected it; paths are not plan material |
 | 7 | CLI surface | One binary `agent`, subcommands `ingest`, `embed`, `query`, `stats`, `serve` | Matches `./agent ingest` muscle memory; the five separate `cmd/*/main.go` stubs collapse into `cmd/agent/` in Phase 1 |
 | 8 | Auth posture | env-loaded keys; never printed; gitignored index | Defense by default |
@@ -91,8 +97,9 @@ mistake them for requirements.
 The plan makes no assumptions about a specific machine. Any environment that
 runs this project must provide:
 
-* **Toolchain (host mode only)**: Go ≥ 1.27 (the `go.mod` floor) with CGO
-  enabled for the SQLite driver. Container mode needs no host toolchain.
+* **Toolchain (host mode only)**: Go ≥ 1.27 (the `go.mod` floor). The SQLite
+  driver is pure Go, so no C toolchain is needed and `CGO_ENABLED=0` builds
+  are the default. Container mode needs no host toolchain.
 * **Container runtime (container mode only)**: Docker with Compose v2 (or an
   equivalent OCI runtime); the daemon socket must be reachable from wherever
   builds run.
@@ -140,7 +147,7 @@ elilap.dev-agent/
 │   │   ├── ghost/                    # Ghost Admin client
 │   │   ├── postiz/                   # Postiz HTTP client
 │   │   └── shared/                   # common chunker + hash + types
-│   ├── store/                        # SQLite, migrations, FTS5 glue, sqlite-vec
+│   ├── store/                        # SQLite, migrations, FTS5 + vector glue
 │   ├── embed/                        # batching/resume logic over the llm connector
 │   ├── config/                       # sources.yaml loader + strict validation
 │   ├── llm/                          # one OpenAI-compatible HTTP client
@@ -164,8 +171,10 @@ elilap.dev-agent/
 
 Current state vs. target: `cmd/agent/` exists with subcommand dispatch, the
 `sources` subcommands, the config loader, the provider registry, and a
-`doctor` preflight, with tests. `internal/{store,embed,llm,retrieval}` and
-the network clients are still empty (`.gitkeep`). `migrations/`,
+`doctor` preflight, with tests. `internal/store` is implemented (embedded
+migrations, the chunk write path, and the BM25 + cosine read paths);
+`internal/{embed,llm,retrieval}` and the network clients are still empty
+(`.gitkeep`). `migrations/`,
 `scripts/` (including the DDL smoke check), and `docs/` exist in Phase-0/1
 form. The bring-up entry points exist: `Makefile` (`setup`, `check`,
 `doctor`, `build`, `test`), `.env.example`, and `agent doctor`. The container
@@ -410,7 +419,7 @@ live source waits on this.
 ### Phase 1 — Ingestion
 
 **Goal**: a working ingestor that pulls from Ghost and Postiz into a
-SQLite index with `chunks` + `chunks_fts` + `chunks_vec`. Embedding is
+SQLite index with `chunks` + `chunks_fts` + `chunk_vectors`. Embedding is
 intentionally a separate command.
 
 **Tasks**
@@ -441,14 +450,12 @@ intentionally a separate command.
 - [ ] `agent ingest` modes: incremental by default against the ledger;
       `--full` re-fetches, re-chunks and re-embeds; `--source <id>` scopes
       to one provider; `--dry-run` reports the plan without writing.
-- [ ] Driver spike (small, first): pin `mattn/go-sqlite3` + sqlite-vec Go
-      bindings in `go.mod`; prove FTS5 BM25 query + `vec0` insert/KNN
-      round-trip in a scratch DB on the dev host **and inside
-      `docker compose build`** — the container is where CGO toolchain
-      surprises actually bite. If CGO misbehaves, decide the fallback
-      (ncruces driver) at this spike, not mid-build. The spike also fixes
-      the runtime base image (glibc `bookworm-slim` for a CGO build vs
-      `distroless`/`scratch` for a static or pure-Go build).
+- [x] Driver spike (small, first): the driver is pinned to the pure-Go
+      `github.com/ncruces/go-sqlite3` (SQLite compiled to WebAssembly) with
+      its `ext/fts5` extension. FTS5 BM25 and the vector round-trip are
+      covered by the `internal/store` tests. There is no C toolchain in the
+      picture, so the runtime image can be `distroless`/`scratch` and the
+      binary cross-compiles with `CGO_ENABLED=0`.
 - [ ] `internal/llm` connector: one small OpenAI-compatible HTTP client
       (plain `net/http`, no SDK) — `POST /v1/embeddings`,
       `POST /v1/chat/completions`, `GET /v1/models`. Config:
@@ -457,9 +464,10 @@ intentionally a separate command.
       `embeddinggemma-300m`), `CHAT_MODEL` (default `spark-x2.5-4b`).
       Any OpenAI-compatible server (LocalAI, llama.cpp server, vLLM,
       OpenAI itself) works by changing the base URL. Two behaviours the
-      client must honour: embeddings are **768d** (the schema says
-      `float[768]` — assert the dimension before writing, or refuse to
-      write), and the default chat model is a **reasoning** model whose
+      client must honour: embeddings are **768d** (the model contract in
+      Decision 10 — assert the dimension before writing, or refuse to
+      write; `chunk_vectors.dim` records the dimension of every stored
+      row), and the default chat model is a **reasoning** model whose
       response can carry a `reasoning` field — `max_tokens` must budget
       for reasoning or `content` comes back empty.
 - [ ] Containerize (§2.5): `Dockerfile`, `.dockerignore`, `compose.yaml`
@@ -468,10 +476,13 @@ intentionally a separate command.
       model-server service and no healthcheck in compose — the agent
       verifies the model endpoint itself at startup (by listing its models)
       and fails fast with a clear error. Embed model `embeddinggemma-300m`
-      (768d, matches the `vec0` schema).
-- [ ] Store layer: migration runner that loads the sqlite-vec extension
-      *before* applying `0001_init.sql` (the `vec0` DDL fails without it).
-      `scripts/check-ddl.py` stays green as the schema evolves.
+      (768d, matches the embedding contract in Decision 10).
+- [x] Store layer: `internal/store` opens the index, applies the embedded
+      migrations inside one transaction and records them in
+      `schema_migrations`, writes `chunks` + `chunks_fts` (+ `chunk_vectors`
+      when an embedding is present) in one transaction, and serves the
+      BM25 and cosine read paths. `scripts/check-ddl.py` stays green as the
+      schema evolves.
 - [ ] Source clients (`internal/sources/ghost`, `postiz`) + shared chunker;
       unit tests against captured fixture JSON from Phase 0, so chunker
       logic is testable without live credentials.
@@ -489,42 +500,53 @@ intentionally a separate command.
 **Schema** (`migrations/0001_init.sql`, synced with this file):
 
 ```sql
-CREATE TABLE chunks (
+-- 0001_init.sql
+--
+-- Phase 1 initial schema.
+-- Synced with PLAN.md §3 (Phase 1). Final field list lands after
+-- Phase 0 captures real upstream response shapes.
+
+CREATE TABLE IF NOT EXISTS chunks (
   chunk_id       TEXT PRIMARY KEY,           -- sha256(source_kind|source_id|chunk_seq), hex
   source_kind    TEXT NOT NULL CHECK (source_kind IN ('ghost_post','postiz_post')),
   source_id      TEXT NOT NULL,              -- upstream item id (Ghost uuid / Postiz id)
   source_url     TEXT,
-  platform       TEXT,                       -- null for ghost
+  platform       TEXT,
   author         TEXT NOT NULL,
-  published_at   TEXT NOT NULL,              -- ISO-8601 UTC
+  published_at   TEXT NOT NULL,
   ingested_at    TEXT NOT NULL,              -- local write time
   updated_at     TEXT NOT NULL,              -- upstream last-modified time
-  content_hash   TEXT NOT NULL,              -- sha256 of normalized text
+  content_hash   TEXT NOT NULL,
   title          TEXT,
-  section        TEXT,                       -- heading path; null for social
+  section        TEXT,
   body           TEXT NOT NULL,
   body_tokens    INTEGER NOT NULL,
-  meta_json      TEXT NOT NULL DEFAULT '{}', -- tags, status, release id, etc.
-  embedded_with  TEXT,                       -- e.g. 'localai:embeddinggemma-300m@<git-sha>'
-  embedded_at    TEXT                       -- ISO-8601
+  meta_json      TEXT NOT NULL DEFAULT '{}',
+  embedded_with  TEXT,
+  embedded_at    TEXT
 );
 
-CREATE INDEX idx_chunks_source      ON chunks (source_kind, source_id);
-CREATE INDEX idx_chunks_published   ON chunks (published_at);
-CREATE INDEX idx_chunks_hash        ON chunks (content_hash);
+CREATE INDEX IF NOT EXISTS idx_chunks_source      ON chunks (source_kind, source_id);
+CREATE INDEX IF NOT EXISTS idx_chunks_published   ON chunks (published_at);
+CREATE INDEX IF NOT EXISTS idx_chunks_hash        ON chunks (content_hash);
 
 -- Self-contained FTS5 (NOT contentless): stored columns are readable, so
--- matches join back to chunk_id directly. Duplicating body text is fine
--- at ≤1,500 chunks. `tags` values come from meta_json at write time.
--- The store keeps chunks and chunks_fts in sync inside one transaction.
-CREATE VIRTUAL TABLE chunks_fts USING fts5(
+-- matches join back to chunk_id directly. `tags` values come from
+-- meta_json at write time; the store keeps chunks and chunks_fts in sync
+-- inside one transaction.
+CREATE VIRTUAL TABLE IF NOT EXISTS chunks_fts USING fts5(
   chunk_id UNINDEXED, title, body, tags,
   tokenize='porter unicode61'
 );
 
-CREATE VIRTUAL TABLE chunks_vec USING vec0(
-  chunk_id TEXT PRIMARY KEY,
-  embedding float[768]
+-- Embeddings are stored as raw float32 little-endian bytes and scored in Go
+-- (cosine similarity). A sqlite-vec "vec0" table would need a platform-specific
+-- loadable extension next to every deployed binary; the corpus is small enough
+-- that the difference is unmeasurable.
+CREATE TABLE IF NOT EXISTS chunk_vectors (
+  chunk_id TEXT PRIMARY KEY REFERENCES chunks(chunk_id) ON DELETE CASCADE,
+  dim       INTEGER NOT NULL,
+  vec       BLOB NOT NULL
 );
 ```
 
@@ -720,8 +742,8 @@ No public web exposure by default.
 | Credentials missing entirely | Certain on a fresh machine | Phase 0+ blocked | Keys are the one human blocker; Phase 1 store/chunker work can start in parallel against fixtures |
 | Postiz response shape differs from docs | Medium | Phase 1 schema rework | Phase 0 captures real shape first |
 | Ghost response shape differs from expectations | Low | Same as above | Phase 0 captures one real post |
-| sqlite-vec CGO build trouble (any platform) | Medium | Build fragility | Phase 1 driver spike decides mattn vs ncruces before store code lands; pin versions |
-| CGO/sqlite-vec misbehaves inside the container | Medium | Image build breaks | Driver spike must prove `docker compose build` + KNN round-trip in-container before store code lands |
+| A native vector extension would have to ship beside the binary | Avoided | Deployment fragility | The driver and the vector storage are pure Go: `chunk_vectors.vec` is a float32 BLOB scored in Go, so no `.so` and no C toolchain |
+| The pure-Go driver misbehaves inside the container | Low | Image build breaks | The driver has no CGO and no platform-specific parts; `docker compose build` still has to prove the FTS5 + cosine round-trip in-container before the image is trusted |
 | Model endpoint down or unreachable from the container | Medium | `embed`/`ask` blocked | Agent verifies the endpoint by listing its models and fails fast with a clear message; `LOCALAI_BASE_URL` must be reachable from inside the container network (`localhost` in compose means the container itself); documented fallback is a local model-server compose service |
 | Model host is CPU-only | Medium | Slow chat | `spark-x2.5-4b` is a 4B model — acceptable at this corpus size; Phase 2 latency targets are measured against the real endpoint, not guessed |
 | The chat model is a reasoning model — the token budget is eaten by `reasoning` | Medium | Empty `content` in `agent ask` | `max_tokens` must budget for reasoning; `agent ask` reads the `reasoning` field and errors loudly on empty content; a smaller instruct model is the documented fallback |
@@ -835,8 +857,8 @@ An already-running LocalAI instance on the LAN, reached over plain HTTP:
 **Verified 2026-10-23, from the reference host:**
 
 * `POST /v1/embeddings` with `embeddinggemma-300m` and input `"hello world"`
-  returned 768 floats — matching `chunks_vec.embedding float[768]` in
-  `migrations/0001_init.sql`.
+  returned 768 floats — the dimension the plan requires; every stored
+  vector records its own dimension in `chunk_vectors.dim`.
 * `POST /v1/chat/completions` with `spark-x2.5-4b` returned HTTP 200 with a
   completion.
 * **Caveat — reasoning models:** `spark-x2.5-4b` is a *reasoning* model.
@@ -888,9 +910,9 @@ depend on them:
 
 ### 7.6 What the reference environment does *not* prove
 
-* It does not prove the CGO/sqlite-vec build works anywhere else — the Phase 1
-  driver spike must still run on the target platform and inside the
-  container image.
+* It does not prove the pure-Go driver behaves identically on every target
+  platform — the container image build, and a cross-compile for linux/arm64
+  and darwin/arm64, still have to run on the target platform.
 * It does not measure the Phase 2 latency targets; those must be measured
   against the model server actually in use.
 * It does not verify any live Ghost or Postiz response shape: no credential

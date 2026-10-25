@@ -8,18 +8,13 @@ What it checks
 2. The FTS5 join-back contract holds: ``chunks_fts`` is *self-contained*
    (not contentless), so a MATCH query returns the stored ``chunk_id`` and
    the row can be joined back to ``chunks``.
-3. The ``chunks_vec`` virtual table is declared with the embedding
-   dimension the plan requires (768).
+3. The ``chunk_vectors`` table holds the embeddings: it carries
+   ``chunk_id``/``dim``/``vec`` and its foreign key to ``chunks`` cascades.
+   The vectors are raw float32 little-endian bytes scored in Go, so there
+   is no native extension to load and nothing to check but the shape.
 4. ``migrations/0001_init.sql`` and the schema block in ``PLAN.md`` §3
    describe the same ``chunks`` table. AGENTS.md requires them to stay in
    sync; this script is what keeps that true.
-
-The ``vec0`` virtual table needs the sqlite-vec extension, which plain
-``sqlite3`` does not have - applying the whole file with the shell
-``sqlite3`` command fails on that statement by design. This script applies
-everything else and checks the ``vec0`` table by shape. Point
-``SQLITE_VEC_PATH`` at a ``vec0`` shared object to apply it in full
-instead.
 
 Usage: python3 scripts/check-ddl.py [--plan PATH] [--migrations DIR]
 Exit code 0 = all checks passed, 1 = at least one check failed.
@@ -28,14 +23,13 @@ Exit code 0 = all checks passed, 1 = at least one check failed.
 from __future__ import annotations
 
 import argparse
-import os
 import re
 import sqlite3
 import sys
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-EXPECTED_EMBEDDING_DIM = 768
+EXPECTED_VECTOR_COLUMNS = ["chunk_id", "dim", "vec"]
 EXPECTED_CHUNK_COLUMNS = [
     "chunk_id",
     "source_kind",
@@ -107,43 +101,15 @@ def split_statements(sql: str) -> list[str]:
     return statements
 
 
-def is_vec_statement(statement: str) -> bool:
-    return re.search(r"USING\s+vec0\b", statement, re.IGNORECASE) is not None
-
-
-def try_load_vec(conn: sqlite3.Connection) -> str | None:
-    """Load the sqlite-vec extension when SQLITE_VEC_PATH points at it."""
-    path = os.environ.get("SQLITE_VEC_PATH")
-    if not path:
-        return None
-    if not Path(path).is_file():
-        fail(f"SQLITE_VEC_PATH points at {path!r}, which is not a file")
-    try:
-        conn.enable_load_extension(True)
-        conn.load_extension(path)
-    except sqlite3.Error as exc:  # pragma: no cover - depends on the host
-        fail(f"could not load the sqlite-vec extension from {path!r}: {exc}")
-    finally:
-        conn.enable_load_extension(False)
-    return path
-
-
-def apply_migrations(conn: sqlite3.Connection, migrations: list[Path]) -> list[str]:
-    """Apply every migration file; return the list of skipped statements."""
-    skipped = []
+def apply_migrations(conn: sqlite3.Connection, migrations: list[Path]) -> None:
+    """Apply every migration file in order."""
     for path in migrations:
         sql = path.read_text(encoding="utf-8")
         for statement in split_statements(strip_comments(sql)):
-            if is_vec_statement(statement) and not conn.execute(
-                "SELECT count(*) FROM pragma_module_list WHERE name='vec0'"
-            ).fetchone()[0]:
-                skipped.append(statement)
-                continue
             try:
                 conn.execute(statement)
             except sqlite3.Error as exc:
                 fail(f"{path.name}: statement failed: {exc}\n  {statement.splitlines()[0]}")
-    return skipped
 
 
 def check_five_available(conn: sqlite3.Connection) -> None:
@@ -158,10 +124,13 @@ def check_tables(conn: sqlite3.Connection) -> None:
         "SELECT name FROM sqlite_master WHERE type IN ('table','view')"
     ).fetchall()
     present = {row[0] for row in rows}
-    for table in ("chunks", "chunks_fts", "source_state", "source_items"):
+    for table in ("chunks", "chunks_fts", "chunk_vectors", "source_state", "source_items"):
         if table not in present:
             fail(f"table {table!r} is missing after applying the migrations")
-    print(f"ok   tables present: chunks, chunks_fts, source_state, source_items")
+    print(
+        "ok   tables present: chunks, chunks_fts, chunk_vectors, "
+        "source_state, source_items"
+    )
 
 
 def check_chunk_columns(conn: sqlite3.Connection) -> None:
@@ -209,36 +178,32 @@ def check_fts_join_back(conn: sqlite3.Connection) -> None:
     print("ok   chunks_fts stores its columns: MATCH + join-back on chunk_id works")
 
 
-def check_vec_dimension(conn: sqlite3.Connection, skipped: list[str]) -> None:
-    dimension = None
-    if skipped:
-        statement = skipped[0]
-        match = re.search(r"float\s*\[\s*(\d+)\s*\]", statement, re.IGNORECASE)
-        if not match:
-            fail(f"cannot read the embedding dimension out of: {statement}")
-        dimension = int(match.group(1))
-    else:
-        row = conn.execute(
-            "SELECT sql FROM sqlite_master WHERE name='chunks_vec'"
-        ).fetchone()
-        if row is None:
-            fail("the chunks_vec virtual table is missing")
-        match = re.search(r"float\s*\[\s*(\d+)\s*\]", row[0], re.IGNORECASE)
-        if not match:
-            fail(f"cannot read the embedding dimension out of: {row[0]}")
-        dimension = int(match.group(1))
-    if dimension != EXPECTED_EMBEDDING_DIM:
+def check_chunk_vectors(conn: sqlite3.Connection) -> None:
+    """The vector table carries the embeddings and hangs off chunks."""
+    cols = [row[1] for row in conn.execute("PRAGMA table_info(chunk_vectors)")]
+    if cols != EXPECTED_VECTOR_COLUMNS:
         fail(
-            f"chunks_vec declares float[{dimension}], but the plan requires "
-            f"float[{EXPECTED_EMBEDDING_DIM}]"
+            "chunk_vectors does not match the expected column list\n"
+            f"  expected: {EXPECTED_VECTOR_COLUMNS}\n"
+            f"  found:    {cols}"
         )
-    if skipped:
-        print(
-            f"ok   chunks_vec declares float[{dimension}] (checked by shape: the "
-            "sqlite-vec extension is not loaded)"
+
+    # PRAGMA foreign_key_list rows: id, seq, table, from, to, on_update, on_delete, match
+    fks = conn.execute("PRAGMA foreign_key_list(chunk_vectors)").fetchall()
+    to_chunks = [row for row in fks if row[2] == "chunks" and row[3] == "chunk_id"]
+    if not to_chunks:
+        fail(
+            "chunk_vectors has no foreign key to chunks(chunk_id): a vector "
+            "could outlive its chunk"
         )
-    else:
-        print(f"ok   chunks_vec declares float[{dimension}] and applied cleanly")
+    if to_chunks[0][6].upper() != "CASCADE":
+        fail(
+            "the chunk_vectors foreign key to chunks must cascade on delete, "
+            f"found {to_chunks[0][6]!r}"
+        )
+    print(
+        "ok   chunk_vectors holds chunk_id/dim/vec and cascades from chunks(chunk_id)"
+    )
 
 
 def plan_schema_block(plan: Path) -> str:
@@ -380,14 +345,11 @@ def main() -> int:
     conn = sqlite3.connect(":memory:")
     try:
         check_five_available(conn)
-        vec_path = try_load_vec(conn)
-        if vec_path:
-            print(f"ok   sqlite-vec extension loaded from {vec_path}")
-        skipped = apply_migrations(conn, migrations)
+        apply_migrations(conn, migrations)
         check_tables(conn)
         check_chunk_columns(conn)
         check_fts_join_back(conn)
-        check_vec_dimension(conn, skipped)
+        check_chunk_vectors(conn)
         check_plan_sync(args.plan, args.migrations)
     except CheckFailed as exc:
         print(f"FAIL {exc}", file=sys.stderr)
