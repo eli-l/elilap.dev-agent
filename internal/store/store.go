@@ -188,7 +188,11 @@ func (s *Store) Path() string {
 //
 // A chunk written without an embedding keeps the vector it already has:
 // re-ingesting an unchanged chunk must not throw away an embedding that the
-// embed command already produced.
+// embed command already produced. A chunk whose TEXT changed loses its
+// vector instead: the stored vector describes the text the chunk used to
+// hold, so it would answer queries with a passage the chunk no longer
+// contains. The chunk then has no vector, which puts it back on the embed
+// command's work list.
 //
 // PutChunk does not touch embedded_with/embedded_at. That audit trail
 // belongs to the embed command, which knows which model produced the vector.
@@ -211,6 +215,15 @@ func (s *Store) PutChunk(ctx context.Context, c Chunk) error {
 		return fmt.Errorf("begin the write of chunk %s: %w", c.ChunkID, err)
 	}
 	defer tx.Rollback()
+
+	// The hash the chunk had before this write: it says whether the
+	// vector the chunk may have describes the text it holds now.
+	var previousHash string
+	if err := tx.QueryRowContext(ctx,
+		`SELECT COALESCE(content_hash, '') FROM chunks WHERE chunk_id = ?`, c.ChunkID,
+	).Scan(&previousHash); err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return fmt.Errorf("look up chunk %s: %w", c.ChunkID, err)
+	}
 
 	_, err = tx.ExecContext(ctx, `INSERT INTO chunks (
   chunk_id, source_kind, source_id, source_url, platform, author,
@@ -248,6 +261,14 @@ ON CONFLICT(chunk_id) DO UPDATE SET
 		c.ChunkID, c.Title, c.Body, tags,
 	); err != nil {
 		return fmt.Errorf("write the full-text row of chunk %s: %w", c.ChunkID, err)
+	}
+
+	if previousHash != "" && previousHash != c.ContentHash {
+		// The text of the chunk changed: the vector it had describes the
+		// text the chunk used to hold, so it goes with that text.
+		if _, err := tx.ExecContext(ctx, `DELETE FROM chunk_vectors WHERE chunk_id = ?`, c.ChunkID); err != nil {
+			return fmt.Errorf("clear the stale vector of chunk %s: %w", c.ChunkID, err)
+		}
 	}
 
 	if len(c.Embedding) > 0 {

@@ -114,7 +114,11 @@ func (p *Provider) List(ctx context.Context, since time.Time) ([]shared.Item, er
 			ID:           filepath.ToSlash(rel),
 			URL:          path,
 			LastModified: info.ModTime().UTC(),
-			Hint:         fmt.Sprintf("%d:%d", info.ModTime().Unix(), info.Size()),
+			// The hint is the cheap fingerprint the ledger compares to
+			// decide that a file did not change. The modification time
+			// is taken in nanoseconds, so a file that is edited twice
+			// within the same second still gets a different fingerprint.
+			Hint: fmt.Sprintf("%d:%d", info.ModTime().UnixNano(), info.Size()),
 		})
 	}
 	return items, nil
