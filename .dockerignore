@@ -1,0 +1,45 @@
+# Version control and CI metadata - never part of the build context.
+.git
+.gitignore
+.github
+
+# Build artifacts and local state.
+bin/
+dist/
+tmp/
+/agent
+*.test
+*.out
+
+# The local index and its WAL/SHM siblings must never enter an image.
+index.db
+index.db-journal
+index.db-wal
+index.db-shm
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+
+# Credentials. The image is built from the repository, not from an
+# operator's machine, so no environment file belongs in the context.
+.env
+.env.*
+
+# Documentation and developer-only entry points.
+*.md
+docs/
+scripts/
+Makefile
+compose.yaml
+eval/
+
+# Editor noise.
+.DS_Store
+.idea/
+.vscode/
+*.swp
+
+# The build context must keep: go.mod, go.sum, vendor/, cmd/, internal/,
+# migrations/ and sources.yaml (the runtime image ships the static import
+# configuration - it holds no secrets, only { env: VAR } references).

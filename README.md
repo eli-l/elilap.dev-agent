@@ -20,8 +20,7 @@ Phase 0/1 bootstrap. What exists today:
 | Ghost / Postiz clients | pending - waiting on the Phase 0 API captures |
 | SQLite store | done - embedded migrations, chunk writes, BM25 + cosine reads |
 | Embedding, retrieval | pending - Phase 1 |
-| Container files (Dockerfile, compose.yaml) | pending - Phase 1 |
-
+| Container files (Dockerfile, compose.yaml) | done - static image, external model server, `scripts/deploy-check.sh` |
 The plan and its exit criteria live in [`PLAN.md`](./PLAN.md); the bring-up
 review is [`docs/mvp-review.md`](./docs/mvp-review.md).
 
@@ -92,6 +91,65 @@ The remaining subcommands (`ingest`, `embed`, `query`, `stats`, `serve`)
 land with the store layer in Phase 1 and currently report that they are not
 implemented.
 
+## Deploy
+
+Two ways to run the same binary, one behaviour (the container is the binary
+plus a volume). Both need a reachable OpenAI-compatible model server: the
+model server is **external** (`PLAN.md` Decision 10), this repo never runs
+one.
+
+### Host mode
+
+```bash
+make setup                        # toolchain check, .env from the example, build
+set -a; . ./.env; set +a          # load the credentials into the environment
+./agent doctor                    # preflight: config, credentials, model server, index path
+```
+
+### Container mode
+
+```bash
+export LOCALAI_BASE_URL=http://model-server:8080/v1   # required
+docker compose build
+docker compose run --rm agent doctor                  # preflight inside the container
+docker compose run --rm agent ingest                  # real work
+```
+
+`compose.yaml` runs the agent service and nothing else. `LOCALAI_BASE_URL`
+is **required**: compose fails loudly instead of silently pointing the agent
+at `localhost` inside the container, where nothing is listening. The index
+lives at `/data/index.db` on the named volume `agent-data`, so `index.db`,
+`index.db-wal` and `index.db-shm` always share one filesystem - which SQLite
+WAL requires.
+
+| variable | container mode | default | purpose |
+|---|---|---|---|
+| `LOCALAI_BASE_URL` | required | - | OpenAI-compatible endpoint, must end in `/v1` |
+| `LOCALAI_API_KEY` | optional | empty | bearer token, when the server wants one |
+| `EMBED_MODEL` | optional | `embeddinggemma-300m` | embedding model id (768 dimensions) |
+| `CHAT_MODEL` | optional | `spark-x2.5-4b` | chat model id |
+| `GHOST_API_URL` / `GHOST_API_KEY` | optional | empty | Ghost Admin API credentials |
+| `POSTIZ_API_URL` / `POSTIZ_API_KEY` | optional | empty | Postiz API credentials |
+
+No secret is ever written into the repo: compose reads a `.env` file for
+interpolation when you provide one, and every credential is passed through
+from the environment.
+
+The image is a static binary (`CGO_ENABLED=0`) on a distroless base, running
+as a non-root user (uid 65532) that owns a writable `/data`. There is no
+port to expose and no healthcheck to fake: the agent is a CLI, and
+`agent doctor` is the preflight - it verifies the model endpoint by listing
+its models and fails fast with the variable that fixes it.
+
+### Check the deployment
+
+```bash
+./scripts/deploy-check.sh              # docker, compose, model server, build, doctor, compose config
+./scripts/deploy-check.sh --skip-build # re-check without rebuilding the image
+```
+
+Each check fails with one specific, actionable message.
+
 ## Development
 
 ```bash
@@ -117,4 +175,5 @@ with `-mod=vendor` (the Makefile does). `make clean` removes `bin/`.
 
 * [`PLAN.md`](./PLAN.md) - full step-by-step build plan with exit criteria.
 * [`docs/mvp-review.md`](./docs/mvp-review.md) - the MVP bring-up review.
+* [`docs/deployment.md`](./docs/deployment.md) - the container deployment facts: image contract, compose topology, and the deploy check.
 * [`AGENTS.md`](./AGENTS.md) - conventions for working in this repo.

@@ -4,10 +4,10 @@
 
 * **Creation**: Captured the store-layer verification run - build, vet, tests, gofmt, and the DDL smoke check against the new chunk_vectors table, all green. [Store layer verification](/runs/2026-10-25-store-layer.md)
 * **Creation**: Added the index-store concept - the pure-Go driver and its pragmas, the embedded migrations and their ledger, the chunk write path, and the BM25 and cosine read paths. [Index store](/store.md)
+* **Creation**: Added the container deployment concept - the static image contract, the compose topology with a required external model server, the SQLite volume mapping, and the deploy check that proves the image builds and the preflight passes inside it. [Container deployment](/deployment.md)
 * **Update**: The model server contract now points at the stored vector dimension instead of the removed sqlite-vec column. [Model server contract](/localai.md)
 * **Update**: The bundle manifest now lists the index store concept. [index.md](/index.md)
-
-* **Update**: The build plan's machine-specific facts are out of the normative text: the platform-agnostic pass and the shipped `sources.yaml` behaviour are both reflected in §1.5, the decisions table, the compose snippet, and the Phase 1 checklist, and the compose snippet now requires `LOCALAI_BASE_URL` instead of defaulting to `localhost`. [MVP bring-up review](/mvp-review.md)
+* **Update**: The bundle manifest now lists the container deployment concept. [index.md](/index.md)* **Update**: The build plan's machine-specific facts are out of the normative text: the platform-agnostic pass and the shipped `sources.yaml` behaviour are both reflected in §1.5, the decisions table, the compose snippet, and the Phase 1 checklist, and the compose snippet now requires `LOCALAI_BASE_URL` instead of defaulting to `localhost`. [MVP bring-up review](/mvp-review.md)
 * **Creation**: Recorded offline review verification and the unavailable OKF validators. [Source config review verification](/runs/source-config-review-2026-10-25.md)
 * **Update**: Corrected credential warnings and validate-only strict mode, documented chunking bounds, and reconciled item IDs and content hashes with the migrations. [Import configuration and provider contract](/sources-config.md)
 * **Creation**: Captured the MVP bring-up verification run - the four required verification commands plus the DDL smoke check, all green. [MVP bring-up verification](/runs/0002-mvp-bringup-verification.md)
