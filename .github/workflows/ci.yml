@@ -1,0 +1,40 @@
+name: ci
+
+# The dependency set is vendored, so CI needs no module downloads and no
+# proxy: it builds exactly what a contributor builds locally.
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.27"
+
+      - name: Build
+        run: go build -mod=vendor ./...
+
+      - name: Vet
+        run: go vet -mod=vendor ./...
+
+      - name: Test
+        run: go test -mod=vendor ./...
+
+      - name: Format
+        run: |
+          unformatted="$(gofmt -l cmd internal migrations)"
+          if [ -n "$unformatted" ]; then
+            echo "unformatted files:"
+            echo "$unformatted"
+            exit 1
+          fi
+          echo "gofmt: clean"
+
+      - name: DDL smoke check
+        run: python3 scripts/check-ddl.py

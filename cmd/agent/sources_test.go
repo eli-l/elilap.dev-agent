@@ -206,16 +206,16 @@ func TestRunDispatches(t *testing.T) {
 			wantStderr: "unknown subcommand",
 		},
 		{
-			name:       "ingest is still a placeholder",
+			name:       "ingest is still a placeholder and fails loudly",
 			args:       []string{"ingest"},
-			wantCode:   0,
-			wantStdout: "ingest: not implemented (Phase 1)\n",
+			wantCode:   1,
+			wantStderr: "not implemented",
 		},
 		{
-			name:       "serve is still a placeholder",
+			name:       "serve is still a placeholder and fails loudly",
 			args:       []string{"serve"},
-			wantCode:   0,
-			wantStdout: "serve: not implemented (Phase 1)\n",
+			wantCode:   1,
+			wantStderr: "not implemented",
 		},
 	}
 

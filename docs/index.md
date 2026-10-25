@@ -8,11 +8,13 @@ okf_version: "0.2"
 * [Ghost Admin API shape (live capture)](ghost.md) - Placeholder for the captured Ghost Admin posts response; the honest schema source for migrations/0001_init.sql once Phase 0 lands.
 * [Postiz API shape (live capture)](postiz.md) - Placeholder for the captured Postiz posts response; the honest schema source for migrations/0001_init.sql once Phase 0 lands.
 * [Model server contract](localai.md) - What the agent requires of any OpenAI-compatible model server: endpoints, the 768-dimension embedding rule, the reasoning-model max_tokens caveat, and the configuration surface.
+* [MVP bring-up review](mvp-review.md) - The prioritized review of the setup for an MVP that is extendable but trivial to bring up: findings with severities, the top five bring-up blockers, and the scope cuts to make.
 * [Import configuration and provider contract](sources-config.md) - The sources.yaml schema, the Provider interface, the incremental/full ingest ledger, and the CLI surface for enabling, disabling, and reconfiguring providers.
 
 # Runs
 
 * [SQLite schema DDL check](runs/0001-init-ddl-check.md) - The migrations/0001_init.sql smoke check passed with the contentless-FTS5 join-back fix verified.
+* [MVP bring-up verification](runs/0002-mvp-bringup-verification.md) - The full verification suite plus the DDL smoke check and the bring-up preflight, all green on the bring-up branch.
 
 # Subdirectories
 

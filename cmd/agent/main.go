@@ -23,10 +23,14 @@ func run(args []string, stdout, stderr io.Writer) int {
 	switch args[0] {
 	case "sources":
 		return runSources(args[1:], stdout, stderr)
+	case "doctor":
+		return runDoctor(args[1:], stdout, stderr)
 	case "ingest", "embed", "query", "stats", "serve":
-		// Placeholders until the store layer lands.
-		fmt.Fprintf(stdout, "%s: not implemented (Phase 1)\n", args[0])
-		return 0
+		// Placeholders until the store layer lands. They exit non-zero on
+		// purpose: a command that did nothing must never look like it
+		// succeeded, or a script will treat the placeholder as a result.
+		fmt.Fprintf(stderr, "agent %s: not implemented yet - this command lands with the store layer in Phase 1 (see PLAN.md)\n", args[0])
+		return 1
 	default:
 		fmt.Fprintf(stderr, "agent: unknown subcommand %q\n\n", args[0])
 		usage(stderr)
@@ -41,12 +45,14 @@ func usage(w io.Writer) {
 Commands:
   sources list       list configured providers and their resolved options
   sources validate   strictly validate sources.yaml and provider options
+  doctor             check this machine against the runtime requirements
   ingest             import configured sources into the index
   embed              embed indexed chunks
   query              retrieve chunks for a query
   stats              report index statistics
   serve              serve the read-only A2A surface
 
-Run "agent sources list --help" or "agent sources validate --help" for flags.
+Run "agent sources list --help", "agent sources validate --help" or
+"agent doctor --help" for flags.
 `)
 }
