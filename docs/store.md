@@ -47,6 +47,14 @@ schema. The parts the store depends on:
 | `source_state`, `source_items` | the ingest ledger | the ingest pipeline |
 | `schema_migrations` | which migration files have been applied | the store |
 
+The `chunks.source_kind` CHECK constraint accepts `ghost_post`,
+`postiz_post` and `file_post`. The local markdown provider added
+`file_post`, and `migrations/0003_source_kind_file_post.sql` rebuilds
+the table for the indexes that were created before the change: the rows
+are copied into a table with the widened constraint, the vectors are
+carried over, and the indexes are recreated. An index that is rebuilt
+ends up exactly where it started.
+
 `chunks_fts` is *self-contained*, not contentless: its stored columns
 read back, which is what makes the join-back on `chunk_id` work at query
 time.
@@ -92,6 +100,12 @@ The chunk id is supplied by the caller: it is
 `sha256(source_kind|source_id|chunk_seq)` in hex, so the ingest pipeline
 owns chunk identity and the store never guesses it.
 
+`PutVector` writes the embedding of one chunk and replaces the vector
+it had. The chunk must exist - a vector without a chunk would be
+unreachable - and the write never touches the `chunks` or the
+`chunks_fts` row: the embed command owns the vectors, the ingest
+command owns the text.
+
 ## Reads
 
 Two read paths, one result shape, so the retrieval layer can fuse the two
@@ -108,6 +122,13 @@ ranks:
 A limit of zero or less means ten hits. An empty query is an error for the
 full-text path and an empty result for the vector path.
 
+`ListChunks` returns the chunks themselves, ordered by `published_at`
+and then `chunk_id`, so two calls over the same index return them in
+the same order. With `missingVector` set it returns only the chunks
+that have no vector yet: that is the work list of the embed command.
+`IntegrityCheck` runs SQLite's own integrity check, so the doctor can
+tell a sound index from a corrupt one.
+
 ## Why not sqlite-vec
 
 sqlite-vec ships as a platform-specific loadable extension: a native
@@ -119,9 +140,11 @@ them in Go does the same work with no native dependency.
 
 ## What is not here yet
 
-* The CLI does not call the store yet: `agent ingest`, `agent embed` and
-  `agent stats` are still Phase 1 tasks in [PLAN.md](../PLAN.md) §3.
-* The embed command, which owns `embedded_with` and `embedded_at`, does
-  not exist yet.
-* The retrieval layer (hybrid BM25 + cosine with RRF merging) does not
-  exist yet; this file only describes the two rankings it will fuse.
+* The upstream clients (`internal/sources/ghost`, `postiz`) do not
+  exist: they wait on the Phase 0 API captures. The local markdown
+  provider is the corpus the pipeline runs against today.
+* The ingest ledger (`source_state`, `source_items`) is not consulted
+  by the ingest command yet, and the chunks of an item that disappeared
+  upstream are not deleted.
+* `chunks.embedded_with` and `chunks.embedded_at` are not written yet:
+  the audit trail of the embed command has to land with it.

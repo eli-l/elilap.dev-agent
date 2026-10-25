@@ -291,6 +291,15 @@ sources:
       api_url: { env: POSTIZ_API_URL }
       api_key:  { env: POSTIZ_API_KEY }
     options: { platforms: [instagram, linkedin, x], include_scheduled: false }
+
+  # The local markdown provider: a directory of markdown files as upstream
+  # items. It needs no credentials, so the pipeline can be run before the
+  # upstream clients land. Disabled by default, so a run does not index
+  # the repository's own documentation.
+  - id: files
+    type: files
+    enabled: false
+    options: { dir: ./docs, pattern: "*.md" }
 ```
 
 Rules: `version:` is checked (unknown version = error); the YAML is decoded
@@ -302,6 +311,21 @@ default; `sources validate --strict` treats them as errors and exits 1.
 `sources list` reports set/unset state and exits 0 for missing credentials;
 `--strict` is a validate-only flag. Credential values are never printed.
 `--config` overrides the path (default `./sources.yaml`).
+
+**The provider types** - the registry maps a config `type` to an options
+parser and to a constructor. Three types are known:
+
+| type | client | source kind | notes |
+|---|---|---|---|
+| `ghost` | pending (Phase 0 capture) | `ghost_post` | the options are validated today; the client lands with the capture |
+| `postiz` | pending (Phase 0 capture) | `postiz_post` | same |
+| `files` | shipped | `file_post` | a directory of markdown files; no credentials |
+
+`files` is the provider that makes the pipeline usable now: it needs no
+credential, so `agent ingest`, `agent embed` and `agent query` can be
+run and tested before the upstream clients exist. It is one package plus
+one `sources.yaml` entry, which is the extensibility claim this section
+makes.
 
 `defaults.chunking.target_tokens` is required and must be positive.
 `overlap_tokens` defaults to zero and must be non-negative and less than
@@ -362,6 +386,14 @@ colliding item ids require a namespace/schema decision before support is added.
 
 **Ingest modes**
 
+**What ships today** - the commands below work, but the incremental
+decision is made on the chunk content hashes in the index, not on the
+ledger: the ledger tables exist, the run does not consult them yet. An
+item whose chunks are already in the index with the same hashes is not
+rewritten, and `--full` rewrites everything. The drift detection the
+ledger enables - deleting the chunks of an item that disappeared
+upstream - is still open.
+
 * **Incremental (default)** — `List(since = last_run_at − overlap)` gives
   candidates; each is cheap-compared against the ledger (ETag,
   `updated_at`, or a content hint). Unchanged items are skipped: no fetch,
@@ -370,14 +402,19 @@ colliding item ids require a namespace/schema decision before support is added.
   were deleted upstream — their chunks go with them (drift detection).
 * **Full reindex (`--full`)** — re-fetch, re-chunk, and **re-embed**
   everything (decided 2026-10-23). `--source <id>` scopes either mode to
-  one provider.
+  one provider. Re-embedding is the `agent embed` command's job: it
+  embeds the chunks that have no vector.
 
 ```
-agent ingest                      # incremental, all enabled providers
-agent ingest --source ghost       # one provider
-agent ingest --full               # full reindex: re-fetch + re-chunk + re-embed
-agent ingest --full --source postiz
-agent ingest --dry-run            # what would change, no writes
+agent ingest                      # every enabled source
+agent ingest --source files       # one source
+agent ingest --limit 100          # cap the items per source
+agent ingest --full               # re-chunk and rewrite everything
+agent embed                       # embed the chunks that have no vector
+agent embed --limit 500 --batch 32
+agent query "what did I write about X"     # the answer
+agent query "..." --json          # the same hits as JSON
+agent stats                       # what the index holds
 agent sources list                # enabled/disabled + resolved options (no secrets)
 agent sources validate            # validate config/options; missing credentials warn
 agent sources validate --strict   # missing credentials fail (exit 1)
@@ -469,18 +506,21 @@ intentionally a separate command.
 - [x] `scripts/check-ddl.py`: applies the migrations to a scratch database,
       proves the FTS5 stored-column join-back, and keeps `0001_init.sql`
       in sync with the schema block in §3.
-- [ ] `agent ingest` modes: incremental by default against the ledger;
-      `--full` re-fetches, re-chunks and re-embeds; `--source <id>` scopes
-      to one provider; `--dry-run` reports the plan without writing.
+- [x] `agent ingest`: lists the enabled sources, fetches every item,
+      chunks it and writes the chunks + FTS rows. `--source <id>` scopes
+      to one provider and `--limit N` caps the items per source. The
+      ledger-driven incremental mode, `--full` and `--dry-run` are still
+      open: for now the incremental decision is made on the chunk content
+      hashes, so an unchanged item is not rewritten.
 - [x] Driver spike (small, first): the driver is pinned to the pure-Go
       `github.com/ncruces/go-sqlite3` (SQLite compiled to WebAssembly) with
       its `ext/fts5` extension. FTS5 BM25 and the vector round-trip are
       covered by the `internal/store` tests. There is no C toolchain in the
       picture, so the runtime image can be `distroless`/`scratch` and the
       binary cross-compiles with `CGO_ENABLED=0`.
-- [ ] `internal/llm` connector: one small OpenAI-compatible HTTP client
-      (plain `net/http`, no SDK) — `POST /v1/embeddings`,
-      `POST /v1/chat/completions`, `GET /v1/models`. Config:
+- [x] `internal/embed`: the embeddings half of the OpenAI-compatible
+      connector (plain `net/http`, no SDK) — `POST /v1/embeddings`,
+      `GET /v1/models`. Config:
       `LOCALAI_BASE_URL` (default `http://localhost:8080/v1`),
       `LOCALAI_API_KEY` (optional), `EMBED_MODEL` (default
       `embeddinggemma-300m`), `CHAT_MODEL` (default `spark-x2.5-4b`).
@@ -492,6 +532,8 @@ intentionally a separate command.
       row), and the default chat model is a **reasoning** model whose
       response can carry a `reasoning` field — `max_tokens` must budget
       for reasoning or `content` comes back empty.
+- [ ] `internal/llm`: the chat half of the connector —
+      `POST /v1/chat/completions`.
 - [x] Containerize (§2.5): `Dockerfile`, `.dockerignore`, `compose.yaml`
       with the agent service, `agent-data` volume, `AGENT_DB_PATH` wiring,
       and `LOCALAI_BASE_URL` **required** rather than defaulted — the
@@ -509,17 +551,37 @@ intentionally a separate command.
       `schema_migrations`, writes `chunks` + `chunks_fts` (+ `chunk_vectors`
       when an embedding is present) in one transaction, and serves the
       BM25 and cosine read paths. `scripts/check-ddl.py` stays green as the
-      schema evolves.- [ ] Source clients (`internal/sources/ghost`, `postiz`) + shared chunker;
+      schema evolves.
+- [x] Store extensions for the CLI: `ListChunks` returns the chunks in a
+      stable order and can return only the chunks that still miss a
+      vector, `PutVector` writes one vector without touching the chunk it
+      belongs to, and `IntegrityCheck` runs SQLite's own check so the
+      doctor can tell a sound index from a corrupt one.
+- [ ] Source clients (`internal/sources/ghost`, `postiz`) + shared chunker;
       unit tests against captured fixture JSON from Phase 0, so chunker
       logic is testable without live credentials.
-- [ ] `agent ingest`: walks both sources, normalizes, chunks, writes
-      chunks + FTS rows in one transaction.
-- [ ] `agent stats`: chunk counts, last-ingest timestamp, drift report.
+- [x] `agent ingest`: walks the configured sources, normalizes, chunks and
+      writes the chunks + FTS rows in one transaction (the upstream
+      clients are still pending, so the shipped run walks the local
+      markdown provider).
+- [x] `agent query`: embeds the question, asks the index twice (FTS5 and
+      cosine) and fuses the two rankings with RRF; `--json` prints the hits
+      and no hits is not an error.
+- [x] Local markdown provider (`internal/sources/files`): a directory of
+      markdown files as upstream items, with no credentials. It is the
+      corpus the bring-up run and the end-to-end test use, and it is the
+      proof that adding a provider is one package plus one config entry.
+- [x] `agent stats`: chunk, vector, source and full-text counts, the index
+      path and the embedding model. The last-ingest timestamp and the
+      drift report are still open.
 - [ ] Source-aware chunker rules (table below).
-- [ ] Idempotency on `chunk_id` + content hash.
-- [ ] `agent embed`: separate command, LocalAI default via the connector
-      (any OpenAI-compatible base URL works); batch + resume (skip rows
-      where `embedded_with` is current).
+- [x] Idempotency on `chunk_id` + content hash: the chunk id is
+      sha256(source_kind|source_id|chunk_seq), so a re-run replaces the
+      same rows, and an item whose chunk hashes are unchanged is not
+      rewritten at all.
+- [x] `agent embed`: a separate command against any OpenAI-compatible
+      base URL; it batches the requests and resumes on the chunks that
+      have no vector yet. The `embedded_with` audit trail is still open.
 - [ ] `docs/runbook.md` starter: "verifying ingestion is correct."
 - [ ] End-of-phase commit + push.
 
@@ -588,6 +650,12 @@ CREATE TABLE IF NOT EXISTS chunk_vectors (
   `content_hash`.
 * `updated_at` is the *upstream* modification time (drift detection);
   `ingested_at` is our local write time. The old schema conflated them.
+* **Added the `file_post` source kind.** The local markdown provider
+  stores its items under it. The CHECK constraint on
+  `chunks.source_kind` accepts it now, and
+  `migrations/0003_source_kind_file_post.sql` rebuilds the table for the
+  indexes that were created before the change, so an existing index keeps
+  its rows and its vectors.
 
 **Chunker rules**
 
@@ -597,6 +665,8 @@ CREATE TABLE IF NOT EXISTS chunk_vectors (
 | `ghost_post` (<800 tok) | Whole post | — | — | Don't fragment |
 | `postiz_post` | One chunk per `(postiz_post_id, platform)` | 320 | 0 | Cross-post linkage via `thread_root_id` |
 | `postiz_post` (multi-para > cap) | Split on `\n\n` | 320 | 0 | One Postiz post = one source_id; multiple chunks share it |
+
+| `file_post` | Paragraphs, then sentences | 400 | 60 | The markdown as it stands; the title is the first heading |
 
 (`chunk_seq` is the per-item ordinal of the chunk; it feeds `chunk_id`.)
 

@@ -16,10 +16,12 @@ Phase 0/1 bootstrap. What exists today:
 |---|---|
 | `sources.yaml` config layer | done - strict loader, validation, provider registry |
 | `agent sources list` / `validate` | done |
-| `agent doctor` | done - preflight for config, credentials, model server, index path |
+| `agent doctor` | done - preflight for config, credentials, model server, index path and store |
+| `agent ingest` / `embed` / `query` / `stats` | done - the vertical slice: corpus in, answer out |
+| Local markdown provider | done - a directory of markdown files, no credentials |
 | Ghost / Postiz clients | pending - waiting on the Phase 0 API captures |
 | SQLite store | done - embedded migrations, chunk writes, BM25 + cosine reads |
-| Embedding, retrieval | pending - Phase 1 |
+| Embedding, retrieval | done - the OpenAI-compatible embeddings client and the hybrid RRF retrieval |
 | Container files (Dockerfile, compose.yaml) | done - static image, external model server, `scripts/deploy-check.sh` |
 The plan and its exit criteria live in [`PLAN.md`](./PLAN.md); the bring-up
 review is [`docs/mvp-review.md`](./docs/mvp-review.md).
@@ -85,11 +87,24 @@ point the variables at your own endpoint and it runs there.
 ./bin/agent sources list               # providers, options, credential names (never values)
 ./bin/agent sources validate --strict  # fail if a credential variable is unset
 ./bin/agent doctor                     # preflight for this machine
+./bin/agent ingest --source files      # import a corpus into the index
+./bin/agent embed                      # embed the chunks that have no vector
+./bin/agent query "what did I write about X"  # the answer, fused from BM25 and vectors
+./bin/agent stats                      # what the index holds
 ```
 
-The remaining subcommands (`ingest`, `embed`, `query`, `stats`, `serve`)
-land with the store layer in Phase 1 and currently report that they are not
-implemented.
+The corpus comes from the providers in `sources.yaml`. The local markdown
+provider needs no credentials, so the whole pipeline can be run before the
+upstream clients land:
+
+```yaml
+  - id: files
+    type: files
+    enabled: true
+    options: { dir: ./docs, pattern: "*.md" }
+```
+
+`agent serve` - the read-only A2A surface - is still a placeholder.
 
 ## Deploy
 
