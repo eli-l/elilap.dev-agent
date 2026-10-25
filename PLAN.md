@@ -712,13 +712,14 @@ No public web exposure by default.
    without body)? **Default**: no; tags appear in FTS5 path.
 3. Phase 4 token storage: env-only (simplest) vs. a `0600` token file.
    **Default**: env-driven pairs; decide when Phase 4 starts, not before.
-4. ~~Default LocalAI chat model~~ — **decided 2026-10-23**: `spark-x2.5-4b`
-   (self-hosted on `dev`). `spark-x2.5-1.7b-q4` is the fallback if the
-   Phase 2 eval shows the 4B is too slow on that host.
-5. ~~Pin LocalAI by versioned tag~~ — **moot 2026-10-23**: the instance we
-   use is external (`192.168.78.243`, currently `v4.12.0`), so its version
-   is that host's concern. We depend on the OpenAI-compatible surface, not
-   on a specific build.
+4. ~~Default chat model~~ — **decided 2026-10-23**: `spark-x2.5-4b` on the
+   reference model server (§7). `spark-x2.5-1.7b-q4` is the fallback if the
+   Phase 2 eval shows the 4B is too slow there. Both are config values
+   (`CHAT_MODEL`), never build-time constants.
+5. ~~Pin the model server to a versioned tag~~ — **moot 2026-10-23**: the
+   model server is external, so its version is the operator's concern. The
+   agent depends on the OpenAI-compatible surface (`/v1/embeddings`,
+   `/v1/chat/completions`, `/readyz`), not on a specific build or vendor.
 6. The website (HTML) as a source — **deferred 2026-10-23**. Facts already
    captured: `elilap.dev` is an Astro static site with a single `<main>`
    landmark per page; `robots.txt` allows all crawlers and explicitly
