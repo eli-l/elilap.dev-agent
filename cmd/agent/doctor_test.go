@@ -52,7 +52,7 @@ func TestDoctorPassesAgainstAFakeModelServer(t *testing.T) {
 	}
 	for _, want := range []string{
 		"config: " + cfg,
-		"providers: 2 provider type(s) validated",
+		"providers: 3 provider type(s) validated",
 		"model server: " + srv.URL + "/v1 is reachable",
 		"embed model: embeddinggemma-300m is served",
 		"chat model: spark-x2.5-4b is served",

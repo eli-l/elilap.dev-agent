@@ -32,7 +32,7 @@ func TestRegistryKnownTypes(t *testing.T) {
 	}
 
 	got := strings.Join(r.KnownTypes(), ",")
-	if want := "ghost,postiz"; got != want {
+	if want := "files,ghost,postiz"; got != want {
 		t.Errorf("KnownTypes() = %q, want %q", got, want)
 	}
 }
@@ -139,7 +139,7 @@ options: { platforms: [x], mystery: true }
 		{
 			name:    "unknown type lists known types",
 			doc:     "id: site\ntype: website\n",
-			wantErr: "known types: [ghost postiz]",
+			wantErr: "known types: [files ghost postiz]",
 		},
 	}
 
