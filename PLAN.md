@@ -28,6 +28,12 @@ facts the platform-agnostic pass removed are still on the record, clearly
 marked non-normative, so nobody has to re-derive them and nobody can
 mistake them for requirements.
 
+Sixth pass (2026-10-25) shipped the container files and reconciled §2.5
+with them: the multi-stage `Dockerfile` (static binary, distroless
+runtime, non-root user, writable `/data`), `.dockerignore`, `compose.yaml`
+with a **required** `LOCALAI_BASE_URL`, and `scripts/deploy-check.sh` as
+the one-command proof that the deployment works.
+
 ---
 
 ## 0. Goals & non-goals
@@ -168,27 +174,40 @@ Current state vs. target: `cmd/agent/` exists with subcommand dispatch, the
 the network clients are still empty (`.gitkeep`). `migrations/`,
 `scripts/` (including the DDL smoke check), and `docs/` exist in Phase-0/1
 form. The bring-up entry points exist: `Makefile` (`setup`, `check`,
-`doctor`, `build`, `test`), `.env.example`, and `agent doctor`. The container
-files (`Dockerfile`, `.dockerignore`, `compose.yaml`) do not exist yet —
-they are Phase 1 deliverables. No model configs or weights live in this
-repo: the model server is external (Decision 10).
+`doctor`, `build`, `test`), `.env.example`, and `agent doctor`. The
+container files exist now and are verified: `Dockerfile` (multi-stage,
+`CGO_ENABLED=0`, distroless runtime), `.dockerignore`, `compose.yaml` (the
+agent service only, `LOCALAI_BASE_URL` required), and
+`scripts/deploy-check.sh`, which proves the story on a host — the image
+builds, `agent doctor` passes inside it, and `docker compose config`
+renders. What is still missing is the store layer, so the ingestion
+commands keep reporting that they are not implemented. No model configs or
+weights live in this repo: the model server is external (Decision 10).
 
-### 2.5 Container topology (target)
+### 2.5 Container topology
 
-One `docker compose up` brings up the agent on any Docker host; the model
-server is external (Decision 10):
+`docker compose up` runs the agent on any Docker host; the model server is
+external (Decision 10). The agent is a CLI, so the service has no
+long-running mode: its default command is `doctor`, the one-shot preflight,
+and real work is a `docker compose run --rm agent <command>`.
 
 ```yaml
 services:
   agent:
     build: .
     environment:
-      LOCALAI_BASE_URL: ${LOCALAI_BASE_URL:?set LOCALAI_BASE_URL}
+      LOCALAI_BASE_URL: ${LOCALAI_BASE_URL:?set LOCALAI_BASE_URL to the OpenAI-compatible endpoint (must end in /v1)}
+      LOCALAI_API_KEY: ${LOCALAI_API_KEY:-}
       EMBED_MODEL: ${EMBED_MODEL:-embeddinggemma-300m}
       CHAT_MODEL: ${CHAT_MODEL:-spark-x2.5-4b}
       AGENT_DB_PATH: /data/index.db
+      GHOST_API_URL: ${GHOST_API_URL:-}
+      GHOST_API_KEY: ${GHOST_API_KEY:-}
+      POSTIZ_API_URL: ${POSTIZ_API_URL:-}
+      POSTIZ_API_KEY: ${POSTIZ_API_KEY:-}
     volumes:
       - agent-data:/data
+    command: ["doctor"]
 
 volumes:
   agent-data:
@@ -222,14 +241,19 @@ compose file (CPU image, pinned to a versioned tag) and point
   volume. Documented in the runbook.
 
 **Image contract**: multi-stage `Dockerfile` — builder `golang:1.27`
-(Debian variant: CGO on, toolchain present, tag floats to the newest 1.27
-patch) → runtime `debian:bookworm-slim` carrying only the binary plus CA
-certs and tzdata. If the Phase 1 driver spike lands a static or pure-Go
-build (ncruces), the runtime collapses to `distroless`/`scratch` as a
-one-line swap. We do not ship a model server in the image (Decision 10), so
-model behavior depends on the external server's build, not ours. If the
-fallback service is ever added here, pin it to a **versioned tag, not
-`latest`**.
+(tag floats to the newest 1.27 patch) building with `CGO_ENABLED=0` and
+`-mod=vendor`, so the build needs no network and yields a static binary →
+runtime `gcr.io/distroless/static-debian12:nonroot` carrying only the
+binary, the CA bundle, the static import configuration (`sources.yaml`,
+which holds no secret) and a `/data` directory owned by the non-root user
+(uid 65532). No `EXPOSE` — the agent is a CLI, not a server — and no
+`HEALTHCHECK`: the binary has no health mode, and a healthcheck that always
+passes is worse than none. If the Phase 1 driver spike lands a CGO driver
+instead, the runtime base must become glibc-based (`debian:bookworm-slim`)
+and the build must set `CGO_ENABLED=1` — a two-line change. We do not ship
+a model server in the image (Decision 10), so model behavior depends on the
+external server build, not ours. If the fallback service is ever added
+here, pin it to a **versioned tag, not `latest`**.
 
 ### 2.6 Import configuration, provider registry, and ingest modes
 
@@ -462,13 +486,17 @@ intentionally a separate command.
       write), and the default chat model is a **reasoning** model whose
       response can carry a `reasoning` field — `max_tokens` must budget
       for reasoning or `content` comes back empty.
-- [ ] Containerize (§2.5): `Dockerfile`, `.dockerignore`, `compose.yaml`
+- [x] Containerize (§2.5): `Dockerfile`, `.dockerignore`, `compose.yaml`
       with the agent service, `agent-data` volume, `AGENT_DB_PATH` wiring,
-      and `LOCALAI_BASE_URL` passed through from the environment. No
-      model-server service and no healthcheck in compose — the agent
-      verifies the model endpoint itself at startup (by listing its models)
-      and fails fast with a clear error. Embed model `embeddinggemma-300m`
-      (768d, matches the `vec0` schema).
+      and `LOCALAI_BASE_URL` **required** rather than defaulted — the
+      default would point at the localhost of the container itself. No
+      model-server service and no healthcheck in compose.
+      `scripts/deploy-check.sh` proves it on a host: the image builds,
+      `agent doctor` passes inside it, and `docker compose config`
+      renders. The preflight verifies the model endpoint by listing its
+      models and fails fast with a clear error; the ingest path inherits
+      that check once the connector lands. Embed model
+      `embeddinggemma-300m` (768d, matches the `vec0` schema).
 - [ ] Store layer: migration runner that loads the sqlite-vec extension
       *before* applying `0001_init.sql` (the `vec0` DDL fails without it).
       `scripts/check-ddl.py` stays green as the schema evolves.

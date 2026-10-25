@@ -1,6 +1,6 @@
 # AGENTS.md
 
-Local-first RAG agent over Eli's published writing: ingests Ghost posts + Postiz cross-posts into a single-file SQLite index (FTS5 + sqlite-vec), exposed through one Go binary. **Status: Phase 1 in progress** — `cmd/agent/` exists with subcommand dispatch and the `sources` subcommands; `internal/config` (the `sources.yaml` loader) and `internal/sources` (the `Provider` interface, the registry, and the Ghost/Postiz option parsers) are implemented and tested; `internal/{store,embed,llm,retrieval}` and the upstream network clients are still empty placeholders. `PLAN.md` is the source of truth for scope and sequencing; read it before adding code.
+Local-first RAG agent over Eli's published writing: ingests Ghost posts + Postiz cross-posts into a single-file SQLite index (FTS5 + sqlite-vec), exposed through one Go binary. **Status: Phase 1 in progress** — `cmd/agent/` exists with subcommand dispatch and the `sources` subcommands; `internal/config` (the `sources.yaml` loader) and `internal/sources` (the `Provider` interface, the registry, and the Ghost/Postiz option parsers) are implemented and tested; `internal/{store,embed,llm,retrieval}` and the upstream network clients are still empty placeholders; the container files (`Dockerfile`, `.dockerignore`, `compose.yaml`, `scripts/deploy-check.sh`) are shipped and verified. `PLAN.md` is the source of truth for scope and sequencing; read it before adding code.
 
 ## Commands
 
@@ -15,6 +15,7 @@ go vet -mod=vendor ./...           # static checks
 go test -mod=vendor ./...          # tests (use fixtures, not live APIs)
 gofmt -l cmd internal migrations   # must print nothing (vendor/ is upstream code, not ours)
 python3 scripts/check-ddl.py       # schema smoke check: applies the migrations, proves the FTS5 join-back
+./scripts/deploy-check.sh           # prove the container deployment: build, doctor in the image, compose config
 go run ./cmd/agent sources validate   # strict-parse sources.yaml (no credentials needed)
 ```
 
@@ -53,6 +54,22 @@ Workflow for any docs/ change:
 - `internal/store` — SQLite, migration runner, FTS5/vec glue.
 - `internal/embed`, `internal/retrieval`, `internal/llm` — embedding, hybrid RRF retrieval, OpenAI-compatible HTTP connector.
 - `migrations/` — SQL schema; `0001_init.sql` must stay in sync with the schema block in `PLAN.md` §3. `scripts/check-ddl.py` enforces that sync.
+- `Dockerfile` — multi-stage image: a `golang:1.27` builder with
+  `CGO_ENABLED=0` and `-mod=vendor` (the build needs no network), and a
+  distroless runtime carrying only the binary, the CA bundle, `sources.yaml`
+  and a writable `/data` owned by a non-root user. No `EXPOSE` (the agent is
+  a CLI) and no `HEALTHCHECK` (the binary has no health mode).
+- `.dockerignore` — keeps the build context to what the build needs:
+  `vendor/`, `go.mod`, `go.sum`, `cmd/`, `internal/`, `migrations/` and
+  `sources.yaml`.
+- `compose.yaml` — the agent service only. `LOCALAI_BASE_URL` is required
+  (the default would point at the localhost of the container itself),
+  `/data` is the named volume `agent-data`, credentials are passed through
+  as `${VAR:-}`, and there is no model server and no healthcheck.
+- `scripts/deploy-check.sh` — the one-command deployment proof: docker, the
+  daemon, compose, the model server and its model catalog, the image build,
+  `agent doctor` inside the image, and `docker compose config`.
+  `--skip-build` re-checks without rebuilding.
 - `docs/` — OKF v0.2 bundle (see **OKF docs bundle** above); captured upstream API shapes (`ghost.md`, `postiz.md`) are the honest reference for clients.
 - `Makefile` — `setup` / `check` / `doctor` / `build` / `test` entry points; `make doctor` is the first thing to run on a new machine.
 

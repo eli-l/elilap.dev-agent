@@ -1,0 +1,50 @@
+# compose.yaml - the agent service, and only the agent service.
+#
+# The model server is EXTERNAL (PLAN.md Decision 10): this stack never runs
+# one. That is why LOCALAI_BASE_URL is required instead of defaulted - the
+# usual default (http://localhost:8080/v1) points at the container itself,
+# where nothing is listening.
+#
+# Required:   LOCALAI_BASE_URL   (the OpenAI-compatible endpoint, ends in /v1)
+# Optional:   LOCALAI_API_KEY, EMBED_MODEL, CHAT_MODEL, GHOST_API_URL,
+#             GHOST_API_KEY, POSTIZ_API_URL, POSTIZ_API_KEY
+#
+# No secret is written here: every credential is passed through from the
+# environment, and compose reads a .env file for interpolation when the
+# operator provides one.
+
+name: elilap-dev-agent
+
+services:
+  agent:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: elilap-dev-agent:local
+    working_dir: /app
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      # Required on purpose: compose fails loudly instead of pointing the
+      # agent at the container's own localhost.
+      LOCALAI_BASE_URL: ${LOCALAI_BASE_URL:?set LOCALAI_BASE_URL to the OpenAI-compatible endpoint (must end in /v1)}
+      LOCALAI_API_KEY: ${LOCALAI_API_KEY:-}
+      EMBED_MODEL: ${EMBED_MODEL:-embeddinggemma-300m}
+      CHAT_MODEL: ${CHAT_MODEL:-spark-x2.5-4b}
+      # The index and its WAL/SHM siblings live together on one volume.
+      AGENT_DB_PATH: /data/index.db
+      GHOST_API_URL: ${GHOST_API_URL:-}
+      GHOST_API_KEY: ${GHOST_API_KEY:-}
+      POSTIZ_API_URL: ${POSTIZ_API_URL:-}
+      POSTIZ_API_KEY: ${POSTIZ_API_KEY:-}
+    volumes:
+      - agent-data:/data
+    # The agent is a CLI, not a server: it has no long-running mode, so the
+    # default action is the preflight that proves the deployment works.
+    # Override it for real work, e.g.
+    #   docker compose run --rm agent ingest
+    command: ["doctor"]
+
+volumes:
+  agent-data:
