@@ -57,7 +57,7 @@ Workflow for any docs/ change:
   keys.
 - The LLM connector is plain `net/http` against an OpenAI-compatible API — no LLM SDKs.
 - The DB is derived: deleting `index.db` and re-running ingest/embed must always reproduce it. Never commit it.
-- Timestamps are ISO-8601 UTC; ids are sha256-based hex (`chunk_id = sha256(source_kind|source_id|chunk_seq)`).
+- Timestamps are ISO-8601 UTC; ids are sha256-based hex (`chunk_id = sha256(source_kind|source_id|chunk_seq)`). Here `source_id` is the upstream item id (Ghost uuid / Postiz id), not the config id; `chunk_seq` is the ordinal within that item across all its platform chunks.
 - Dependencies are **vendored** (`vendor/`): the sandboxed worker has no network and its module cache is hidden, so `go mod tidy` / `go get` there always fail. Add a dep from the host shell (`go get` + `go mod vendor` + a stub file that imports it so `tidy` keeps it), commit `go.mod`, `go.sum`, and `vendor/`, and build with `-mod=vendor`.
 - Keep `chunks` and `chunks_fts` writes in one transaction.
 

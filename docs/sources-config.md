@@ -55,9 +55,16 @@ sources:
 | `options` | provider-specific settings, validated against that provider's schema |
 
 Rules: the YAML is decoded **strictly** (`KnownFields(true)`), so an unknown
-key is a hard error rather than a silently ignored setting; a referenced
-env var that is not set fails fast, and its value is never printed;
+key is a hard error rather than a silently ignored setting.
+`sources validate` warns about unset credential variables and exits 0 by
+default; `sources validate --strict` treats them as errors and exits 1.
+`sources list` reports set/unset state and exits 0 for missing credentials;
+`--strict` is a validate-only flag. Credential values are never printed.
 `--config` overrides the path (default `./sources.yaml`).
+
+`defaults.chunking.target_tokens` is required and must be positive.
+`overlap_tokens` defaults to zero and must be non-negative and less than
+`target_tokens`. Invalid chunking defaults are configuration errors.
 
 ## The provider contract
 
@@ -83,8 +90,18 @@ an unknown `type` or invalid options is a startup error.
 * `source_items` - one row per upstream item: `content_hash`, `etag`,
   `last_modified`, `first_seen_at`, `last_seen_at`, and `seen_run_id`.
 
-`chunks` gains `source_id` (the config id) and `chunk_hash`, so a re-run
-can tell "text unchanged" from "text changed".
+`chunks.source_id` remains the upstream **item id** (Ghost uuid / Postiz
+id), not the config id. `chunk_id = sha256(source_kind|source_id|chunk_seq)`
+therefore distinguishes different items; `chunk_seq` is an ordinal within
+that item, including all of its platform chunks. The ledger's `source_id`
+is the config id, and `source_items.item_id` corresponds to `chunks.source_id`.
+`chunks.content_hash` already stores the hash of normalized chunk text for
+change detection; no additional chunk hash column is needed.
+
+Phase 1 must preserve this distinction when joining the ledger to chunks
+and deleting items. The current index shares an item across configurations
+with the same source kind and upstream item id; independent upstreams with
+colliding item ids require a namespace/schema decision before support is added.
 
 ## Ingest modes
 
@@ -105,7 +122,8 @@ agent ingest --full               # full reindex: re-fetch + re-chunk + re-embed
 agent ingest --full --source postiz
 agent ingest --dry-run            # what would change, no writes
 agent sources list                # enabled/disabled + resolved options (no secrets)
-agent sources validate            # strict parse + provider option validation
+agent sources validate            # validate config/options; missing credentials warn
+agent sources validate --strict   # missing credentials fail (exit 1)
 ```
 
 ## Deferred

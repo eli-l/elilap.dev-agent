@@ -81,6 +81,8 @@ func TestLoad(t *testing.T) {
 		{
 			name: "unknown key inside a source errors",
 			file: `version: 1
+defaults:
+  chunking: { target_tokens: 400, overlap_tokens: 60 }
 sources:
   - id: ghost
     type: ghost
@@ -102,6 +104,8 @@ sources:
 		{
 			name: "duplicate ids error",
 			file: `version: 1
+defaults:
+  chunking: { target_tokens: 400, overlap_tokens: 60 }
 sources:
   - id: ghost
     type: ghost
@@ -115,6 +119,8 @@ sources:
 		{
 			name: "empty id errors",
 			file: `version: 1
+defaults:
+  chunking: { target_tokens: 400, overlap_tokens: 60 }
 sources:
   - type: ghost
     enabled: true
@@ -124,6 +130,8 @@ sources:
 		{
 			name: "empty type errors",
 			file: `version: 1
+defaults:
+  chunking: { target_tokens: 400, overlap_tokens: 60 }
 sources:
   - id: ghost
     enabled: true
@@ -133,6 +141,8 @@ sources:
 		{
 			name: "malformed env name errors",
 			file: `version: 1
+defaults:
+  chunking: { target_tokens: 400, overlap_tokens: 60 }
 sources:
   - id: ghost
     type: ghost
@@ -206,7 +216,7 @@ func TestOptionsInto(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			file := "version: 1\nsources:\n  - id: ghost\n    type: ghost\n    enabled: true\n"
+			file := "version: 1\ndefaults:\n  chunking: { target_tokens: 400, overlap_tokens: 60 }\nsources:\n  - id: ghost\n    type: ghost\n    enabled: true\n"
 			if tc.options != "" {
 				file += "    options: " + tc.options + "\n"
 			}
@@ -281,4 +291,34 @@ func unsetEnv(t *testing.T, name string) {
 		}
 		_ = os.Unsetenv(name)
 	})
+}
+
+func TestLoadChunking(t *testing.T) {
+	tests := []struct {
+		name, defaults, wantErr string
+	}{
+		{"missing defaults", "", "target_tokens"},
+		{"missing chunking", "defaults: {}", "target_tokens"},
+		{"missing target", "defaults: {chunking: {overlap_tokens: 0}}", "target_tokens"},
+		{"zero target", "defaults: {chunking: {target_tokens: 0}}", "target_tokens"},
+		{"negative target", "defaults: {chunking: {target_tokens: -1}}", "target_tokens"},
+		{"negative overlap", "defaults: {chunking: {target_tokens: 400, overlap_tokens: -1}}", "overlap_tokens"},
+		{"equal overlap", "defaults: {chunking: {target_tokens: 400, overlap_tokens: 400}}", "overlap_tokens"},
+		{"larger overlap", "defaults: {chunking: {target_tokens: 400, overlap_tokens: 401}}", "overlap_tokens"},
+		{"zero overlap", "defaults: {chunking: {target_tokens: 1, overlap_tokens: 0}}", ""},
+		{"omitted overlap defaults to zero", "defaults: {chunking: {target_tokens: 1}}", ""},
+		{"overlap just below target", "defaults: {chunking: {target_tokens: 400, overlap_tokens: 399}}", ""},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := Load(writeConfig(t, "version: 1\n"+tc.defaults+"\nsources: []\n"))
+			if tc.wantErr == "" {
+				if err != nil {
+					t.Fatalf("Load() error = %v", err)
+				}
+			} else if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+				t.Fatalf("Load() error = %v, want error containing %q", err, tc.wantErr)
+			}
+		})
+	}
 }

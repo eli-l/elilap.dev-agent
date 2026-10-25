@@ -262,9 +262,16 @@ sources:
 Rules: `version:` is checked (unknown version = error); the YAML is decoded
 strictly (`KnownFields(true)`) so a typo is a hard error, never a silently
 ignored key; `enabled: false` disables a provider without deleting it;
-credentials are `{ env: VAR }` references, and the loader fails fast when a
-referenced variable is unset — without printing its value. `--config`
-overrides the path (default `./sources.yaml`).
+credentials are `{ env: VAR }` references.
+`sources validate` warns about unset credential variables and exits 0 by
+default; `sources validate --strict` treats them as errors and exits 1.
+`sources list` reports set/unset state and exits 0 for missing credentials;
+`--strict` is a validate-only flag. Credential values are never printed.
+`--config` overrides the path (default `./sources.yaml`).
+
+`defaults.chunking.target_tokens` is required and must be positive.
+`overlap_tokens` defaults to zero and must be non-negative and less than
+`target_tokens`. Invalid chunking defaults are configuration errors.
 
 **The provider interface** — one interface, one registry:
 
@@ -306,8 +313,18 @@ CREATE TABLE source_items (
 );
 ```
 
-`chunks` gains `source_id` (the config id, not just the provider kind) and
-`chunk_hash`, so a re-run can tell "text unchanged" from "text changed".
+`chunks.source_id` remains the upstream **item id** (Ghost uuid / Postiz
+id), not the config id. `chunk_id = sha256(source_kind|source_id|chunk_seq)`
+therefore distinguishes different items; `chunk_seq` is an ordinal within
+that item, including all of its platform chunks. The ledger's `source_id`
+is the config id, and `source_items.item_id` corresponds to `chunks.source_id`.
+`chunks.content_hash` already stores the hash of normalized chunk text for
+change detection; no additional chunk hash column is needed.
+
+Phase 1 must preserve this distinction when joining the ledger to chunks
+and deleting items. The current index shares an item across configurations
+with the same source kind and upstream item id; independent upstreams with
+colliding item ids require a namespace/schema decision before support is added.
 
 **Ingest modes**
 
@@ -328,7 +345,8 @@ agent ingest --full               # full reindex: re-fetch + re-chunk + re-embed
 agent ingest --full --source postiz
 agent ingest --dry-run            # what would change, no writes
 agent sources list                # enabled/disabled + resolved options (no secrets)
-agent sources validate            # strict parse + provider option validation
+agent sources validate            # validate config/options; missing credentials warn
+agent sources validate --strict   # missing credentials fail (exit 1)
 ```
 
 The website (HTML) is **not** a provider yet — deferred 2026-10-23. When
@@ -400,12 +418,14 @@ intentionally a separate command.
       still green after.
 - [ ] `internal/config`: load `sources.yaml` (YAML, `KnownFields(true)`,
       `version` check), validate per-provider options, resolve `{ env: VAR }`
-      credentials without printing values, fail fast on a missing variable.
+      credentials without printing values; `sources validate` warns on missing
+      variables by default and fails only with `--strict`.
 - [ ] `internal/sources/provider.go` + `registry.go`: the `Provider`
       interface and the `type → constructor` registry; an unknown type is a
       startup error.
 - [ ] `migrations/0002_state.sql`: the `source_state` + `source_items`
-      ledger; `chunks` gains `source_id` + `chunk_hash`.
+      ledger; retain the existing item-level `chunks.source_id` and
+      `chunks.content_hash` from `0001_init.sql`.
 - [ ] `agent sources list` / `agent sources validate`: show enabled
       providers and resolved options (never secrets); validate the file
       with no credentials present.
@@ -464,7 +484,7 @@ intentionally a separate command.
 CREATE TABLE chunks (
   chunk_id       TEXT PRIMARY KEY,           -- sha256(source_kind|source_id|chunk_seq), hex
   source_kind    TEXT NOT NULL CHECK (source_kind IN ('ghost_post','postiz_post')),
-  source_id      TEXT NOT NULL,
+  source_id      TEXT NOT NULL,              -- upstream item id (Ghost uuid / Postiz id)
   source_url     TEXT,
   platform       TEXT,                       -- null for ghost
   author         TEXT NOT NULL,
@@ -522,7 +542,7 @@ CREATE VIRTUAL TABLE chunks_vec USING vec0(
 | `postiz_post` | One chunk per `(postiz_post_id, platform)` | 320 | 0 | Cross-post linkage via `thread_root_id` |
 | `postiz_post` (multi-para > cap) | Split on `\n\n` | 320 | 0 | One Postiz post = one source_id; multiple chunks share it |
 
-(`chunk_seq` is the per-source ordinal of the chunk; it feeds `chunk_id`.)
+(`chunk_seq` is the per-item ordinal of the chunk; it feeds `chunk_id`.)
 
 **Status filter (postiz)**: skip `draft`, skip `failed`. Skip `scheduled`
 until `publish_at <= now` (configurable; default skip).

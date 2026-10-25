@@ -119,7 +119,7 @@ func TestRunSourcesValidate(t *testing.T) {
 		},
 		{
 			name:       "duplicate ids exit one",
-			config:     "version: 1\nsources:\n  - id: ghost\n    type: ghost\n  - id: ghost\n    type: postiz\n",
+			config:     "version: 1\ndefaults:\n  chunking: { target_tokens: 400, overlap_tokens: 60 }\nsources:\n  - id: ghost\n    type: ghost\n  - id: ghost\n    type: postiz\n",
 			wantCode:   1,
 			wantStderr: "duplicate source id",
 		},
@@ -131,13 +131,13 @@ func TestRunSourcesValidate(t *testing.T) {
 		},
 		{
 			name:       "unknown provider type exits one",
-			config:     "version: 1\nsources:\n  - id: site\n    type: website\n",
+			config:     "version: 1\ndefaults:\n  chunking: { target_tokens: 400, overlap_tokens: 60 }\nsources:\n  - id: site\n    type: website\n",
 			wantCode:   1,
 			wantStderr: "known types",
 		},
 		{
 			name:       "invalid provider option exits one",
-			config:     "version: 1\nsources:\n  - id: ghost\n    type: ghost\n    options: { limit: 0 }\n",
+			config:     "version: 1\ndefaults:\n  chunking: { target_tokens: 400, overlap_tokens: 60 }\nsources:\n  - id: ghost\n    type: ghost\n    options: { limit: 0 }\n",
 			wantCode:   1,
 			wantStderr: "options.limit",
 		},

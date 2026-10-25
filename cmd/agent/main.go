@@ -47,6 +47,8 @@ Commands:
   stats              report index statistics
   serve              serve the read-only A2A surface
 
+Missing credential variables warn in sources validate; --strict makes them errors.
+
 Run "agent sources list --help" or "agent sources validate --help" for flags.
 `)
 }

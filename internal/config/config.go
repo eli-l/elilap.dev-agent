@@ -87,12 +87,20 @@ func Load(path string) (*Config, error) {
 	return &cfg, nil
 }
 
-// Validate checks the document structurally: a known schema version, a
-// unique non-empty id and a non-empty type per source, and well-formed
-// credential environment variable names. It never reads the environment.
+// Validate checks the document structurally: a known schema version, valid
+// chunking defaults, a unique non-empty id and a non-empty type per source,
+// and well-formed credential names. It never reads the environment.
 func (c *Config) Validate() error {
 	if c.Version != SupportedVersion {
 		return fmt.Errorf("unsupported config version %d: supported version is %d", c.Version, SupportedVersion)
+	}
+
+	chunking := c.Defaults.Chunking
+	if chunking.TargetTokens <= 0 {
+		return fmt.Errorf("defaults.chunking.target_tokens must be greater than 0")
+	}
+	if chunking.OverlapTokens < 0 || chunking.OverlapTokens >= chunking.TargetTokens {
+		return fmt.Errorf("defaults.chunking.overlap_tokens must be non-negative and less than target_tokens")
 	}
 
 	seen := make(map[string]bool, len(c.Sources))
