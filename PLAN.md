@@ -534,7 +534,7 @@ intentionally a separate command.
 
 CREATE TABLE IF NOT EXISTS chunks (
   chunk_id       TEXT PRIMARY KEY,           -- sha256(source_kind|source_id|chunk_seq), hex
-  source_kind    TEXT NOT NULL CHECK (source_kind IN ('ghost_post','postiz_post')),
+  source_kind    TEXT NOT NULL CHECK (source_kind IN ('ghost_post','postiz_post','file_post')),
   source_id      TEXT NOT NULL,              -- upstream item id (Ghost uuid / Postiz id)
   source_url     TEXT,
   platform       TEXT,

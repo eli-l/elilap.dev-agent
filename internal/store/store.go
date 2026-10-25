@@ -43,6 +43,7 @@ const defaultSearchLimit = 10
 const (
 	sourceKindGhostPost  = "ghost_post"
 	sourceKindPostizPost = "postiz_post"
+	sourceKindFilePost   = "file_post"
 )
 
 // Store is an open index. It is safe for concurrent use: the underlying
@@ -267,6 +268,93 @@ ON CONFLICT(chunk_id) DO UPDATE SET
 	return nil
 }
 
+// ListChunks returns the chunks in the index, oldest publication first.
+//
+// The order is published_at and then chunk_id, so two calls over the same
+// index return the chunks in the same order and the embed command's work
+// list is stable. A limit of zero or less means no limit.
+//
+// missingVector=true returns only the chunks that have no vector yet: that
+// is the work list of the embed command. The tags are not returned - they
+// live in the full-text row, not in the chunks table.
+func (s *Store) ListChunks(ctx context.Context, limit int, missingVector bool) ([]Chunk, error) {
+	query := `
+SELECT chunk_id, source_kind, source_id, COALESCE(source_url, ''), COALESCE(platform, ''),
+       author, published_at, updated_at, content_hash, COALESCE(title, ''),
+       COALESCE(section, ''), body, body_tokens, meta_json
+FROM chunks`
+	if missingVector {
+		query += `
+WHERE chunk_id NOT IN (SELECT chunk_id FROM chunk_vectors)`
+	}
+	query += `
+ORDER BY published_at, chunk_id`
+
+	var args []any
+	if limit > 0 {
+		query += `
+LIMIT ?`
+		args = append(args, limit)
+	}
+
+	rows, err := s.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("list the chunks: %w", err)
+	}
+	defer rows.Close()
+
+	var chunks []Chunk
+	for rows.Next() {
+		var c Chunk
+		if err := rows.Scan(
+			&c.ChunkID, &c.SourceKind, &c.SourceID, &c.SourceURL, &c.Platform,
+			&c.Author, &c.PublishedAt, &c.UpdatedAt, &c.ContentHash, &c.Title,
+			&c.Section, &c.Body, &c.BodyTokens, &c.MetaJSON,
+		); err != nil {
+			return nil, fmt.Errorf("read a chunk: %w", err)
+		}
+		chunks = append(chunks, c)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("read the chunks: %w", err)
+	}
+	return chunks, nil
+}
+
+// PutVector writes the embedding of one chunk, replacing the vector it had.
+//
+// The chunk must exist: a vector without a chunk would be unreachable, and
+// the foreign key would refuse it anyway. Writing a vector never touches
+// the chunks row or the full-text row - the embed command owns the
+// vectors, the ingest command owns the text.
+func (s *Store) PutVector(ctx context.Context, chunkID string, embedding []float32) error {
+	if strings.TrimSpace(chunkID) == "" {
+		return errors.New("chunk id is empty: a vector belongs to a chunk, so the chunk id must be set")
+	}
+	if len(embedding) == 0 {
+		return errors.New("the embedding is empty: a chunk without a vector is not embedded")
+	}
+
+	var exists bool
+	if err := s.db.QueryRowContext(ctx,
+		`SELECT EXISTS (SELECT 1 FROM chunks WHERE chunk_id = ?)`, chunkID,
+	).Scan(&exists); err != nil {
+		return fmt.Errorf("look up chunk %s: %w", chunkID, err)
+	}
+	if !exists {
+		return fmt.Errorf("chunk %s is not in the index: a vector belongs to a chunk that is in the index", chunkID)
+	}
+
+	if _, err := s.db.ExecContext(ctx, `
+INSERT INTO chunk_vectors (chunk_id, dim, vec) VALUES (?, ?, ?)
+ON CONFLICT(chunk_id) DO UPDATE SET dim = excluded.dim, vec = excluded.vec`,
+		chunkID, len(embedding), encodeVector(embedding),
+	); err != nil {
+		return fmt.Errorf("write the vector of chunk %s: %w", chunkID, err)
+	}
+	return nil
+}
+
 // SearchBM25 runs a full-text query and returns the best hits.
 //
 // The score is the raw bm25() value of the FTS5 index: lower is better, and
@@ -281,7 +369,8 @@ func (s *Store) SearchBM25(ctx context.Context, query string, limit int) ([]Hit,
 	}
 
 	rows, err := s.db.QueryContext(ctx, `
-SELECT c.chunk_id, c.title, c.source_url, c.published_at, bm25(chunks_fts) AS score
+SELECT c.chunk_id, COALESCE(c.title, ''), COALESCE(c.source_url, ''),
+       c.published_at, bm25(chunks_fts) AS score
 FROM chunks_fts
 JOIN chunks c ON c.chunk_id = chunks_fts.chunk_id
 WHERE chunks_fts MATCH ?
@@ -325,7 +414,8 @@ func (s *Store) SearchVector(ctx context.Context, q []float32, limit int) ([]Hit
 	}
 
 	rows, err := s.db.QueryContext(ctx, `
-SELECT v.chunk_id, v.dim, v.vec, c.title, c.source_url, c.published_at
+SELECT v.chunk_id, v.dim, v.vec, COALESCE(c.title, ''),
+       COALESCE(c.source_url, ''), c.published_at
 FROM chunk_vectors v
 JOIN chunks c ON c.chunk_id = v.chunk_id`)
 	if err != nil {
@@ -388,14 +478,47 @@ func (s *Store) Stats(ctx context.Context) (Stats, error) {
 	return stats, nil
 }
 
+// IntegrityCheck runs SQLite's own integrity check over the index and
+// returns the result. "ok" means the file is sound; anything else names
+// the problems the check found.
+func (s *Store) IntegrityCheck(ctx context.Context) (string, error) {
+	rows, err := s.db.QueryContext(ctx, "PRAGMA integrity_check")
+	if err != nil {
+		return "", fmt.Errorf("run the integrity check on %s: %w", s.path, err)
+	}
+	defer rows.Close()
+
+	var problems []string
+	for rows.Next() {
+		var problem string
+		if err := rows.Scan(&problem); err != nil {
+			return "", fmt.Errorf("read the integrity check result: %w", err)
+		}
+		problems = append(problems, problem)
+	}
+	if err := rows.Err(); err != nil {
+		return "", fmt.Errorf("read the integrity check result: %w", err)
+	}
+
+	switch len(problems) {
+	case 0:
+		return "ok", nil
+	case 1:
+		return problems[0], nil
+	default:
+		return strings.Join(problems, "; "), nil
+	}
+}
+
 // validateSourceKind rejects a source kind the chunks table's CHECK
 // constraint would reject, with a message that says what is allowed.
 func validateSourceKind(kind string) error {
 	switch kind {
-	case sourceKindGhostPost, sourceKindPostizPost:
+	case sourceKindGhostPost, sourceKindPostizPost, sourceKindFilePost:
 		return nil
 	default:
-		return fmt.Errorf("source kind %q is not a known kind: use %q or %q", kind, sourceKindGhostPost, sourceKindPostizPost)
+		return fmt.Errorf("source kind %q is not a known kind: use %q, %q or %q",
+			kind, sourceKindGhostPost, sourceKindPostizPost, sourceKindFilePost)
 	}
 }
 

@@ -28,3 +28,12 @@ sources:
       api_url: { env: POSTIZ_API_URL }
       api_key: { env: POSTIZ_API_KEY }
     options: { platforms: [instagram, linkedin, x], include_scheduled: false }
+
+  # The local markdown provider: the corpus for the bring-up run and for the
+  # end-to-end tests. It needs no credentials, so the pipeline can be run
+  # before the Ghost and Postiz clients land. It is disabled by default, so
+  # a run does not index the repository's own documentation.
+  - id: files
+    type: files
+    enabled: false
+    options: { dir: ./docs, pattern: "*.md" }
