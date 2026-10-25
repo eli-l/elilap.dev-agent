@@ -1,6 +1,6 @@
 # AGENTS.md
 
-Local-first RAG agent over Eli's published writing: ingests Ghost posts + Postiz cross-posts into a single-file SQLite index (FTS5 + sqlite-vec), exposed through one Go binary. **Status: Phase 1 in progress** — `cmd/agent/` exists with subcommand dispatch and the `sources` subcommands; `internal/config` (the `sources.yaml` loader) and `internal/sources` (the `Provider` interface, the registry, and the Ghost/Postiz option parsers) are implemented and tested; `internal/{store,embed,llm,retrieval}` and the upstream network clients are still empty placeholders. `PLAN.md` is the source of truth for scope and sequencing; read it before adding code.
+Local-first RAG agent over Eli's published writing: ingests Ghost posts + Postiz cross-posts into a single-file SQLite index (FTS5 for text, vectors scored in Go), exposed through one Go binary. **Status: Phase 1 in progress** — `cmd/agent/` exists with subcommand dispatch and the `sources` subcommands; `internal/config` (the `sources.yaml` loader), `internal/sources` (the `Provider` interface, the registry, and the Ghost/Postiz option parsers), and `internal/store` (the SQLite index: embedded migrations, the chunk write path, and the BM25 and cosine read paths) are implemented and tested; `internal/{embed,llm,retrieval}` and the upstream network clients are still empty placeholders. `PLAN.md` is the source of truth for scope and sequencing; read it before adding code.
 
 ## Commands
 
@@ -50,9 +50,9 @@ Workflow for any docs/ change:
 - `internal/sources/{provider.go,registry.go,ghost,postiz,shared}` — the
   `Provider` interface, the `type → constructor` registry, upstream clients,
   shared chunker/hash.
-- `internal/store` — SQLite, migration runner, FTS5/vec glue.
+- `internal/store` — the SQLite index: the embedded migrations, the chunk write path, and the BM25 + cosine read paths. `internal/store/sqlite.go` owns the driver and the pragmas; `migrations/embed.go` embeds the SQL.
 - `internal/embed`, `internal/retrieval`, `internal/llm` — embedding, hybrid RRF retrieval, OpenAI-compatible HTTP connector.
-- `migrations/` — SQL schema; `0001_init.sql` must stay in sync with the schema block in `PLAN.md` §3. `scripts/check-ddl.py` enforces that sync.
+- `migrations/` — SQL schema, embedded into the binary by `migrations/embed.go`; `0001_init.sql` must stay in sync with the schema block in `PLAN.md` §3. `scripts/check-ddl.py` enforces that sync.
 - `docs/` — OKF v0.2 bundle (see **OKF docs bundle** above); captured upstream API shapes (`ghost.md`, `postiz.md`) are the honest reference for clients.
 - `Makefile` — `setup` / `check` / `doctor` / `build` / `test` entry points; `make doctor` is the first thing to run on a new machine.
 
@@ -69,7 +69,8 @@ Workflow for any docs/ change:
 - Timestamps are ISO-8601 UTC; ids are sha256-based hex (`chunk_id = sha256(source_kind|source_id|chunk_seq)`). Here `source_id` is the upstream item id (Ghost uuid / Postiz id), not the config id; `chunk_seq` is the ordinal within that item across all its platform chunks.
 - `agent doctor` is the preflight contract: it reports variable **names** and set-state, never a credential value, and every failure names the variable or file that fixes it.
 - Dependencies are **vendored** (`vendor/`): the sandboxed worker has no network and its module cache is hidden, so `go mod tidy` / `go get` there always fail. Add a dep from the host shell (`go get` + `go mod vendor` + a stub file that imports it so `tidy` keeps it), commit `go.mod`, `go.sum`, and `vendor/`, and build with `-mod=vendor`.
-- Keep `chunks` and `chunks_fts` writes in one transaction.
+- Keep `chunks`, `chunks_fts`, and `chunk_vectors` writes in one transaction.
+- The index is one SQLite file opened with WAL journaling, foreign keys on, and a 5s busy timeout. `internal/store` owns the schema, the migrations, and every read and write against it.
 - Write prose for humans: name the requirement, not the machine. Hostnames,
   IP addresses, and absolute paths belong in the non-normative reference
   appendix (`PLAN.md` §7), never in the normative text.
@@ -78,7 +79,8 @@ Workflow for any docs/ change:
 
 - Never write to Ghost or Postiz — this repo is strictly read-only against upstream sources.
 - Never put credential values in `sources.yaml` — reference env vars only.
-- Don't expect plain `sqlite3` to apply `migrations/0001_init.sql`: the `vec0` DDL fails unless the sqlite-vec extension is loaded first. Use `scripts/check-ddl.py`, which applies everything else and verifies the extension-dependent table by shape (or fully, when `SQLITE_VEC_PATH` points at the extension).
+- Don't add a native extension to the index: the driver is pure Go and the vectors are a `BLOB` scored in Go. A sqlite-vec `vec0` table would put a platform-specific `.so` next to every deployed binary for no measurable gain at this corpus size.
+- Don't expect plain `sqlite3` to reproduce the store's behaviour: the store opens the file with WAL, foreign keys on and a busy timeout, and registers the FTS5 extension. Use `scripts/check-ddl.py`, which applies the migrations to a scratch database and checks the schema contract.
 - Don't make `chunks_fts` contentless (`content=''`): stored columns must read back for join-back on `chunk_id` — this was a deliberate fix, see `migrations/0001_init.sql`.
 - Don't add generation/UI/auth features: retrieval only; generation is the caller's problem; the CLI is the surface (non-goals in `PLAN.md` §0).
 - Tests and ingestion run against captured fixture JSON, never live API keys.

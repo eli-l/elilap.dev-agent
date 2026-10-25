@@ -18,7 +18,8 @@ Phase 0/1 bootstrap. What exists today:
 | `agent sources list` / `validate` | done |
 | `agent doctor` | done - preflight for config, credentials, model server, index path |
 | Ghost / Postiz clients | pending - waiting on the Phase 0 API captures |
-| SQLite store, embedding, retrieval | pending - Phase 1 |
+| SQLite store | done - embedded migrations, chunk writes, BM25 + cosine reads |
+| Embedding, retrieval | pending - Phase 1 |
 | Container files (Dockerfile, compose.yaml) | pending - Phase 1 |
 
 The plan and its exit criteria live in [`PLAN.md`](./PLAN.md); the bring-up
@@ -28,16 +29,16 @@ review is [`docs/mvp-review.md`](./docs/mvp-review.md).
 
 ```
 Ghost (blog)        ─┐
-                     ├─►  ingest  ─►  SQLite + sqlite-vec  ─►  query  ─►  LLM
-Postiz (social)     ─┘                                  ▲
-                                                        │
+                     ├─►  ingest  ─►  SQLite + FTS5 + vectors  ─►  query  ─►  LLM
+Postiz (social)     ─┘                                             ▲
+                                                                   │
                                           model server (OpenAI-compatible)
 ```
 
 * **One Go binary** with subcommands: `ingest`, `embed`, `query`, `stats`,
   `serve`.
 * **One SQLite file** (`index.db`) you can `cp` to back up.
-* **Hybrid retrieval**: BM25 (FTS5) + vector (sqlite-vec) with RRF merging.
+* **Hybrid retrieval**: BM25 (FTS5) + vector (cosine similarity, scored in Go) with RRF merging.
 * **Model-agnostic**: any OpenAI-compatible server - one base URL, no SDK.
 * **A2A-ready**: retrieval is exposed over JSON-RPC in a later phase; the CLI
   surface is the source of truth.
