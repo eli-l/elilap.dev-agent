@@ -322,3 +322,35 @@ func TestLoadChunking(t *testing.T) {
 		})
 	}
 }
+
+// An empty environment variable is not a credential. Container runners and
+// compose files pass unset variables through as an empty string, and a
+// present-but-empty credential would fail upstream with an authentication
+// error that never names the variable the operator still has to export.
+func TestMissingEnvTreatsEmptyAsMissing(t *testing.T) {
+	t.Setenv("ELILAP_TEST_API_URL", "")
+	t.Setenv("ELILAP_TEST_API_KEY", "secret")
+
+	cfg, err := Load(writeConfig(t, `version: 1
+
+defaults:
+  chunking: { target_tokens: 400, overlap_tokens: 60 }
+  user_agent: "test"
+
+sources:
+  - id: one
+    type: ghost
+    enabled: true
+    credentials:
+      api_url: { env: ELILAP_TEST_API_URL }
+      api_key: { env: ELILAP_TEST_API_KEY }
+`))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	missing := cfg.MissingEnv()
+	if len(missing) != 1 || missing[0] != "ELILAP_TEST_API_URL" {
+		t.Fatalf("MissingEnv() = %v, want [ELILAP_TEST_API_URL]", missing)
+	}
+}

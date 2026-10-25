@@ -174,6 +174,14 @@ func (c *Config) Enabled() []Source {
 // variables referenced by credentials that are not set in the process
 // environment, in first-reference order and without duplicates. It is the
 // only function here that consults the environment.
+//
+// A variable that is set to the EMPTY string counts as not set. Container
+// runners and compose files pass unset variables through as an empty value
+// (compose expands an unset variable to ""), and a credential that is
+// present but empty is no credential at all: the upstream call would fail
+// with an authentication error that says nothing about the real cause.
+// Treating an empty value as missing turns that into the one message that
+// names the variable the operator still has to export.
 func (c *Config) MissingEnv() []string {
 	var missing []string
 	seen := make(map[string]bool, 2*len(c.Sources))
@@ -184,7 +192,7 @@ func (c *Config) MissingEnv() []string {
 				continue
 			}
 			seen[name] = true
-			if _, ok := os.LookupEnv(name); !ok {
+			if os.Getenv(name) == "" {
 				missing = append(missing, name)
 			}
 		}
