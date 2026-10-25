@@ -1,5 +1,11 @@
 # Directory Update Log
 
+## 2026-10-25
+
+* **Update**: The model server contract now states that the agent verifies the endpoint by listing its models, and marks `/readyz` as optional. [Model server contract](/localai.md)
+* **Update**: Rewrote the self-hosted LocalAI endpoint concept as the platform-agnostic model server contract - required endpoints, the fixed 768-dimension embedding rule, the reasoning-model max_tokens caveat, the readiness probe, and the configuration surface. The reference-environment facts are kept, explicitly marked non-normative. [Model server contract](/localai.md)
+* **Update**: The bundle manifest now describes the model server contract instead of one machine's endpoint. [index.md](/index.md)
+
 ## 2026-10-23
 
 * **Creation**: Added the import-configuration concept - sources.yaml schema, the Provider interface and registry, the state ledger, and the incremental vs full ingest modes. [Import configuration and provider contract](/sources-config.md)

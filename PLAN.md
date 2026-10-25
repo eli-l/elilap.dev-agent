@@ -23,6 +23,11 @@ made the plan platform-agnostic: every host-specific fact moved out of the
 normative text into §7, and environment mechanics (scheduling, volumes, DB
 placement) are stated as requirements with portable implementations.
 
+Fifth pass (2026-10-25) wrote the §7 reference-environment appendix: the
+facts the platform-agnostic pass removed are still on the record, clearly
+marked non-normative, so nobody has to re-derive them and nobody can
+mistake them for requirements.
+
 ---
 
 ## 0. Goals & non-goals
@@ -94,7 +99,10 @@ runs this project must provide:
 * **Model server**: an OpenAI-compatible HTTP endpoint reachable from the
   agent (host or container), serving one 768-dimension embedding model and
   one chat model; LocalAI is the reference implementation (§7). The agent
-  probes `/readyz` at startup and fails fast when the endpoint is down.
+  verifies the endpoint by listing its models (`GET {base}/models`) and fails
+  fast with an actionable message when the endpoint is down or does not
+  serve the configured models. A server may additionally expose `/readyz`;
+  that is optional and not part of the contract.
 * **Credentials**: Ghost and Postiz API credentials in the environment. On
   a fresh machine none exist; obtaining them is the Phase 0 blocker. They
   are never written into this repo.
@@ -155,13 +163,15 @@ elilap.dev-agent/
 ```
 
 Current state vs. target: `cmd/agent/` exists with subcommand dispatch, the
-`sources` subcommands, the config loader, and the provider registry, with
-tests. `internal/{store,embed,llm,retrieval}` and the network clients are
-still empty (`.gitkeep`). `migrations/`, `scripts/`, and `docs/` exist in
-Phase-0/1 form. The container files (`Dockerfile`, `.dockerignore`,
-`compose.yaml`) do not exist yet — they are Phase 1 deliverables. No model
-configs or weights live in this repo: the model server is external
-(Decision 10).
+`sources` subcommands, the config loader, the provider registry, and a
+`doctor` preflight, with tests. `internal/{store,embed,llm,retrieval}` and
+the network clients are still empty (`.gitkeep`). `migrations/`,
+`scripts/` (including the DDL smoke check), and `docs/` exist in Phase-0/1
+form. The bring-up entry points exist: `Makefile` (`setup`, `check`,
+`doctor`, `build`, `test`), `.env.example`, and `agent doctor`. The container
+files (`Dockerfile`, `.dockerignore`, `compose.yaml`) do not exist yet —
+they are Phase 1 deliverables. No model configs or weights live in this
+repo: the model server is external (Decision 10).
 
 ### 2.5 Container topology (target)
 
@@ -189,9 +199,9 @@ Two consequences: (a) the container needs a network route to
 `LOCALAI_BASE_URL` — an address that works from the host does not
 automatically work from inside a container (`localhost` inside a container
 is the container itself; a LAN address must be routable from the container
-network), so the agent must probe `/readyz` itself and fail fast with a
-clear message; (b) there is no `depends_on` health gate, so the readiness
-probe lives in the agent's own startup path. If no external model server is
+network), so the agent must verify the endpoint itself and fail fast with a
+clear message; (b) there is no `depends_on` health gate, so the check lives
+in the agent's own startup path. If no external model server is
 available, the documented fallback is to add a model-server service to this
 compose file (CPU image, pinned to a versioned tag) and point
 `LOCALAI_BASE_URL` at it.
@@ -346,7 +356,7 @@ actual response shapes before writing any schema.
 
 **Tasks**
 
-- [ ] Keep `.env.example` in sync with the real variable surface (no
+- [x] Keep `.env.example` in sync with the real variable surface (no
       values) and document load order (`.env` for humans, real env for
       schedulers/containers): the four source credentials plus runtime
       config — `LOCALAI_BASE_URL`, `LOCALAI_API_KEY` (optional),
@@ -401,6 +411,13 @@ intentionally a separate command.
 - [x] `agent sources list` / `agent sources validate`: show enabled
       providers and resolved options (never secrets); validate the file
       with no credentials present.
+- [x] Bring-up entry points: a `Makefile` with `setup` / `check` /
+      `doctor` / `build` / `test`, a `.env.example` carrying the whole
+      variable surface with no values, and `agent doctor` — one command
+      that says whether this machine can run the agent.
+- [x] `scripts/check-ddl.py`: applies the migrations to a scratch database,
+      proves the FTS5 stored-column join-back, and keeps `0001_init.sql`
+      in sync with the schema block in §3.
 - [ ] `agent ingest` modes: incremental by default against the ledger;
       `--full` re-fetches, re-chunks and re-embeds; `--source <id>` scopes
       to one provider; `--dry-run` reports the plan without writing.
@@ -428,9 +445,9 @@ intentionally a separate command.
 - [ ] Containerize (§2.5): `Dockerfile`, `.dockerignore`, `compose.yaml`
       with the agent service, `agent-data` volume, `AGENT_DB_PATH` wiring,
       and `LOCALAI_BASE_URL` passed through from the environment. No
-      model-server service and no `/readyz` healthcheck in compose — the
-      agent probes `/readyz` on the model endpoint itself at startup and
-      fails fast with a clear error. Embed model `embeddinggemma-300m`
+      model-server service and no healthcheck in compose — the agent
+      verifies the model endpoint itself at startup (by listing its models)
+      and fails fast with a clear error. Embed model `embeddinggemma-300m`
       (768d, matches the `vec0` schema).
 - [ ] Store layer: migration runner that loads the sqlite-vec extension
       *before* applying `0001_init.sql` (the `vec0` DDL fails without it).
@@ -530,9 +547,8 @@ until `publish_at <= now` (configurable; default skip).
 - `agent embed` finishes in <5 min against the configured model server
   (models already loaded there — no first-boot download).
 - `docker compose build` produces the image and `docker compose up` yields
-  an agent container that reaches the model endpoint (`/readyz` on
-  `LOCALAI_BASE_URL`) with `agent embed` working from a clean container —
-  no host Go toolchain.
+  an agent container that reaches the model endpoint (`LOCALAI_BASE_URL`)
+  with `agent embed` working from a clean container — no host Go toolchain.
 - A second incremental run is a near no-op (no re-fetch, no re-embed).
 - `agent ingest --full` rebuilds every chunk and every embedding from the
   sources as they stand today.
@@ -686,7 +702,7 @@ No public web exposure by default.
 | Ghost response shape differs from expectations | Low | Same as above | Phase 0 captures one real post |
 | sqlite-vec CGO build trouble (any platform) | Medium | Build fragility | Phase 1 driver spike decides mattn vs ncruces before store code lands; pin versions |
 | CGO/sqlite-vec misbehaves inside the container | Medium | Image build breaks | Driver spike must prove `docker compose build` + KNN round-trip in-container before store code lands |
-| Model endpoint down or unreachable from the container | Medium | `embed`/`ask` blocked | Agent probes `/readyz` at startup and fails fast with a clear message; `LOCALAI_BASE_URL` must be reachable from inside the container network (`localhost` in compose means the container itself); documented fallback is a local model-server compose service |
+| Model endpoint down or unreachable from the container | Medium | `embed`/`ask` blocked | Agent verifies the endpoint by listing its models and fails fast with a clear message; `LOCALAI_BASE_URL` must be reachable from inside the container network (`localhost` in compose means the container itself); documented fallback is a local model-server compose service |
 | Model host is CPU-only | Medium | Slow chat | `spark-x2.5-4b` is a 4B model — acceptable at this corpus size; Phase 2 latency targets are measured against the real endpoint, not guessed |
 | The chat model is a reasoning model — the token budget is eaten by `reasoning` | Medium | Empty `content` in `agent ask` | `max_tokens` must budget for reasoning; `agent ask` reads the `reasoning` field and errors loudly on empty content; a smaller instruct model is the documented fallback |
 | Docker daemon unreachable from an agent sandbox | Certain in-sandbox | Slow dev loop for container steps | Run container commands with explicit permission or outside the sandbox; never bake keys into the image |
@@ -719,7 +735,7 @@ No public web exposure by default.
 5. ~~Pin the model server to a versioned tag~~ — **moot 2026-10-23**: the
    model server is external, so its version is the operator's concern. The
    agent depends on the OpenAI-compatible surface (`/v1/embeddings`,
-   `/v1/chat/completions`, `/readyz`), not on a specific build or vendor.
+   `/v1/chat/completions`), not on a specific build or vendor.
 6. The website (HTML) as a source — **deferred 2026-10-23**. Facts already
    captured: `elilap.dev` is an Astro static site with a single `<main>`
    landmark per page; `robots.txt` allows all crawlers and explicitly
@@ -749,3 +765,115 @@ The project is "done" when:
 
 We are not done at MVP. We are not done at Phase 2. We are done at the
 end of Phase 4.
+
+---
+
+## 7. Reference environment (non-normative)
+
+**This appendix is not a requirement.** Everything above it is normative and
+holds on any host. This section records what was actually observed on **one**
+reference environment, so the numbers and caveats behind the plan are
+auditable and so a future reader can tell "the plan says this" from "this
+happened to be true here". Nothing here may be read as a requirement, a
+default, or a constraint: a different host, a different model server, or a
+different credential set are all equally valid.
+
+### 7.1 The reference host
+
+| property | observed value |
+|---|---|
+| role | build + verification host for this repo (the "AI node") |
+| OS | Ubuntu 26.04.1 LTS, kernel 7.0.0-38-generic, x86_64 |
+| Go | 1.27.3 (gvm-managed), matching the `go.mod` floor of 1.27 |
+| container runtime | Docker CLI 29.9.2, Compose v5.6.1 |
+| other | `python3`, `curl`, `make`, `git` present; no `sqlite3` CLI |
+
+The repository was also developed on a macOS (darwin/arm64) workstation.
+That host is not required, not referenced by any script, and nothing in the
+build depends on it.
+
+### 7.2 The reference model server
+
+An already-running LocalAI instance on the LAN, reached over plain HTTP:
+
+| property | observed value |
+|---|---|
+| base URL | `http://192.168.78.243:8080` (LAN host named `dev`; the reference build host is `192.168.78.242`) |
+| OpenAI-compatible base | `http://192.168.78.243:8080/v1` → `LOCALAI_BASE_URL` |
+| liveness | `GET /readyz` → `200` |
+| version | `GET /version` → `v4.12.0 (15e37df9a468c798a5a511624f054057da4380a1)` |
+| auth | none required; `LOCALAI_API_KEY` stayed unset |
+
+**Loaded models** (`GET /v1/models`):
+
+| id | role |
+|---|---|
+| `embeddinggemma-300m` | embeddings — **768 dimensions** |
+| `spark-x2.5-4b` | chat — the default chat model |
+| `spark-x2.5-1.7b-q4` | chat — lighter fallback |
+
+**Verified 2026-10-23, from the reference host:**
+
+* `POST /v1/embeddings` with `embeddinggemma-300m` and input `"hello world"`
+  returned 768 floats — matching `chunks_vec.embedding float[768]` in
+  `migrations/0001_init.sql`.
+* `POST /v1/chat/completions` with `spark-x2.5-4b` returned HTTP 200 with a
+  completion.
+* **Caveat — reasoning models:** `spark-x2.5-4b` is a *reasoning* model.
+  Its response carries a `reasoning` field alongside `content`; at
+  `max_tokens=10` the budget was consumed by reasoning and `content` came
+  back empty. The client must budget `max_tokens` for reasoning and fail
+  loudly on empty `content` rather than silently returning nothing. This
+  caveat is a property of reasoning models in general, not of that one
+  instance.
+
+### 7.3 Observed credential state
+
+On the reference host, all four source credential variables were **unset**
+and no `.env` file existed:
+
+```
+POSTIZ_API_KEY   unset
+POSTIZ_API_URL   unset
+GHOST_API_URL    unset
+GHOST_API_KEY    unset
+```
+
+The runtime variables (`LOCALAI_BASE_URL`, `LOCALAI_API_KEY`, `EMBED_MODEL`,
+`CHAT_MODEL`, `AGENT_DB_PATH`) were unset as well — the defaults in §3 apply.
+Obtaining the two source credentials is the Phase 0 blocker, and it is the
+same blocker on any fresh host.
+
+### 7.4 Tooling verified against
+
+| tool | version / state |
+|---|---|
+| Go | 1.27.3 — `go build ./...`, `go vet ./...`, `gofmt -l .` all clean |
+| Docker CLI | 29.9.2 |
+| Docker Compose | v5.6.1 |
+| python3 | present (used by `scripts/check-ddl.py`) |
+| `sqlite3` CLI | **absent** — which is why the DDL smoke check goes through the Go driver, not the shell |
+
+### 7.5 Known-to-be-unavailable tooling
+
+These were checked and are **not** load-bearing. Nothing in this repo may
+depend on them:
+
+| tool | state on the reference host | note |
+|---|---|---|
+| `ollama` | CLI absent | never load-bearing — the OpenAI-compatible connector replaced it |
+| `codex` CLI | present on the workstation, not on the reference host | not load-bearing — `agent ask` goes through the same connector |
+| `postiz` CLI | absent | Phase 0 capture uses plain `curl` against the Postiz API |
+| `sqlite3` CLI | absent | the DDL smoke check does not shell out to `sqlite3` |
+
+### 7.6 What the reference environment does *not* prove
+
+* It does not prove the CGO/sqlite-vec build works anywhere else — the Phase 1
+  driver spike must still run on the target platform and inside the
+  container image.
+* It does not measure the Phase 2 latency targets; those must be measured
+  against the model server actually in use.
+* It does not verify any live Ghost or Postiz response shape: no credential
+  existed, so `docs/ghost.md` and `docs/postiz.md` remain empty placeholders
+  and the schema in `migrations/0001_init.sql` is still best-effort
+  inference.
