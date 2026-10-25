@@ -6,4 +6,4 @@
 
 set -euo pipefail
 cd "$(dirname "$0")/.."
-exec go run ./cmd/ingest "$@"
+exec go run -mod=vendor ./cmd/agent ingest "$@"

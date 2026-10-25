@@ -4,6 +4,8 @@
 
 * **Creation**: Recorded offline review verification and the unavailable OKF validators. [Source config review verification](/runs/source-config-review-2026-10-25.md)
 * **Update**: Corrected credential warnings and validate-only strict mode, documented chunking bounds, and reconciled item IDs and content hashes with the migrations. [Import configuration and provider contract](/sources-config.md)
+* **Creation**: Captured the MVP bring-up verification run - the four required verification commands plus the DDL smoke check, all green. [MVP bring-up verification](/runs/0002-mvp-bringup-verification.md)
+* **Creation**: Added the MVP bring-up review - the top five things that would slow down or break a first-time bring-up, a prioritized findings table with severities and concrete recommendations, and the scope cuts that make the smallest coherent vertical slice explicit. [MVP bring-up review](/mvp-review.md)
 * **Update**: The model server contract now states that the agent verifies the endpoint by listing its models, and marks `/readyz` as optional. [Model server contract](/localai.md)
 * **Update**: Rewrote the self-hosted LocalAI endpoint concept as the platform-agnostic model server contract - required endpoints, the fixed 768-dimension embedding rule, the reasoning-model max_tokens caveat, the readiness probe, and the configuration surface. The reference-environment facts are kept, explicitly marked non-normative. [Model server contract](/localai.md)
 * **Update**: The bundle manifest now describes the model server contract instead of one machine's endpoint. [index.md](/index.md)
