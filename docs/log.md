@@ -2,6 +2,7 @@
 
 ## 2026-10-25
 
+* **Update**: The build plan's machine-specific facts are out of the normative text: the platform-agnostic pass and the shipped `sources.yaml` behaviour are both reflected in §1.5, the decisions table, the compose snippet, and the Phase 1 checklist, and the compose snippet now requires `LOCALAI_BASE_URL` instead of defaulting to `localhost`. [MVP bring-up review](/mvp-review.md)
 * **Creation**: Recorded offline review verification and the unavailable OKF validators. [Source config review verification](/runs/source-config-review-2026-10-25.md)
 * **Update**: Corrected credential warnings and validate-only strict mode, documented chunking bounds, and reconciled item IDs and content hashes with the migrations. [Import configuration and provider contract](/sources-config.md)
 * **Creation**: Captured the MVP bring-up verification run - the four required verification commands plus the DDL smoke check, all green. [MVP bring-up verification](/runs/0002-mvp-bringup-verification.md)

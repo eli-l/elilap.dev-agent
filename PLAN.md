@@ -183,7 +183,7 @@ services:
   agent:
     build: .
     environment:
-      LOCALAI_BASE_URL: ${LOCALAI_BASE_URL:-http://localhost:8080/v1}
+      LOCALAI_BASE_URL: ${LOCALAI_BASE_URL:?set LOCALAI_BASE_URL}
       EMBED_MODEL: ${EMBED_MODEL:-embeddinggemma-300m}
       CHAT_MODEL: ${CHAT_MODEL:-spark-x2.5-4b}
       AGENT_DB_PATH: /data/index.db
