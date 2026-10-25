@@ -12,8 +12,10 @@ okf_version: "0.2"
 * [Import configuration and provider contract](sources-config.md) - The sources.yaml schema and chunking validation, credential warnings and strict mode, item identity, the Provider interface, the incremental/full ingest ledger, and the CLI surface for enabling, disabling, and reconfiguring providers.
 * [Container deployment](deployment.md) - The image contract (static binary on a distroless base, non-root user, writable /data), the compose topology with an external model server, the SQLite volume mapping, and the deploy check that proves the image builds and the preflight passes inside it.
 * [Index store](store.md) - The SQLite index layer: the pure-Go driver and its pragmas, the embedded migrations, the chunk write path, and the BM25 and cosine read paths.
+* [Command line](cli.md) - The subcommands of the agent binary: ingest, embed, query, stats and doctor, what each of them owns, and the flags and environment variables they read.
 # Runs
 
+* [CLI vertical slice verification](runs/2026-10-25-cli-vertical-slice.md) - The full verification suite plus the hands-on ingest, embed and query run against the self-hosted model server, after the CLI vertical slice landed.
 * [Store layer verification](runs/2026-10-25-store-layer.md) - The full verification suite after the store layer landed, including the DDL smoke check against the new chunk_vectors table.
 * [Source config review verification](runs/source-config-review-2026-10-25.md) - Offline build, vet, tests, credential probes, and schema/documentation checks.
 * [SQLite schema DDL check](runs/0001-init-ddl-check.md) - The migrations/0001_init.sql smoke check passed with the contentless-FTS5 join-back fix verified.

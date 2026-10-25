@@ -1,6 +1,6 @@
 # AGENTS.md
 
-Local-first RAG agent over Eli's published writing: ingests Ghost posts + Postiz cross-posts into a single-file SQLite index (FTS5 for text, vectors scored in Go), exposed through one Go binary. **Status: Phase 1 in progress** — `cmd/agent/` exists with subcommand dispatch and the `sources` subcommands; `internal/config` (the `sources.yaml` loader), `internal/sources` (the `Provider` interface, the registry, and the Ghost/Postiz option parsers), and `internal/store` (the SQLite index: embedded migrations, the chunk write path, and the BM25 and cosine read paths) are implemented and tested; `internal/{embed,llm,retrieval}` and the upstream network clients are still empty placeholders. The container files (`Dockerfile`, `.dockerignore`, `compose.yaml`, `scripts/deploy-check.sh`) are shipped and verified. `PLAN.md` is the source of truth for scope and sequencing; read it before adding code.
+Local-first RAG agent over Eli's published writing: ingests Ghost posts + Postiz cross-posts into a single-file SQLite index (FTS5 for text, vectors scored in Go), exposed through one Go binary. **Status: Phase 1 in progress** — the vertical slice works end to end: `cmd/agent/` has `ingest`, `embed`, `query`, `stats`, `sources` and `doctor`; `internal/config` (the `sources.yaml` loader), `internal/sources` (the `Provider` interface, the registry, the Ghost/Postiz option parsers and the local markdown provider in `internal/sources/files`), `internal/store` (the SQLite index: embedded migrations, the chunk write path, the vector write path, and the BM25 and cosine read paths), `internal/embed` (the OpenAI-compatible embeddings client) and `internal/retrieval` (the hybrid RRF retrieval) are implemented and tested; `internal/llm` and the upstream network clients are still empty placeholders. The container files (`Dockerfile`, `.dockerignore`, `compose.yaml`, `scripts/deploy-check.sh`) are shipped and verified. `PLAN.md` is the source of truth for scope and sequencing; read it before adding code.
 ## Commands
 
 ```bash
@@ -40,14 +40,14 @@ Workflow for any docs/ change:
 
 ## Layout
 
-- `cmd/agent/` — the single binary: `main.go` (dispatch), `sources.go` (`sources list` / `sources validate`), and one file per remaining subcommand (`ingest.go`, `embed.go`, `query.go`, `stats.go`, `serve.go`) as they land.
+- `cmd/agent/` — the single binary: `main.go` (dispatch), `sources.go` (`sources list` / `sources validate`), `doctor.go`, `ingest.go`, `embed.go`, `query.go`, `stats.go` and `runtime.go` (the helpers they share). `serve.go` lands with the A2A surface.
 - `sources.yaml` — static import config: every provider, its `enabled` flag,
   and its options. Secrets are never in it — credentials are `{ env: VAR }`
   references.
 - `internal/config` — `sources.yaml` loader: strict YAML decode
   (`KnownFields(true)`), version check, per-provider option validation,
   credential resolution (values never printed).
-- `internal/sources/{provider.go,registry.go,ghost,postiz,shared}` — the
+- `internal/sources/{provider.go,registry.go,files,ghost,postiz,shared}` — the
   `Provider` interface, the `type → constructor` registry, upstream clients,
   shared chunker/hash.
 - `internal/store` — the SQLite index: the embedded migrations, the chunk write path, and the BM25 + cosine read paths. `internal/store/sqlite.go` owns the driver and the pragmas; `migrations/embed.go` embeds the SQL.

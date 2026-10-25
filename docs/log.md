@@ -2,6 +2,10 @@
 
 ## 2026-10-25
 
+* **Creation**: Added the command-line concept - the subcommands, their flags, the environment variables they read, the local markdown provider, and what is still missing. [Command line](/cli.md)
+* **Creation**: Captured the CLI vertical slice verification run - the four required verification commands, the DDL smoke check, and the hands-on ingest, embed and query run against the self-hosted model server. [CLI vertical slice verification](/runs/2026-10-25-cli-vertical-slice.md)
+* **Update**: The index store now documents the chunk list, the vector write and the integrity check the CLI needs, and the migration that widens the source kind constraint. [Index store](/store.md)
+* **Update**: The bundle manifest now lists the command-line concept and the new run capture. [index.md](/index.md)
 * **Creation**: Captured the store-layer verification run - build, vet, tests, gofmt, and the DDL smoke check against the new chunk_vectors table, all green. [Store layer verification](/runs/2026-10-25-store-layer.md)
 * **Creation**: Added the index-store concept - the pure-Go driver and its pragmas, the embedded migrations and their ledger, the chunk write path, and the BM25 and cosine read paths. [Index store](/store.md)
 * **Creation**: Added the container deployment concept - the static image contract, the compose topology with a required external model server, the SQLite volume mapping, and the deploy check that proves the image builds and the preflight passes inside it. [Container deployment](/deployment.md)
