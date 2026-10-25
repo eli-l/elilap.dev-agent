@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -13,6 +14,7 @@ import (
 	"time"
 
 	"github.com/eli-l/elilap.dev-agent/internal/config"
+	"github.com/eli-l/elilap.dev-agent/internal/store"
 )
 
 // Defaults for the runtime environment the doctor reports on. They mirror
@@ -111,6 +113,7 @@ func runDoctor(args []string, stdout, stderr io.Writer) int {
 	}
 	checkModelServer(rep, stdout, timeout, *skipNetwork)
 	checkIndexPath(rep, stdout)
+	checkStore(rep, stdout)
 
 	fmt.Fprintf(stdout, "\ndoctor: %d ok, %d warning(s), %d failure(s)\n", rep.passes, rep.warns, rep.fails)
 	if rep.fails > 0 {
@@ -222,6 +225,58 @@ func checkIndexPath(rep *doctorReport, w io.Writer) {
 		return
 	}
 	rep.add(statePass, w, "index: %s will be created here, directory is writable", abs)
+}
+
+// checkStore opens the index and reports what it holds.
+//
+// A missing index is a warning, not a failure: on a fresh machine there is
+// nothing to open yet. A corrupt index is a failure, because every command
+// that reads the corpus would fail in a way that looks like an empty
+// corpus. The fix is the same in both cases - the index is derived, so it
+// can be deleted and rebuilt.
+func checkStore(rep *doctorReport, w io.Writer) {
+	dbPath := envOr("AGENT_DB_PATH", defaultDBPath)
+	abs, err := filepath.Abs(dbPath)
+	if err != nil {
+		rep.add(stateFail, w, "store: cannot resolve %q: %v", dbPath, err)
+		return
+	}
+	if _, err := os.Stat(abs); err != nil {
+		if os.IsNotExist(err) {
+			rep.add(stateWarn, w, "store: %s does not exist yet (created on the first ingest)", abs)
+			return
+		}
+		rep.add(stateFail, w, "store: cannot read %s: %v", abs, err)
+		return
+	}
+
+	s, err := store.Open(abs)
+	if err != nil {
+		rep.add(stateFail, w, "store: %s cannot be opened: %v", abs, err)
+		fmt.Fprintln(w, fmt.Sprintf("hint: remove the index file and re-run %q", "agent ingest"))
+		return
+	}
+	defer s.Close()
+
+	result, err := s.IntegrityCheck(context.Background())
+	if err != nil {
+		rep.add(stateFail, w, "store: %s cannot be checked: %v", abs, err)
+		fmt.Fprintln(w, fmt.Sprintf("hint: remove the index file and re-run %q", "agent ingest"))
+		return
+	}
+	if result != "ok" {
+		rep.add(stateFail, w, "store: %s is corrupt: %s", abs, result)
+		fmt.Fprintln(w, fmt.Sprintf("hint: remove the index file and re-run %q", "agent ingest"))
+		return
+	}
+
+	stats, err := s.Stats(context.Background())
+	if err != nil {
+		rep.add(stateFail, w, "store: %s cannot be counted: %v", abs, err)
+		return
+	}
+	rep.add(statePass, w, "store: %s is sound (%d chunk(s), %d vector(s), %d source(s))",
+		abs, stats.Chunks, stats.Vectors, stats.Sources)
 }
 
 // fetchModels asks an OpenAI-compatible server for its model catalog.
