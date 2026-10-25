@@ -37,7 +37,12 @@ CREATE VIRTUAL TABLE IF NOT EXISTS chunks_fts USING fts5(
   tokenize='porter unicode61'
 );
 
-CREATE VIRTUAL TABLE IF NOT EXISTS chunks_vec USING vec0(
-  chunk_id TEXT PRIMARY KEY,
-  embedding float[768]
+-- Embeddings are stored as raw float32 little-endian bytes and scored in Go
+-- (cosine similarity). A sqlite-vec "vec0" table would need a platform-specific
+-- loadable extension next to every deployed binary; the corpus is small enough
+-- that the difference is unmeasurable.
+CREATE TABLE IF NOT EXISTS chunk_vectors (
+  chunk_id TEXT PRIMARY KEY REFERENCES chunks(chunk_id) ON DELETE CASCADE,
+  dim       INTEGER NOT NULL,
+  vec       BLOB NOT NULL
 );
