@@ -8,8 +8,9 @@ Local-first RAG agent over Eli's published writing: ingests Ghost posts + Postiz
 go build ./...                  # compile everything
 go vet ./...                    # static checks
 go test ./...                   # tests (use fixtures, not live APIs)
-gofmt -l .                      # must print nothing
-python3 scripts/check-ddl.py    # schema smoke check; run after touching migrations/
+gofmt -l cmd internal migrations   # must print nothing (vendor/ is upstream code, not ours)
+python3 scripts/check-ddl.py    # schema smoke check; Phase 1 deliverable, not in the repo yet
+go run ./cmd/agent sources validate   # strict-parse sources.yaml (no credentials needed)
 ```
 
 Run target: `go build -o agent ./cmd/agent` (the five `cmd/*` stubs collapse into `cmd/agent/` with subcommands `ingest`, `embed`, `query`, `stats`, `serve` in Phase 1 — do not add new top-level `cmd/` dirs).
@@ -33,7 +34,15 @@ Workflow for any docs/ change:
 ## Layout
 
 - `cmd/` — binary entry points (stubs today).
-- `internal/sources/{ghost,postiz,shared}` — upstream clients + shared chunker/hash.
+- `sources.yaml` — static import config: every provider, its `enabled` flag,
+  and its options. Secrets are never in it — credentials are `{ env: VAR }`
+  references.
+- `internal/config` — `sources.yaml` loader: strict YAML decode
+  (`KnownFields(true)`), version check, per-provider option validation,
+  credential resolution (values never printed).
+- `internal/sources/{provider.go,registry.go,ghost,postiz,shared}` — the
+  `Provider` interface, the `type → constructor` registry, upstream clients,
+  shared chunker/hash.
 - `internal/store` — SQLite, migration runner, FTS5/vec glue.
 - `internal/embed`, `internal/retrieval`, `internal/llm` — embedding, hybrid RRF retrieval, OpenAI-compatible HTTP connector.
 - `migrations/` — SQL schema; `0001_init.sql` must stay in sync with the schema block in `PLAN.md` §3.
@@ -41,15 +50,21 @@ Workflow for any docs/ change:
 
 ## Conventions
 
-- Config is env-only: `POSTIZ_API_KEY`, `GHOST_API_KEY`, `LOCALAI_BASE_URL`, `EMBED_MODEL`, `AGENT_DB_PATH`. No `.env` in the repo; never echo or log keys.
+- Two config layers, no overlap: `sources.yaml` declares **which** providers
+  exist and how they are configured; env vars carry **secrets and runtime
+  values** (`POSTIZ_API_KEY`, `GHOST_API_KEY`, `LOCALAI_BASE_URL`,
+  `EMBED_MODEL`, `AGENT_DB_PATH`). No `.env` in the repo; never echo or log
+  keys.
 - The LLM connector is plain `net/http` against an OpenAI-compatible API — no LLM SDKs.
 - The DB is derived: deleting `index.db` and re-running ingest/embed must always reproduce it. Never commit it.
-- Timestamps are ISO-8601 UTC; ids are sha256-based hex (`chunk_id = sha256(source_kind|source_id|chunk_seq)`).
+- Timestamps are ISO-8601 UTC; ids are sha256-based hex (`chunk_id = sha256(source_kind|source_id|chunk_seq)`). Here `source_id` is the upstream item id (Ghost uuid / Postiz id), not the config id; `chunk_seq` is the ordinal within that item across all its platform chunks.
+- Dependencies are **vendored** (`vendor/`): the sandboxed worker has no network and its module cache is hidden, so `go mod tidy` / `go get` there always fail. Add a dep from the host shell (`go get` + `go mod vendor` + a stub file that imports it so `tidy` keeps it), commit `go.mod`, `go.sum`, and `vendor/`, and build with `-mod=vendor`.
 - Keep `chunks` and `chunks_fts` writes in one transaction.
 
 ## Avoid
 
 - Never write to Ghost or Postiz — this repo is strictly read-only against upstream sources.
+- Never put credential values in `sources.yaml` — reference env vars only.
 - Don't apply `migrations/0001_init.sql` with plain `sqlite3`: the `vec0` DDL fails unless the sqlite-vec extension is loaded first.
 - Don't make `chunks_fts` contentless (`content=''`): stored columns must read back for join-back on `chunk_id` — this was a deliberate fix, see `migrations/0001_init.sql`.
 - Don't add generation/UI/auth features: retrieval only; generation is the caller's problem; the CLI is the surface (non-goals in `PLAN.md` §0).
