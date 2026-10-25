@@ -5,12 +5,12 @@
 
 GO ?= go
 GOFLAGS ?= -mod=vendor
-BIN := bin/agent
+BIN := agent
 PKGS := ./...
 
 .DEFAULT_GOAL := help
 
-.PHONY: help setup doctor build test vet fmt fmt-check e2e verify clean
+.PHONY: help setup doctor build test vet fmt fmt-check e2e check verify clean
 
 help: ## Show the available targets
 	grep -hE '^[a-zA-Z0-9_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  %-10s %s\n", $$1, $$2}'
@@ -32,15 +32,13 @@ setup: ## Prepare a checkout: check the toolchain, create .env, build the binary
 	  echo "warning: .env.example not found" >&2; \
 	fi; \
 	echo "==> build"; \
-	mkdir -p bin; \
 	$(GO) build $(GOFLAGS) -o $(BIN) ./cmd/agent; \
 	echo "==> done - next: make doctor"
 
 doctor: ## Check this machine against the runtime requirements
 	$(GO) run $(GOFLAGS) ./cmd/agent doctor
 
-build: ## Build bin/agent
-	mkdir -p bin
+build: ## Build ./agent
 	$(GO) build $(GOFLAGS) -o $(BIN) ./cmd/agent
 
 test: ## Run the unit and end-to-end tests
@@ -60,7 +58,10 @@ fmt-check: ## Fail if any Go source is unformatted
 e2e: ## Run only the fixture-based end-to-end test
 	$(GO) test $(GOFLAGS) -run TestE2E -v ./cmd/agent/
 
-verify: fmt-check vet test build ## Everything a change should pass before it lands
+check: fmt-check vet test build ## The whole verification suite: format, vet, test, build
+
+verify: check ## Alias for check
 
 clean: ## Remove build artifacts
+	rm -f $(BIN)
 	rm -rf bin
