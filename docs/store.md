@@ -91,7 +91,11 @@ Two deliberate exceptions:
 
 * A chunk written *without* an embedding keeps the vector it already has.
   Re-ingesting an unchanged chunk must not throw away an embedding the
-  embed command already produced.
+  embed command already produced. A chunk whose **text changed** loses its
+  vector instead: the stored vector describes the text the chunk used to
+  hold, so it would answer queries with a passage the chunk no longer
+  contains - and the chunk, having no vector, is back on the embed
+  command's work list.
 * `PutChunk` does not touch `chunks.embedded_with` or
   `chunks.embedded_at`. That audit trail belongs to the embed command,
   which knows which model produced the vector.
@@ -129,6 +133,35 @@ that have no vector yet: that is the work list of the embed command.
 `IntegrityCheck` runs SQLite's own integrity check, so the doctor can
 tell a sound index from a corrupt one.
 
+## The ledger
+
+`source_state` and `source_items` are the bookkeeping of the ingest:
+one row per configured source, one row per upstream item. The tables come
+from `migrations/0002_state.sql`; `internal/store` owns them and
+`cmd/agent/ingest.go` is their only writer.
+
+| method | what it does |
+|---|---|
+| `SourceState(ctx, sourceID)` | the ledger row of a source, and whether it exists. A source that was never imported has no row, and that is not an error. |
+| `PutSourceState(ctx, st)` | writes the row. The whole row is written, so the caller decides what stays: an incremental run passes the previous `last_full_at` back in. |
+| `SourceItems(ctx, sourceID)` | the ledger rows of a source, ordered by item id. |
+| `PutSourceItem(ctx, it)` | writes one item's row. The `first_seen_at` of an item is written once and never overwritten, so the ledger carries the age of an item and not the age of the last run. |
+| `DeleteSourceItems(ctx, sourceID, keep)` | deletes the rows of the items that are not in `keep` and returns how many it deleted. An empty `keep` deletes every row of the source. |
+| `DeleteChunksForItem(ctx, sourceKind, sourceID, keep)` | deletes the chunks of an item that are not in `keep`, with their full-text rows and their vectors, in one transaction, and returns how many chunks it deleted. |
+
+`DeleteChunksForItem` spans three tables, so it is transactional. The
+vectors go with the chunk - the foreign key cascades - but the full-text
+rows do not: an FTS5 table has no foreign key to `chunks`, so its rows
+are deleted explicitly. A full-text row that outlived its chunk would keep
+matching queries with a body the index no longer holds.
+
+The `etag` column holds the item's **cheap fingerprint**: the upstream
+entity tag when the provider offers one, and the provider's own hint
+otherwise. It is what lets a run skip an item without fetching it, so it
+has to change whenever the content of the item changes. The
+`content_hash` column holds the hash of the item's content: the strong
+fingerprint, the one that says the text itself did not change.
+
 ## Why not sqlite-vec
 
 sqlite-vec ships as a platform-specific loadable extension: a native
@@ -143,8 +176,5 @@ them in Go does the same work with no native dependency.
 * The upstream clients (`internal/sources/ghost`, `postiz`) do not
   exist: they wait on the Phase 0 API captures. The local markdown
   provider is the corpus the pipeline runs against today.
-* The ingest ledger (`source_state`, `source_items`) is not consulted
-  by the ingest command yet, and the chunks of an item that disappeared
-  upstream are not deleted.
 * `chunks.embedded_with` and `chunks.embedded_at` are not written yet:
   the audit trail of the embed command has to land with it.

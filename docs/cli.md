@@ -45,24 +45,73 @@ over `AGENT_DB_PATH`. The config path is `--config <path>`, default
 ## ingest
 
 ```bash
-agent ingest [--source <id>] [--full] [--limit N]
+agent ingest [--source <id>] [--full] [--dry-run] [--limit N]
 ```
 
 Without `--source`, every **enabled** source in the config runs. With
 `--source`, exactly that source runs, and it has to exist and be enabled.
 `--limit N` caps the number of items per source.
 
-For every item the provider lists, the body is chunked with the chunking
-policy of the config and every chunk is written to the index. The chunk id
-is `sha256(source_kind|source_id|chunk_seq)` in hex, so re-running the
-import replaces the same rows instead of accumulating them.
+The run is **ledger-driven**. The index carries a ledger - `source_state`
+and `source_items` - that records what the last run of every source saw,
+and the run decides from it what to fetch, what to rewrite and what to
+delete:
 
-An item whose chunks are already in the index with the same content hashes
-is skipped, which makes a second run cheap; `--full` rewrites everything
-anyway. A source whose client does not exist yet - the Ghost and Postiz
-clients still wait on the Phase 0 API captures - is reported and skipped,
-and the sources that do work still run. The command fails when no source
-could be imported at all.
+* an item whose cheap fingerprint still matches the one the ledger holds is
+  not even fetched;
+* an item whose content hash still matches is left alone: the chunks in
+  the index are still the ones it produces;
+* an item that changed is fetched, chunked and written. The chunk id is
+  `sha256(source_kind|source_id|chunk_seq)` in hex, so the same chunk is
+  replaced, not duplicated;
+* **the chunks an item no longer produces are deleted.** An item that was
+  edited so that it got shorter used to leave its old chunks in the index
+  forever: they kept matching queries, and they kept their vectors. The
+  run says so: `removed 3 stale chunk(s) for note.md`;
+* the items the ledger holds but the run did not see are gone upstream:
+  their chunks and their ledger rows are deleted. A run with `--limit`
+  does not do this - it did not look at the whole source.
+
+A source whose client does not exist yet - the Ghost and Postiz clients
+still wait on the Phase 0 API captures - is reported and skipped, and the
+sources that do work still run. The command fails when no source could be
+imported at all.
+
+Each run has an id, and the ledger records the run that last saw every
+item, the time the item was first seen and the time it was last seen. The
+resolved configuration of a source is hashed into `source_state`: the
+source id, its type, its options, the chunking policy and the **names** of
+the credential environment variables - never a credential value, so a
+rotated key does not look like a changed configuration. A configuration
+that changed invalidates the chunks the last run wrote, so every item is
+fetched and re-chunked.
+
+The per-source summary line counts what the run did: items seen, items
+fetched, chunks written, stale chunks removed, items removed and items
+unchanged.
+
+### `--full`
+
+Re-fetches and re-chunks every item, whatever the ledger says, and records
+the run in `source_state.last_full_at`. An incremental run keeps that
+timestamp: only a full run moves it.
+
+### `--dry-run`
+
+Reports what would be written, skipped and removed, and writes **nothing**:
+no chunk, no full-text row, no vector, no ledger row. It is the way to
+see what a run would do to the index before letting it do it.
+
+```bash
+$ agent ingest --dry-run
+dry run: nothing is written to /tmp/ledger-proof/index.db
+dry-run files: would write 1 chunk(s) for beta.md
+dry-run files: would remove 3 stale chunk(s) for alpha.md
+dry-run files: 2 item(s) seen, 1 item(s) fetched, 1 chunk(s) would be written, 0 stale chunk(s) would be removed, 0 item(s) would be removed, 1 item(s) unchanged (index /tmp/ledger-proof/index.db)
+```
+
+A dry run still opens the index, so a fresh machine gets the schema; it
+writes no data.
 
 ## embed
 
@@ -139,9 +188,6 @@ derived from.
 
 ## What is not here yet
 
-* The ingest ledger (`source_state`, `source_items`) is not consulted
-  yet. The incremental decision is made on the chunk content hashes, so an
-  edited item that grows fewer chunks leaves its old chunks behind.
 * `chunks.embedded_with` and `chunks.embedded_at` are not written yet:
   the audit trail of the embed command still has to land.
 * `agent serve` - the read-only A2A surface - is still a placeholder.
