@@ -1,3 +1,13 @@
+# github.com/asg017/sqlite-vec-go-bindings v0.1.6
+## explicit; go 1.22.5
+github.com/asg017/sqlite-vec-go-bindings/cgo
+# github.com/mattn/go-sqlite3 v1.14.52
+## explicit; go 1.21
+github.com/mattn/go-sqlite3
+# golang.org/x/net v0.61.0
+## explicit; go 1.26.0
+golang.org/x/net/html
+golang.org/x/net/html/atom
 # gopkg.in/yaml.v3 v3.0.1
 ## explicit
 gopkg.in/yaml.v3

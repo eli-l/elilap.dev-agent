@@ -1,3 +1,8 @@
+## 2026-10-27
+
+* **Update**: Planned a Phase 2 loopback dev HTTP surface - `agent serve` with `/v1/retrieve` returning exactly what `search_writing` hands the model, and `/v1/ask` running the full agentic loop - graduating token-gated into the Phase 4 A2A server. [The in-service agent loop and the A2A surface](/agent-architecture.md)
+* **Creation**: Added the agent-architecture concept - the in-service grounded tool-calling loop, the `search_writing` tool, the Phase 4 A2A `message/send` surface, and the citation-or-refusal policy - recording the 2026-10-27 scope change (the agent lives here). [The in-service agent loop and the A2A surface](/agent-architecture.md)
+
 # Directory Update Log
 
 ## 2026-10-25

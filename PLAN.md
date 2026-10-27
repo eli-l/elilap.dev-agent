@@ -4,19 +4,25 @@ Build plan for a local-first RAG agent over Eli's published writing.
 This document is the source of truth for scope, sequencing, and exit criteria.
 Update it as we learn.
 
-**Last refined**: 2026-10-21, audited against the bootstrap scaffold (commit
-`7338ecf`) and the actual dev host (§1.5). Third pass (2026-10-23) pinned the
-model backend to the running LocalAI instance on `192.168.78.243` and raised
-the Go floor to 1.27. First pass corrected the host
-assumptions, the CLI shape (one binary, not five), and a contentless-FTS5
-bug in the original schema. Second pass (same day) made the runtime
-**environment-independent**: a self-hosted LocalAI replaces ollama/codex as
-the model backend behind one OpenAI-compatible connector, and the app ships
-as a multi-stage Docker image with a volume-mapped SQLite index — see §2.5
-and §3. **Refined 2026-10-23**: the model backend is a concrete, already
-running LocalAI instance at `http://192.168.78.243:8080` (embed
-`embeddinggemma-300m`, chat `spark-x2.5-4b`), so the compose stack runs the
-agent only and the model host is an external dependency.
+**Last refined**: 2026-10-27. **Scope change (2026-10-27)**: this repo is
+an **agentic A2A connector** — the agent loop lives here. A remote peer
+sends a conversational task, and *our* service runs its own tool-using
+loop (retrieve → ground → answer with citations) against the local index
+over the OpenAI-compatible chat model. The A2A surface exposes the
+**agent**, not a raw retriever; RAG is an internal tool of the service,
+and `agent ask` is its CLI shadow. Same-day refinement (2026-10-27): a
+minimal **HTTP dev surface** — `agent serve` in Phase 2, token-less and
+loopback-only, with `POST /v1/retrieve` (the exact JSON `search_writing`
+hands the model) and `POST /v1/ask` (the full loop) — makes retrieval and
+the whole flow curl-testable before A2A exists; Phase 4 hardens the same
+paths and adds the A2A binding. Earlier revisions: 2026-10-23 pinned
+the model backend to the concrete LocalAI instance at
+`http://192.168.78.243:8080` (embed `embeddinggemma-300m`, chat
+`spark-x2.5-4b`) and made the runtime environment-independent (multi-stage
+Docker image, volume-mapped SQLite index, §2.5); 2026-10-21 audited the
+bootstrap scaffold (commit `7338ecf`) and the dev host (§1.5), collapsed
+five stubs into one binary, and fixed a contentless-FTS5 bug in the
+original schema.
 
 ---
 
@@ -29,10 +35,13 @@ agent only and the model host is an external dependency.
 3. Single-host, single-file SQLite index; no long-lived vector DB service.
 4. Reproducible: `rm index.db && ./agent ingest && ./agent embed` rebuilds
    the whole thing from upstream sources.
-5. Model-agnostic generation step that the user (or any other agent) can
-   invoke; does not pin a single LLM.
-6. Built so that an A2A surface can be added later without rewriting the
-   retrieval layer.
+5. A grounded, citation-first answer loop: one internal tool-calling
+   agent (Decisions 15/16) turns a peer's conversational question into
+   hybrid retrieval calls over the local index and returns an answer
+   whose claims cite `chunk_id` + `source_url`; the OpenAI-compatible
+   connector keeps the model swappable.
+6. An A2A server surface that exposes *this* agent to remote peers: they
+   bring a question, our loop retrieves, grounds, and answers.
 7. Environment-independent: the app runs from one `docker compose up` on any
    host with a container runtime, talking to a self-hosted LocalAI over the
    LAN — no host Go toolchain, no ollama, no codex required.
@@ -41,10 +50,15 @@ agent only and the model host is an external dependency.
 
 **Non-goals (deliberately not in scope)**
 
-* Membership/auth/payments on the A2A surface — read-only.
-* Re-writing or summarizing the corpus — retrieval only, generation is the
-  caller's problem.
-* A web UI. The CLI is the surface; a UI is a future concern.
+* Membership/auth/payments on the A2A surface — token-gated, read-only.
+* Corpus mutation: ingest stays strictly read-only against Ghost and
+  Postiz; the loop reads the index, it never writes upstream.
+* Free-form open-domain chat: the loop exists to answer *from the
+  corpus*; off-corpus questions get the refusal string, not improvisation.
+* Multi-agent orchestration inside this service: one loop, one internal
+  tool (`search_writing`); peer-side agents are other people's systems.
+* A web UI. The CLI (`ask`, `query`) and A2A are the surfaces; a UI is a
+  future concern.
 * Mutating upstream content. This repo never writes to Ghost or Postiz.
 * Real-time streaming indexes. Hourly polling is fine.
 * Model serving at scale (multi-GPU, clustering) — the single self-hosted
@@ -74,6 +88,8 @@ agent only and the model host is an external dependency.
 | 12 | Import config file | One `sources.yaml` at the repo root (YAML, strict decode: `KnownFields(true)`, `version:` field) | Providers are declared in one place and can be enabled/disabled/reconfigured without a rebuild; TOML rejected — the repo already speaks YAML (`eval/queries.yaml`) and YAML carries comments in a hand-edited file (decided 2026-10-23) |
 | 13 | Provider model | One `Provider` interface (`List` cheap → `Fetch` full) + a registry keyed by config `type`; unknown type or bad options = startup error | One code path for every source; the `List`/`Fetch` split is what makes incremental ingest cheap and fixtures-testable without credentials |
 | 14 | Ingest modes | Default = incremental against a state ledger (`source_state` + `source_items`); `--full` = re-fetch + re-chunk + **re-embed** (decided 2026-10-23) | On a full reindex the index is rebuilt exactly as the sources stand today, and the corpus is small enough (≤1,500 chunks) that the CPU cost is acceptable |
+| 15 | Agent locus | The agent loop lives **in this service** (decided 2026-10-27): one tool-calling loop over the OpenAI-compatible chat model, one internal tool `search_writing` bound to `internal/retrieval`, bounded iterations, citation-or-refusal | A2A peers ask; we answer grounded from the corpus — "generation is the caller's problem" is rescoped: the caller is remote, the loop is ours |
+| 16 | A2A surface | A2A v0.3 JSON-RPC (`message/send`, agent card at `/.well-known/agent.json`) exposing the **agent**, plus a plain `POST /v1/retrieve` for deterministic search clients; bearer-token, read-only, local-bind default. Dev build (2026-10-27): Phase 2 ships the same two paths token-less on loopback (`agent serve`), before any A2A work | Peers get answers, not bare search results; streaming and task resumability stay out until a peer actually needs them |
 
 ### 1.5 Verified environment (audited 2026-10-21; Go floor re-verified 2026-10-23)
 
@@ -147,7 +163,8 @@ elilap.dev-agent/
 │   ├── embed/                        # batching/resume logic over the llm connector
 │   ├── config/                       # sources.yaml loader + strict validation
 │   ├── llm/                          # one OpenAI-compatible HTTP client (LocalAI default)
-│   └── retrieval/                    # hybrid FTS + vec + RRF
+│   ├── retrieval/                    # hybrid FTS + vec + RRF — the search_writing tool's engine
+│   └── agentloop/                    # the in-service loop: tool schema, grounded prompt, budgets, A2A task runner
 ├── migrations/
 │   ├── 0001_init.sql
 │   └── 0002_state.sql                # source_state + source_items ledger
@@ -157,7 +174,7 @@ elilap.dev-agent/
 │   ├── check-ddl.py                  # schema smoke check (runs under plain python3)
 │   └── ingest-all.sh                 # cron-friendly
 └── docs/
-    ├── architecture.md               # Phase 2, kept thin
+    ├── agent-architecture.md         # the loop + the HTTP dev / A2A surfaces (2026-10-27 scope change)
     ├── api-shapes.md                 # Phase 0 output
     ├── ghost.md                      # Phase 0 capture
     ├── postiz.md                     # Phase 0 capture
@@ -448,7 +465,10 @@ intentionally a separate command.
       `EMBED_MODEL` (default `embeddinggemma-300m`), `CHAT_MODEL`
       (default `spark-x2.5-4b`). LocalAI is the default; any
       OpenAI-compatible server (llama.cpp server, vLLM, OpenAI itself)
-      works by changing the base URL. Two behaviours the client must
+      works by changing the base URL. The tool-calling loop (Decision 15)
+      rides on the same connector: chat requests carry the
+      `search_writing` tool definition, and the client must round-trip
+      the model's tool calls. Two behaviours the client must
       honour: embeddings are **768d** (the schema says `float[768]` —
       assert the dimension before writing, or refuse to write), and
       `spark-x2.5-4b` is a **reasoning** model whose response carries a
@@ -572,14 +592,21 @@ until `publish_at <= now` (configurable; default skip).
 
 ---
 
-### Phase 2 — Retrieval & agent wrapper
+### Phase 2 — Retrieval & the in-service agent loop
 
-**Goal**: prove retrieval quality on real queries, then put a thin LLM
-wrapper on top.
+**Goal**: prove retrieval quality on real queries, then wire the loop that
+makes this service an agent: one tool (`search_writing`) bound to
+`internal/retrieval`, a grounded prompt, bounded tool-calling iterations,
+and a citation-checked answer. Phase 2 also ships a **minimal HTTP dev
+surface** (`agent serve`, decided 2026-10-27): token-less, loopback-only,
+so both halves are curl-testable — `POST /v1/retrieve` returns exactly
+what `search_writing` hands the model (retrieval in isolation, no LLM),
+and `POST /v1/ask` runs the full loop. Same paths and JSON as Phase 4;
+only auth and hardening get added later.
 
 **Tasks**
 
-- [ ] `agent query` (no LLM in the loop yet):
+- [ ] `agent query` (no LLM in the loop — the raw tool, fully visible):
   - inputs: free-text, `--top N`, `--hybrid` (on by default),
     `--source ghost|postiz|all`, `--platform` (repeatable), `--after`,
     `--before`, `--exclude-scheduled`, `--recency-halflife-days`,
@@ -587,13 +614,40 @@ wrapper on top.
   - outputs: per-chunk metadata + body + score.
 - [ ] `eval/queries.yaml`: 20 hand-picked queries with ground-truth
   chunk_ids, so the eval is a reviewable artifact, not a one-off script.
-  Target ≥15/20 with a clearly correct, verifiable answer.
-- [ ] `agent ask`: one-shot subcommand through the `internal/llm`
-      connector — builds the strict prompt below with the retrieved chunks
-      and POSTs to `/v1/chat/completions` on the configured base URL
-      (LocalAI default; any OpenAI-compatible server). No state, no
-      retries, no host `codex` dependency. `scripts/ask` stays as a thin
-      wrapper around `./agent ask` for muscle memory.
+  Target ≥15/20 with a clearly correct, verifiable answer. Once the loop
+  lands, the same 20 run end-to-end: the loop's *answers* (with
+  citations) are graded, not just raw retrieval.
+- [ ] The **in-service agent loop** (Decisions 15/16) —
+      `internal/agentloop`, consumed by both `agent ask` and, in Phase 4,
+      the A2A server:
+  - one internal tool, `search_writing`, wrapping `internal/retrieval`
+    (params: `query`, `top_n`, `source`, `platform`, `after`, `before`,
+    `recency_halflife_days`);
+  - grounded prompt assembly (template below) and bounded tool-calling
+    iterations over the `internal/llm` connector (chat model
+    `spark-x2.5-4b`; `max_iterations` default 3, a total excerpt-token
+    budget, a per-request wall-clock cap);
+  - citation enforcement: every claim must cite `chunk_id` + `source_url`
+    from retrieved chunks; on grounding failure the answer is the refusal
+    string — the loop never answers off-corpus from parametric memory;
+  - no retries across requests, no cross-request state, no host `codex`
+    dependency.
+- [ ] `agent ask`: CLI form of the loop — same prompt, same budget, same
+      refusal behavior. `scripts/ask` stays as a thin wrapper around
+      `./agent ask` for muscle memory.
+- [ ] `agent serve` (dev form): plain `net/http`, binds `127.0.0.1:8080`
+      (override with `--addr`), **no auth, loopback-only** — it exists to
+      be curl-tested during development, never exposed:
+  - `POST /v1/retrieve` — request body carries the `search_writing`
+    params (`query`, `top_n`, `source`, `platform`, `after`, `before`,
+    `recency_halflife_days`); the response is exactly the JSON array the
+    model's tool call would receive — same shape as
+    `agent query --format jsonl` (Decision 16 dev variant).
+  - `POST /v1/ask` — `{"question": "..."}` in; the full loop out:
+    `{"answer", "citations": [{"chunk_id", "source_url"}],
+    "tool_iterations", "refused", "elapsed_ms"}` — the same struct
+    `agent ask` prints; Phase 4 wraps it in an A2A `Message` without
+    redefining it.
 
 **Prompt template (for `agent ask`)**:
 
@@ -611,15 +665,38 @@ body
 {question}
 ```
 
+**Loop policy (shared by `agent ask` and the A2A task runner)**
+
+* One internal tool: `search_writing` (params: `query`, `top_n`,
+  `source`, `platform`, `after`, `before`, `recency_halflife_days`).
+* Budget: max 3 tool iterations and ~4,000 total prompt tokens of
+  excerpts per answer; stop on budget or when the model stops calling
+  the tool.
+* Every claim in the answer must cite a `chunk_id` + `source_url` from
+  the retrieved set; if grounding fails, the answer is the refusal
+  string. No tool other than `search_writing` exists in Phase 2 — the
+  loop is intentionally minimal, and new tools are new decisions.
+
 **Exit criteria**
 
 - 20-query eval reaches ≥15/20 with verified chunk_ids.
 - p50 retrieval latency <300ms; end-to-end `ask` p50 <8s on a GPU-capable
-  host, ≤60s on the CPU-only Docker setup (small chat model).
+  host, ≤60s on the CPU-only Docker setup (small chat model, reasoning
+  budget included).
+- Loop behavior verified against `spark-x2.5-4b`: tool calls round-trip,
+  the iteration/token budget holds, and unanswerable questions return
+  the refusal string instead of hallucinated content.
 - A second human can read `README.md` + `docs/runbook.md` and run `ask`
   without help — including via `docker compose up` on a clean host.
+- `POST /v1/retrieve` and `agent query --format jsonl` return identical
+  results for identical inputs; `POST /v1/ask` returns the same answer
+  content as `agent ask` for the same question (model non-determinism
+  aside).
+- The dev server refuses to start with a non-loopback bind address —
+  token-less dev convenience must not be exposable (auth is Phase 4).
 
-**Estimated effort**: 1–2 days.
+**Estimated effort**: 1–2 days (about half a day of it is the dev
+server).
 
 ---
 
@@ -657,45 +734,83 @@ body
 
 ---
 
-### Phase 4 — A2A surface (read-only, token-gated)
+### Phase 4 — A2A surface: our agent, on the wire (token-gated)
 
-**Goal**: expose `agent query` over HTTP for other agents. No write surface.
-No public web exposure by default.
+**Goal** (revised 2026-10-27): expose the **in-service agent loop** over
+A2A for remote peers. A peer sends a conversational task (`message/send`);
+our service runs the same loop `ask` runs — retrieve with
+`search_writing`, ground, answer with citations — and returns the answer
+as an A2A `Message` with citation metadata. Raw retrieval stays exposed
+as a plain JSON-RPC endpoint for deterministic callers, but the
+peer-facing product is the agent. No write surface; no public web
+exposure by default. The Phase 2 dev endpoints graduate here rather than
+being rebuilt: same paths, same JSON, plus bearer-token auth, public
+bind behind an explicit flag, rate limits, and the audit log.
 
 **Tasks**
 
 - [ ] `agent serve`: HTTP server binding to `127.0.0.1` (default) or
   `0.0.0.0` (only with `--bind-public`); token auth via
-  `Authorization: Bearer <token>`.
-      (Container mode: publish as `ports: "127.0.0.1:8081:8080"` — a
-      container's loopback is not the host's; public exposure stays
-      opt-in.)
-- [ ] JSON-RPC-style `POST /v1/retrieve`: forwards to `internal/retrieval`.
-- [ ] Agent card at `GET /.well-known/agent.json` (A2A format).
-- [ ] Audit log: per-query timestamp, token id (not token), query, result
-  count. Bodies never logged.
+  `Authorization: Bearer <token>`. (Container mode: publish as
+  `ports: "127.0.0.1:8081:8080"` — a container's loopback is not the
+  host's; public exposure stays opt-in.)
+  `/v1/retrieve` and `/v1/ask` graduate unchanged from the Phase 2
+  dev server — same request/response JSON, now token-gated.
+- [ ] A2A endpoint: `message/send` JSON-RPC at `/a2a` (A2A v0.3), running
+  the Phase 2 loop per task; stateless per request — a task is answered
+  in one request or fails. No persisted task store and no task
+  resumption until a peer actually needs it; `capabilities.streaming` is
+  `false` in v1 (add `message/stream` over HTTP+SSE later if a peer
+  asks).
+- [ ] `POST /v1/retrieve`: plain JSON-RPC forward to `internal/retrieval`,
+  same schema as `agent query --format jsonl` — the deterministic escape
+  hatch for callers that want search, not conversation.
+- [ ] Agent card at `GET /.well-known/agent.json` (A2A v0.3 `AgentCard`):
+  `name`, `description`, `version`, `supportedInterfaces` (JSONRPC
+  binding + `protocolVersion`), `capabilities`, `securitySchemes`
+  (bearer), and one skill describing grounded Q&A over Eli's published
+  writing.
+- [ ] Audit log: per-task timestamp, token id (not token), query, tool
+  iteration count, result count, answer/refusal. Bodies never logged.
 - [ ] Token store: env-driven list of `id:token` pairs; `--add-token`,
   `--revoke-token` subcommands; rotation is config-only.
-- [ ] Rate limit: 30 q/min per token (configurable).
+- [ ] Rate limit: 30 tasks/min per token (configurable) plus a per-task
+  wall-clock budget (loop iterations + chat tokens) so one peer cannot
+  pin the single LocalAI host.
 - [ ] Operational documentation in `docs/runbook.md`.
 
 **Security posture (documented and enforced)**
 
-- API is read-only — no write methods.
-- Local bind by default; public bind requires an explicit flag AND a token.
-- Audit log never contains chunk bodies or user answers.
+- API is read-only — no methods that mutate the index or upstream
+  sources.
+- The loop sees only the question plus index excerpts; peer-supplied
+  text is data, never instructions — the grounded prompt must survive a
+  prompt injection arriving through a peer's message (the refusal path
+  is the backstop).
+- Local bind by default; public bind requires an explicit flag AND a
+  token.
+- Audit log never contains chunk bodies, prompts, or user answers.
 - Tokens are high-entropy random ≥32 bytes; the optional token file is
   `0600` and env-driven (see open question 3).
 
 **Exit criteria**
 
-- A second agent (or local `curl`) can call `/v1/retrieve` and gets
-  results identical to `agent query` CLI output.
-- Audit log shows the call with token id and query.
+- An A2A client (or `curl` with a hand-built JSON-RPC envelope) can send
+  `message/send` and receives a grounded, citation-carrying answer — or
+  the refusal string — identical in content to what `agent ask` produces
+  for the same question.
+- `/.well-known/agent.json` validates as an A2A AgentCard and its skill
+  description matches the loop's actual behavior.
+- `POST /v1/retrieve` returns results identical to `agent query` CLI
+  output and to the Phase 2 dev endpoint for the same inputs.
+- Audit log shows the task with token id, query, iterations, result
+  count.
 - Token issuance/revocation is config-only; no service restart needed.
-- `docs/runbook.md` documents the rotation story.
+- `docs/runbook.md` documents the rotation story and the per-task
+  budget.
 
-**Estimated effort**: 2 days.
+**Estimated effort**: 3–4 days (loop-over-A2A integration + card, auth,
+rate limits).
 
 ---
 
@@ -721,6 +836,9 @@ No public web exposure by default.
 | Posts scheduled into future not yet live get indexed | Medium | Stale context | Skip `status='scheduled'` by default |
 | Index drift silent | Medium | Wrong answers | `agent stats` diffs count against source |
 | A2A token leaked | Low | Read-only exposure of published corpus | Tokens are scoped read-only; rotated monthly |
+| Phase 2 dev server (token-less by design) reaches a non-loopback interface | Low | Read-only exposure of the corpus without auth | Loopback bind is the default and a public address fails startup; tokens and rate limits land in Phase 4 |
+| Loop grounds on weak retrieval (model calls the tool once, answers from thin context) | Medium | Confident but uncited or wrong answers on A2A | Prompt requires a citation for every claim and the refusal string otherwise; Phase 2 eval grades loop answers, not just raw retrieval; the iteration budget forces a second retrieval attempt |
+| Prompt injection via a peer's task text | Low | Refusal bypass or fabricated citations | Peer text is data, never instructions (grounded prompt); citations must resolve to retrieved `chunk_id`s; the API is read-only, capping the blast radius |
 | Agent sandbox lacks network for embeddings/API calls | Medium | Slow dev loop | Run networked steps with explicit permission or outside the sandbox; never bake keys into the repo |
 
 ---
@@ -752,6 +870,19 @@ No public web exposure by default.
 7. Config file location — **decided 2026-10-23**: `sources.yaml` at the
    repo root, with `--config` overriding the path so it is never
    hardcoded.
+8. **Decided 2026-10-27 — the agent lives here.** A2A peers talk to *our*
+   loop; RAG (`internal/retrieval`) is its internal tool. Consequences:
+   Phase 2 builds the tool-calling loop (not a one-shot wrapper), Phase 4
+   serves the agent card + `message/send` (raw `/v1/retrieve` remains for
+   deterministic callers), and "generation is the caller's problem" is
+   rescoped to "generation is ours — grounded in the index, read-only,
+   citation-or-refusal". Multi-tool autonomy and peer-side loop hosting
+   stay out of scope.
+9. Should the Phase 2 dev `/v1/ask` stream partial tokens? **Default
+   (2026-10-27)**: no — the dev surface exists to diff against
+   `agent ask`, and streaming would change the answer contract; revisit
+   only if a Phase 4 peer asks for `message/stream`, in which case it
+   arrives as an A2A capability, not a dev-endpoint feature.
 
 ---
 
@@ -765,8 +896,10 @@ The project is "done" when:
   (the index lives in the `agent-data` volume in container mode).
 * The whole system runs from `docker compose up` on a clean host with only
   a container runtime — environment independence proven.
-* A second agent can call our retrieval over A2A.
+* A second agent can task our agent over A2A and receive a grounded,
+  citation-carrying answer produced by the in-service loop.
 * It runs unattended for a month without manual intervention.
 
 We are not done at MVP. We are not done at Phase 2. We are done at the
-end of Phase 4.
+end of Phase 4: an A2A-reachable agent, with the loop, the tool, and the
+grounding guarantees living in this repo.

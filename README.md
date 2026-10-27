@@ -1,8 +1,10 @@
 # elilap.dev-agent
 
-Local-first retrieval-augmented agent over Eli's published writing.
-Indexes Ghost posts (blog) + Postiz cross-posts (social), exposes retrieval
-and a thin agent wrapper, and is built to be A2A-callable later.
+Local-first **agentic A2A connector** over Eli's published writing.
+Indexes Ghost posts (blog) + Postiz cross-posts (social), answers questions
+from them with its own grounded tool-calling loop — retrieval is the loop's
+internal `search_writing` tool — and exposes that agent to remote peers
+over A2A (Phase 4).
 
 This repo is **infrastructure**, not the writing itself. The corpus lives
 upstream on Ghost and Postiz; the index is a derived artifact you can delete
@@ -16,14 +18,20 @@ build plan and current phase.
 ## Concept
 
 ```
-Ghost (blog)        ─┐
-                     ├─►  ingest  ─►  SQLite + sqlite-vec  ─►  query  ─►  LLM
-Postiz (social)     ─┘                                  ▲
-                                                        │
-                                          LocalAI (self-hosted)
+Ghost (blog)      ─┐
+                   ├─►  ingest  ─►  SQLite + sqlite-vec ─►  search_writing
+Postiz (social)   ─┘        ▲                                (hybrid RRF)
+                            │                                     ▲
+                     chat + embeddings                            │ tool call
+                            │                                     │
+                 LocalAI (self-hosted)  ◄── agent loop ──  question
+              (`spark-x2.5-4b`, `embeddinggemma-300m`)   (`ask` today,
+                                                          A2A in Phase 4)
 ```
 
-* **One Go binary** with subcommands: `ingest`, `embed`, `query`, `stats`.
+* **One Go binary** with subcommands: `ingest`, `embed`, `query`, `ask`
+  (Phase 2), `stats`, `serve` (Phase 2 dev form: token-less, loopback;
+  token-gated A2A in Phase 4).
 * **One SQLite file** (`index.db`) you can `cp` to back up.
 * **Hybrid retrieval**: BM25 (FTS5) + vector (sqlite-vec) with RRF merging.
 * **Model-agnostic**: self-hosted LocalAI by default
@@ -31,8 +39,11 @@ Postiz (social)     ─┘                                  ▲
   config switch.
 * **Models**: embeddings `embeddinggemma-300m` (768d), chat `spark-x2.5-4b`.
   Both self-hosted; no API keys, no cloud calls.
-* **A2A-ready**: retrieval is exposed over JSON-RPC in a later phase; the CLI
-  surface is the source of truth.
+* **Agentic**: the service runs the loop — one internal tool
+  (`search_writing`), bounded iterations, citation-or-refusal. `agent ask`
+  is the CLI form; the Phase 2 dev server exposes the same loop and the
+  raw retriever over loopback HTTP (`/v1/retrieve`, `/v1/ask`); A2A
+  `message/send` + agent card land in Phase 4 on the same paths.
 
 ## Quick reference (after Phase 1 ships)
 
@@ -52,8 +63,11 @@ go build -o agent ./cmd/agent
 
 * The corpus itself — owned by Ghost and Postiz.
 * Generated embeddings — those live in `index.db` (gitignored).
-* Any LLM wrapper code — generation is intentionally out of band so the
-  retrieval layer stays model-agnostic.
+* Free-form generation beyond the grounded loop — answers come only from
+  the corpus (citation-or-refusal), never from open-domain chat; the loop
+  itself stays model-agnostic via the OpenAI-compatible connector.
+* Multi-agent orchestration — one loop, one internal tool; peer-side
+  agents are the callers' systems.
 
 ## See also
 
