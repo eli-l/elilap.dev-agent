@@ -59,7 +59,7 @@ Workflow for any docs/ change:
 - The LLM connector is plain `net/http` against an OpenAI-compatible API — no LLM SDKs. Tool-calling rides on the same connector: chat requests carry the `search_writing` tool definition and the client round-trips the model's tool calls.
 - The DB is derived: deleting `index.db` and re-running ingest/embed must always reproduce it. Never commit it.
 - Timestamps are ISO-8601 UTC; ids are sha256-based hex (`chunk_id = sha256(source_kind|source_id|chunk_seq)`). Here `source_id` is the upstream item id (Ghost uuid / Postiz id), not the config id; `chunk_seq` is the ordinal within that item across all its platform chunks.
-- Dependencies are resolved from the module cache and **not** committed: `vendor/` is gitignored, so `go.mod`/`go.sum` are the source of truth. Run `go mod vendor` locally only if a sandboxed shell with no network needs a `-mod=vendor` build.
+- Dependencies are **vendored locally but never committed**: `vendor/` is gitignored and must exist on disk — run `go mod vendor` after any `go.mod`/`go.sum` change and build with `-mod=vendor` (the sandboxed worker has no network and its module cache is hidden). `go.mod`/`go.sum` are the source of truth for versions.
 - Keep `chunks` and `chunks_fts` writes in one transaction.
 
 ## Avoid
