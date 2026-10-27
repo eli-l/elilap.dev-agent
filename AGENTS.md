@@ -7,7 +7,7 @@ Local-first **agentic A2A connector** over Eli's published writing: ingests Ghos
 ```bash
 go build ./...                  # compile everything
 go vet ./...                    # static checks
-go test ./...                   # tests (use fixtures, not live APIs)
+go test -tags sqlite_fts5 ./...  # tests (use fixtures, not live APIs; FTS5 needs the build tag)
 gofmt -l cmd internal migrations   # must print nothing (vendor/ is upstream code, not ours)
 python3 scripts/check-ddl.py    # schema smoke check; Phase 1 deliverable, not in the repo yet
 go run ./cmd/agent sources validate   # strict-parse sources.yaml (no credentials needed)

@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/eli-l/elilap.dev-agent/internal/config"
+	"github.com/eli-l/elilap.dev-agent/internal/logging"
 	"github.com/eli-l/elilap.dev-agent/internal/sources"
 	"gopkg.in/yaml.v3"
 )
@@ -39,6 +40,8 @@ func newRegistry() (*sources.Registry, error) {
 	if err := sources.RegisterBuiltins(r); err != nil {
 		return nil, fmt.Errorf("register providers: %w", err)
 	}
+	log := logging.Sources()
+	log.Debug().Strs("types", r.KnownTypes()).Msg("provider registry ready")
 	return r, nil
 }
 
@@ -68,6 +71,13 @@ func parseConfigFlag(name string, args []string, stderr io.Writer, register func
 		fmt.Fprintf(stderr, "agent sources %s: %v\n", name, err)
 		return nil, path, 1, false
 	}
+	log := logging.Sources()
+	log.Debug().
+		Str("config", path).
+		Int("version", cfg.Version).
+		Int("sources", len(cfg.Sources)).
+		Int("enabled", len(cfg.Enabled())).
+		Msg("config loaded")
 	return cfg, path, 0, true
 }
 
@@ -90,6 +100,12 @@ func runSourcesList(args []string, stdout, stderr io.Writer) int {
 	for _, name := range cfg.MissingEnv() {
 		unset[name] = true
 	}
+	log := logging.Sources()
+	log.Debug().
+		Str("config", path).
+		Int("sources", len(cfg.Sources)).
+		Int("unset_credentials", len(unset)).
+		Msg("listing configured sources")
 
 	fmt.Fprintf(stdout, "config: %s (version %d, %d source(s), %d enabled)\n",
 		path, cfg.Version, len(cfg.Sources), len(cfg.Enabled()))
@@ -194,6 +210,12 @@ func runSourcesValidate(args []string, stdout, stderr io.Writer) int {
 	if strict && len(missing) > 0 {
 		return 1
 	}
+	log := logging.Sources()
+	log.Debug().
+		Str("config", path).
+		Strs("types", reg.KnownTypes()).
+		Int("missing_credentials", len(missing)).
+		Msg("config validated")
 
 	fmt.Fprintf(stdout, "%s: ok (version %d, %d source(s), %d enabled, %d provider type(s) validated)\n",
 		path, cfg.Version, len(cfg.Sources), len(cfg.Enabled()), len(reg.KnownTypes()))

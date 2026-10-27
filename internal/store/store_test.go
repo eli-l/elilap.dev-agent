@@ -149,7 +149,13 @@ func TestLedgerDiff(t *testing.T) {
 		t.Errorf("ToRemove = %v; want none", diff.ToRemove)
 	}
 
-	// Removing b from the list flags it for drift cleanup.
+	// The ingest flow records every listed item it wrote, so c lands in the
+	// ledger after this run; DiffLedger itself is read-only.
+	if err := s.UpsertItem("ghost", list[2], runID, now); err != nil {
+		t.Fatalf("upsert c: %v", err)
+	}
+
+	// Removing b and c from the list flags them for drift cleanup.
 	diff, err = s.DiffLedger("ghost", list[:1])
 	if err != nil {
 		t.Fatalf("diff 2: %v", err)

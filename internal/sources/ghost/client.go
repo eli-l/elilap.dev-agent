@@ -15,6 +15,8 @@ import (
 	"net/url"
 	"strings"
 	"time"
+
+	"github.com/eli-l/elilap.dev-agent/internal/logging"
 )
 
 // Client is a minimal Ghost Admin API client.
@@ -74,24 +76,38 @@ func (c *Client) get(ctx context.Context, path string, query url.Values, v any) 
 	if len(query) > 0 {
 		u += "?" + query.Encode()
 	}
+	log := logging.Sources().With().Str("provider", "ghost").Str("path", path).Logger()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
 	if err != nil {
 		return err
 	}
 	req.Header.Set("Authorization", "Ghost "+token)
 	req.Header.Set("Accept", "application/json")
+	start := time.Now()
 	resp, err := c.hc.Do(req)
 	if err != nil {
+		log.Error().Err(err).Dur("duration", time.Since(start)).Msg("request failed")
 		return err
 	}
 	defer resp.Body.Close()
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
 	if err != nil {
+		log.Error().Err(err).Dur("duration", time.Since(start)).Msg("read response body failed")
 		return err
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		log.Error().
+			Int("status", resp.StatusCode).
+			Int("bytes", len(body)).
+			Dur("duration", time.Since(start)).
+			Msg("unexpected status")
 		return errGhostStatus(resp, body)
 	}
+	log.Debug().
+		Int("status", resp.StatusCode).
+		Int("bytes", len(body)).
+		Dur("duration", time.Since(start)).
+		Msg("request done")
 	if err := json.Unmarshal(body, v); err != nil {
 		return fmt.Errorf("ghost: decode %s response: %w", path, err)
 	}
