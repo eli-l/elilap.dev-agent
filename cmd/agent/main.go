@@ -8,10 +8,18 @@ import (
 	"os"
 	"strings"
 
+	"github.com/eli-l/elilap.dev-agent/internal/envcfg"
 	"github.com/eli-l/elilap.dev-agent/internal/logging"
 )
 
 func main() {
+	// Load .env before anything decodes a variable. run() is called directly
+	// by tests, so the file never affects them; variables already present in
+	// the real environment keep precedence over the file.
+	if err := envcfg.LoadDotEnv(); err != nil {
+		fmt.Fprintf(os.Stderr, "agent: %v\n", err)
+		os.Exit(2)
+	}
 	os.Exit(run(os.Args[1:], os.Stdout, os.Stderr))
 }
 
@@ -21,7 +29,12 @@ func main() {
 // Logs go to stderr on the "main" module logger; stdout stays reserved for
 // command output, so `agent ... | jq` is never polluted by diagnostics.
 func run(args []string, stdout, stderr io.Writer) int {
-	args, logCfg, err := takeLoggingFlags(args, logging.ConfigFromEnv())
+	logCfg, err := logging.ConfigFromEnv()
+	if err != nil {
+		fmt.Fprintf(stderr, "agent: %v\n", err)
+		return 2
+	}
+	args, logCfg, err = takeLoggingFlags(args, logCfg)
 	if err != nil {
 		fmt.Fprintf(stderr, "agent: %v\n\n", err)
 		usage(stderr)
@@ -32,6 +45,22 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return 2
 	}
 	log := logging.Main()
+
+	rtCfg, err := envcfg.Load()
+	if err != nil {
+		fmt.Fprintf(stderr, "agent: %v\n", err)
+		return 2
+	}
+	// The Phase 1 store and LLM constructors consume these values; decoding
+	// here validates the environment at startup while the subcommands that
+	// use them are still placeholders.
+	log.Debug().
+		Str("db_path", rtCfg.DBPath).
+		Str("localai_base_url", rtCfg.LocalAIBaseURL).
+		Bool("localai_api_key_set", rtCfg.LocalAIAPIKey != "").
+		Str("embed_model", rtCfg.EmbedModel).
+		Str("chat_model", rtCfg.ChatModel).
+		Msg("environment configuration decoded")
 
 	if len(args) == 0 {
 		log.Debug().Msg("no subcommand given")

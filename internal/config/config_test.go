@@ -255,21 +255,28 @@ func TestMissingEnv(t *testing.T) {
 
 	const setVar = "CONFIG_TEST_SET_VAR"
 	const unsetVar = "CONFIG_TEST_UNSET_VAR"
+	const blankVar = "CONFIG_TEST_BLANK_VAR"
 	t.Setenv(setVar, "a-value-that-must-not-appear")
+	t.Setenv(blankVar, "   ")
 
 	cfg.Sources = []Source{
 		{ID: "set", Type: "ghost", Credentials: Credentials{APIKey: EnvRef{Env: setVar}}},
 		{ID: "unset", Type: "ghost", Credentials: Credentials{APIKey: EnvRef{Env: unsetVar}}},
+		{ID: "blank", Type: "ghost", Credentials: Credentials{APIKey: EnvRef{Env: blankVar}}},
 	}
 
 	unsetEnv(t, unsetVar)
 
 	missing := cfg.MissingEnv()
-	if len(missing) != 1 {
-		t.Fatalf("MissingEnv() = %v, want exactly one entry", missing)
+	got := make(map[string]bool, len(missing))
+	for _, name := range missing {
+		got[name] = true
 	}
-	if missing[0] != unsetVar {
-		t.Errorf("MissingEnv()[0] = %q, want the env var name %q", missing[0], unsetVar)
+	if len(missing) != 2 || !got[unsetVar] || !got[blankVar] {
+		t.Fatalf("MissingEnv() = %v, want %s and %s (unset and blank)", missing, unsetVar, blankVar)
+	}
+	if got[setVar] {
+		t.Errorf("MissingEnv() reported the set variable %s as missing", setVar)
 	}
 	if strings.Contains(strings.Join(missing, " "), "a-value-that-must-not-appear") {
 		t.Error("MissingEnv() leaked a credential value")

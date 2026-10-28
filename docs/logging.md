@@ -55,6 +55,14 @@ usage error (exit 2) rather than a silent verbosity change. `text` is colored
 console output when stderr is a terminal and plain otherwise; `json` is one
 record per line, for containers and collectors.
 
+Values are decoded by `envconfig` into `logging.Config`; the binary loads
+`.env` at startup (via `envcfg.LoadDotEnv`), and a variable already present in
+the real environment wins over the file. An unset *or empty* variable means
+the default (`info`/`text`). The one inventory of every variable, including
+these two, is `example.env`; see [Environment configuration and .env
+loading](environment.md) for the load order and the rule for adding new
+variables.
+
 **Streams:** logs always go to stderr. stdout carries only command output, so
 `agent ... | jq` is never polluted.
 

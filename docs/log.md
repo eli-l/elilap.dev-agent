@@ -1,3 +1,10 @@
+## 2026-10-28
+
+* **Creation**: Documented the environment layer - `.env` loaded at startup by godotenv, real-environment precedence, the `envconfig` structs behind every static setting, the complete variable inventory with defaults, the `example.env` rule for new variables, and the dynamic credential lookup for `sources.yaml`. [Environment configuration and .env loading](/environment.md)
+* **Update**: Clarified that a copied template's blank credentials count as missing, so validation matches the runtime resolver. [Environment configuration and .env loading](/environment.md)
+* **Update**: Logging values now come from an `envconfig` struct decoded after the startup `.env` load, with empty treated as the default, and the doc links the environment inventory. [Logging configuration and module loggers](/logging.md)
+* **Update**: Recorded that credential values are resolved through `envcfg.Lookup` after `.env` loading, that `example.env` is their committed inventory, and that blank credentials are validated as missing. [Import configuration and provider contract](/sources-config.md)
+
 ## 2026-10-27
 
 * **Creation**: Documented the zerolog logging setup - the single root with four module child loggers (main, http, sources, db), the `--log-level`/`--log-format` flags over `AGENT_LOG_LEVEL`/`AGENT_LOG_FORMAT`, stderr-only output, and the no-secrets/no-bodies rule. [Logging configuration and module loggers](/logging.md)

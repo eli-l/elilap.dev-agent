@@ -140,7 +140,8 @@ Facts checked on the actual dev machines, so the plan stops guessing:
 elilap.dev-agent/
 ├── PLAN.md                           # this file
 ├── README.md
-├── .env.example                      # Phase 0: var names, no values
+├── example.env                       # committed inventory: every env var,
+│                                     # defaults listed / secrets empty
 ├── .gitignore                        # index.db / .env / model weights
 ├── Dockerfile                        # multi-stage: golang:1.27 → minimal runtime
 ├── .dockerignore
@@ -213,6 +214,11 @@ volumes:
 
 **LocalAI is external now.** The compose stack runs the agent only; the
 model server is the pre-existing instance on `192.168.78.243` (Decision 10).
+Every variable in that block is part of the committed inventory in
+`example.env` (defaults listed, secrets empty); on a host run the binary
+loads `.env` at startup with godotenv, and a variable already exported wins
+over the file, so compose passes them directly and no `.env` ships in the
+image.
 Two consequences: (a) the container needs a route to that LAN address —
 true on the node's default bridge, but it is now a hard dependency on
 another host, so the agent must probe `/readyz` itself and fail fast with
@@ -388,11 +394,15 @@ actual response shapes before writing any schema.
 
 **Tasks**
 
-- [ ] Create `.env.example` with the variable names (no values) and
-      document load order (`.env` for humans, real env for cron/launchd):
-      the four source credentials plus runtime config — `LOCALAI_BASE_URL`,
-      `LOCALAI_API_KEY` (optional), `EMBED_MODEL`, `CHAT_MODEL`,
-      `AGENT_DB_PATH`.
+- [ ] Create `example.env` - the committed inventory of every environment
+      variable, defaults listed and secret values empty - and document load
+      order (`.env` loaded at startup for humans, real env for cron/launchd
+      and compose). The inventory: the four source credentials plus runtime
+      config - `LOCALAI_BASE_URL`, `LOCALAI_API_KEY` (optional), `EMBED_MODEL`,
+      `CHAT_MODEL`, `AGENT_DB_PATH`. Decode it with envconfig structs
+      (`internal/envcfg`, `internal/logging`); empty means unset. Every new
+      variable must be added to `example.env` in the same change
+      (`docs/environment.md`).
 - [ ] Author `sources.yaml` (§2.6) with one entry per provider (`ghost`,
       `postiz`), `enabled: true`, credentials as `{ env: VAR }` references
       and no values. `agent sources validate` must pass before any

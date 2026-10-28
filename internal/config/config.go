@@ -13,7 +13,9 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strings"
 
+	"github.com/eli-l/elilap.dev-agent/internal/envcfg"
 	"gopkg.in/yaml.v3"
 )
 
@@ -171,9 +173,12 @@ func (c *Config) Enabled() []Source {
 }
 
 // MissingEnv returns the names - never the values - of the environment
-// variables referenced by credentials that are not set in the process
-// environment, in first-reference order and without duplicates. It is the
-// only function here that consults the environment.
+// variables referenced by credentials that are not usable, in first-reference
+// order and without duplicates: unset, or set to an empty/blank value. Empty
+// counts as missing because a .env copied from example.env contains blank
+// credential lines, and the credential resolver treats blank as missing too.
+// It is the only function here that consults the environment; the lookup
+// itself goes through envcfg, which is also what loads .env at startup.
 func (c *Config) MissingEnv() []string {
 	var missing []string
 	seen := make(map[string]bool, 2*len(c.Sources))
@@ -184,7 +189,7 @@ func (c *Config) MissingEnv() []string {
 				continue
 			}
 			seen[name] = true
-			if _, ok := os.LookupEnv(name); !ok {
+			if v, ok := envcfg.Lookup(name); !ok || strings.TrimSpace(v) == "" {
 				missing = append(missing, name)
 			}
 		}

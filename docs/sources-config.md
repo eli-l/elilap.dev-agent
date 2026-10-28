@@ -56,11 +56,20 @@ sources:
 
 Rules: the YAML is decoded **strictly** (`KnownFields(true)`), so an unknown
 key is a hard error rather than a silently ignored setting.
-`sources validate` warns about unset credential variables and exits 0 by
-default; `sources validate --strict` treats them as errors and exits 1.
+`sources validate` warns about credential variables that are unset or blank and
+exits 0 by default; `sources validate --strict` treats them as errors and
+exits 1. Blank counts as missing because a `.env` copied from `example.env`
+contains the credential names with empty values.
 `sources list` reports set/unset state and exits 0 for missing credentials;
 `--strict` is a validate-only flag. Credential values are never printed.
 `--config` overrides the path (default `./sources.yaml`).
+
+Credential **values** come from the environment under the names declared here;
+because those names are configuration data, they cannot be `envconfig` struct
+fields. They are read through `envcfg.Lookup` after the binary has loaded
+`.env` at startup, so a local `.env` works for `agent sources list` and
+`validate` too. The committed inventory of those names is `example.env`; see
+[Environment configuration and .env loading](environment.md).
 
 `defaults.chunking.target_tokens` is required and must be positive.
 `overlap_tokens` defaults to zero and must be non-negative and less than

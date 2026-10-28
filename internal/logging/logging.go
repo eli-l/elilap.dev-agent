@@ -21,6 +21,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/eli-l/elilap.dev-agent/internal/envcfg"
+	"github.com/kelseyhightower/envconfig"
 	"github.com/rs/zerolog"
 )
 
@@ -40,34 +42,50 @@ const (
 // modules is the fixed set of module loggers Setup builds.
 var modules = []string{ModuleMain, ModuleHTTP, ModuleSources, ModuleDB}
 
-// Environment variable names carrying the logging configuration. Runtime
-// values live in the environment, per AGENTS.md.
+// EnvPrefix is the prefix envconfig reads; Config's fields therefore map to
+// AGENT_LOG_LEVEL and AGENT_LOG_FORMAT. Runtime values live in the
+// environment, per AGENTS.md.
+const EnvPrefix = "AGENT_LOG"
+
+// Environment variable names carrying the logging configuration.
 const (
-	EnvLevel  = "AGENT_LOG_LEVEL"
-	EnvFormat = "AGENT_LOG_FORMAT"
+	EnvLevel  = EnvPrefix + "_LEVEL"
+	EnvFormat = EnvPrefix + "_FORMAT"
 )
 
-// Config is the resolved logging configuration.
+// Defaults for the two settings. They are applied after decoding, so an unset
+// *or empty* variable means the default (an empty value in .env behaves like
+// an unset one, per envcfg.DefaultOr).
+const (
+	// DefaultLevel keeps a normal run quiet.
+	DefaultLevel = "info"
+	// DefaultFormat is human-readable console output.
+	DefaultFormat = "text"
+)
+
+// Config is the resolved logging configuration. Values come from the
+// environment through envconfig (see ConfigFromEnv); the Default* constants
+// are what an unset or empty variable yields.
 type Config struct {
 	// Level is a zerolog level name: trace, debug, info, warn, error,
 	// fatal, panic, or disabled. Empty means info.
-	Level string
+	Level string `envconfig:"LEVEL"`
 	// Format selects the line encoding: text (human-readable console) or
 	// json. Empty means text.
-	Format string
+	Format string `envconfig:"FORMAT"`
 }
 
 // ConfigFromEnv reads the logging configuration from the environment,
-// defaulting to info-level console output.
-func ConfigFromEnv() Config {
-	cfg := Config{Level: "info", Format: "text"}
-	if v := strings.TrimSpace(os.Getenv(EnvLevel)); v != "" {
-		cfg.Level = v
+// defaulting to info-level console output. An error means a variable is set
+// to something envconfig cannot decode; it never contains a value.
+func ConfigFromEnv() (Config, error) {
+	var cfg Config
+	if err := envconfig.Process(EnvPrefix, &cfg); err != nil {
+		return Config{}, fmt.Errorf("logging environment: %w", err)
 	}
-	if v := strings.TrimSpace(os.Getenv(EnvFormat)); v != "" {
-		cfg.Format = v
-	}
-	return cfg
+	cfg.Level = envcfg.DefaultOr(strings.TrimSpace(cfg.Level), DefaultLevel)
+	cfg.Format = envcfg.DefaultOr(strings.TrimSpace(cfg.Format), DefaultFormat)
+	return cfg, nil
 }
 
 var (

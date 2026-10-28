@@ -48,16 +48,20 @@ Postiz (social)   ─┘        ▲                                (hybrid RRF)
 ## Quick reference (after Phase 1 ships)
 
 ```bash
-export POSTIZ_API_KEY=...
-export POSTIZ_API_URL=https://postiz.mist.lv/api
-export GHOST_API_URL=...
-export GHOST_API_KEY=...
+cp example.env .env       # then fill in the credentials
 
 go build -o agent ./cmd/agent
 ./agent ingest
 ./agent embed
 ./agent query "when did I write about burnout"
 ```
+
+`example.env` lists every environment variable the agent reads, with defaults
+for settings and empty values for secrets. The binary loads `.env` at startup
+(godotenv); variables already exported in the shell win over the file, and
+containers/cron/launchd set them directly. Add any new variable to
+`example.env` (empty for secrets, default otherwise) and to
+[`docs/environment.md`](./docs/environment.md) in the same change.
 
 Logs go to stderr; raise verbosity with `--log-level debug` (or
 `AGENT_LOG_LEVEL`) and switch to one JSON record per line with `--log-format

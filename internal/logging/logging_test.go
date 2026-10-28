@@ -150,14 +150,20 @@ func TestSetupRejectsBadConfig(t *testing.T) {
 func TestConfigFromEnv(t *testing.T) {
 	t.Setenv(logging.EnvLevel, "debug")
 	t.Setenv(logging.EnvFormat, "json")
-	cfg := logging.ConfigFromEnv()
+	cfg, err := logging.ConfigFromEnv()
+	if err != nil {
+		t.Fatalf("ConfigFromEnv: %v", err)
+	}
 	if cfg.Level != "debug" || cfg.Format != "json" {
 		t.Errorf("ConfigFromEnv = %+v, want debug/json", cfg)
 	}
 
 	t.Setenv(logging.EnvLevel, "")
 	t.Setenv(logging.EnvFormat, "")
-	cfg = logging.ConfigFromEnv()
+	cfg, err = logging.ConfigFromEnv()
+	if err != nil {
+		t.Fatalf("ConfigFromEnv with empty variables: %v", err)
+	}
 	if cfg.Level != "info" || cfg.Format != "text" {
 		t.Errorf("ConfigFromEnv defaults = %+v, want info/text", cfg)
 	}

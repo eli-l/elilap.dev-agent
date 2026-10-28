@@ -87,12 +87,26 @@ func TestRunSourcesList(t *testing.T) {
 	}
 }
 
+func TestRunSourcesListBlankCredentialIsUnset(t *testing.T) {
+	path := writeConfig(t, goodConfig)
+	t.Setenv("AGENT_TEST_GHOST_KEY", "   ")
+
+	var stdout, stderr bytes.Buffer
+	if code := run([]string{"sources", "list", "--config", path}, &stdout, &stderr); code != 0 {
+		t.Fatalf("exit code = %d, want 0 (stderr: %s)", code, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "api_key: env AGENT_TEST_GHOST_KEY (unset)") {
+		t.Errorf("sources list did not report a blank credential as unset:\n%s", stdout.String())
+	}
+}
+
 func TestRunSourcesValidate(t *testing.T) {
 	tests := []struct {
 		name       string
 		config     string
 		args       []string
 		setEnv     []string
+		blankEnv   []string
 		wantCode   int
 		wantStdout string
 		wantStderr string
@@ -111,9 +125,24 @@ func TestRunSourcesValidate(t *testing.T) {
 			wantStderr: "warning",
 		},
 		{
+			name:       "blank credentials warn like unset ones",
+			config:     goodConfig,
+			blankEnv:   []string{"AGENT_TEST_GHOST_URL", "AGENT_TEST_GHOST_KEY", "AGENT_TEST_POSTIZ_URL", "AGENT_TEST_POSTIZ_KEY"},
+			wantCode:   0,
+			wantStderr: "warning",
+		},
+		{
 			name:       "good file without credentials fails under strict",
 			config:     goodConfig,
 			args:       []string{"--strict"},
+			wantCode:   1,
+			wantStderr: "AGENT_TEST_GHOST_KEY",
+		},
+		{
+			name:       "blank credentials fail under strict",
+			config:     goodConfig,
+			args:       []string{"--strict"},
+			blankEnv:   []string{"AGENT_TEST_GHOST_URL", "AGENT_TEST_GHOST_KEY", "AGENT_TEST_POSTIZ_URL", "AGENT_TEST_POSTIZ_KEY"},
 			wantCode:   1,
 			wantStderr: "AGENT_TEST_GHOST_KEY",
 		},
@@ -154,6 +183,9 @@ func TestRunSourcesValidate(t *testing.T) {
 			path := writeConfig(t, tc.config)
 			for _, name := range tc.setEnv {
 				t.Setenv(name, "test-value")
+			}
+			for _, name := range tc.blankEnv {
+				t.Setenv(name, "   ")
 			}
 
 			args := append([]string{"sources", "validate", "--config", path}, tc.args...)
