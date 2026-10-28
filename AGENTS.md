@@ -7,7 +7,7 @@ Local-first **agentic A2A connector** over Eli's published writing: ingests Ghos
 ```bash
 go build ./...                  # compile everything
 go vet ./...                    # static checks
-go test ./...                   # tests (use fixtures, not live APIs)
+go test -tags sqlite_fts5 ./...  # tests (use fixtures, not live APIs; FTS5 needs the build tag)
 gofmt -l cmd internal migrations   # must print nothing (vendor/ is upstream code, not ours)
 python3 scripts/check-ddl.py    # schema smoke check; Phase 1 deliverable, not in the repo yet
 go run ./cmd/agent sources validate   # strict-parse sources.yaml (no credentials needed)
@@ -59,7 +59,7 @@ Workflow for any docs/ change:
 - The LLM connector is plain `net/http` against an OpenAI-compatible API — no LLM SDKs. Tool-calling rides on the same connector: chat requests carry the `search_writing` tool definition and the client round-trips the model's tool calls.
 - The DB is derived: deleting `index.db` and re-running ingest/embed must always reproduce it. Never commit it.
 - Timestamps are ISO-8601 UTC; ids are sha256-based hex (`chunk_id = sha256(source_kind|source_id|chunk_seq)`). Here `source_id` is the upstream item id (Ghost uuid / Postiz id), not the config id; `chunk_seq` is the ordinal within that item across all its platform chunks.
-- Dependencies are **vendored** (`vendor/`): the sandboxed worker has no network and its module cache is hidden, so `go mod tidy` / `go get` there always fail. Add a dep from the host shell (`go get` + `go mod vendor` + a stub file that imports it so `tidy` keeps it), commit `go.mod`, `go.sum`, and `vendor/`, and build with `-mod=vendor`.
+- Dependencies are **vendored locally but never committed**: `vendor/` is gitignored and must exist on disk — run `go mod vendor` after any `go.mod`/`go.sum` change and build with `-mod=vendor` (the sandboxed worker has no network and its module cache is hidden). `go.mod`/`go.sum` are the source of truth for versions.
 - Keep `chunks` and `chunks_fts` writes in one transaction.
 
 ## Avoid

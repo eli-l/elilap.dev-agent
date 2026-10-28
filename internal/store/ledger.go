@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"time"
+
+	"github.com/eli-l/elilap.dev-agent/internal/logging"
 )
 
 // ItemKey identifies one upstream item to the store. Kind is the provider's
@@ -34,9 +36,18 @@ ON CONFLICT(source_id) DO UPDATE SET
 		fullAt = stamp
 	}
 	_, err := s.db.Exec(q, sourceID, typeName, configHash, stamp, fullAt, itemCount, fullAt)
+	log := logging.DB()
 	if err != nil {
+		log.Error().Err(err).Str("source_id", sourceID).Msg("update source_state failed")
 		return fmt.Errorf("update source_state %s: %w", sourceID, err)
 	}
+	log.Info().
+		Str("source_id", sourceID).
+		Str("type", typeName).
+		Bool("full", full).
+		Int("items", itemCount).
+		Time("at", at).
+		Msg("recorded source run state")
 	return nil
 }
 
@@ -91,9 +102,15 @@ ON CONFLICT(source_id, item_id) DO UPDATE SET
   seen_run_id=excluded.seen_run_id`,
 		sourceID, it.ItemID, it.URL, it.ContentHash, it.ETag, it.LastModified,
 		at.UTC().Format(time.RFC3339), at.UTC().Format(time.RFC3339), runID)
+	log := logging.DB()
 	if err != nil {
 		return fmt.Errorf("upsert source_item %s/%s: %w", sourceID, it.ItemID, err)
 	}
+	log.Debug().
+		Str("source_id", sourceID).
+		Str("item_id", it.ItemID).
+		Str("run_id", runID).
+		Msg("upserted ledger item")
 	return nil
 }
 
@@ -144,6 +161,14 @@ FROM source_items WHERE source_id = ?`, sourceID)
 			diff.ToRemove = append(diff.ToRemove, it)
 		}
 	}
+	log := logging.DB()
+	log.Debug().
+		Str("source_id", sourceID).
+		Int("known", len(known)).
+		Int("seen", diff.Seen).
+		Int("to_fetch", len(diff.ToFetch)).
+		Int("to_remove", len(diff.ToRemove)).
+		Msg("diffed ledger")
 	return diff, nil
 }
 
@@ -180,5 +205,17 @@ func (s *Store) RemoveItem(sourceID string, it LedgerItem) error {
 		sourceID, it.ItemID); err != nil {
 		return fmt.Errorf("delete source_item %s/%s: %w", sourceID, it.ItemID, err)
 	}
-	return tx.Commit()
+	log := logging.DB()
+	if err := tx.Commit(); err != nil {
+		log.Error().Err(err).
+			Str("source_id", sourceID).Str("item_id", it.ItemID).
+			Msg("commit item removal failed")
+		return err
+	}
+	log.Info().
+		Str("source_id", sourceID).
+		Str("item_id", it.ItemID).
+		Int("chunks", len(ids)).
+		Msg("removed drifted item")
+	return nil
 }

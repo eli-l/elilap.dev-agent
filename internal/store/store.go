@@ -16,9 +16,12 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"time"
 
 	vec "github.com/asg017/sqlite-vec-go-bindings/cgo"
 	_ "github.com/mattn/go-sqlite3" // registers the "sqlite3" driver
+
+	"github.com/eli-l/elilap.dev-agent/internal/logging"
 )
 
 func init() {
@@ -41,14 +44,18 @@ type Store struct {
 // Open opens (creating if necessary) the index database at path and brings
 // its schema up to date by applying every migration in migrationsDir.
 func Open(path, migrationsDir string) (*Store, error) {
+	log := logging.DB().With().Str("db", path).Logger()
+	start := time.Now()
 	if dir := filepath.Dir(path); dir != "" && dir != "." {
 		if err := os.MkdirAll(dir, 0o755); err != nil {
+			log.Error().Err(err).Str("dir", dir).Msg("create database directory failed")
 			return nil, fmt.Errorf("create database directory: %w", err)
 		}
 	}
 	dsn := "file:" + path + "?_fk=1&_busy_timeout=5000"
 	db, err := sql.Open("sqlite3", dsn)
 	if err != nil {
+		log.Error().Err(err).Msg("open database failed")
 		return nil, fmt.Errorf("open %s: %w", path, err)
 	}
 	// SQLite is happiest with a single writer; capping the pool keeps
@@ -57,13 +64,22 @@ func Open(path, migrationsDir string) (*Store, error) {
 	s := &Store{db: db}
 	if err := s.migrate(migrationsDir); err != nil {
 		db.Close()
+		log.Error().Err(err).Str("migrations", migrationsDir).Msg("migration failed")
 		return nil, err
 	}
+	log.Info().
+		Str("migrations", migrationsDir).
+		Dur("duration", time.Since(start)).
+		Msg("database ready")
 	return s, nil
 }
 
 // Close releases the database handle.
-func (s *Store) Close() error { return s.db.Close() }
+func (s *Store) Close() error {
+	log := logging.DB()
+	log.Debug().Msg("closing database")
+	return s.db.Close()
+}
 
 // migrate applies every *.sql migration in migrationsDir in filename order
 // that has not been applied yet, each inside its own transaction. Applied
@@ -102,8 +118,10 @@ func (s *Store) migrate(migrationsDir string) error {
 	if err != nil {
 		return err
 	}
+	log := logging.DB()
 	for _, name := range names {
 		if applied[name] {
+			log.Trace().Str("migration", name).Msg("migration already applied")
 			continue
 		}
 		script, err := os.ReadFile(filepath.Join(migrationsDir, name))
@@ -116,16 +134,20 @@ func (s *Store) migrate(migrationsDir string) error {
 		}
 		if _, err := tx.Exec(string(script)); err != nil {
 			tx.Rollback()
+			log.Error().Err(err).Str("migration", name).Msg("apply migration failed")
 			return fmt.Errorf("apply migration %s: %w", name, err)
 		}
 		if _, err := tx.Exec(`INSERT INTO schema_migrations (name, applied_at)
 VALUES (?, strftime('%Y-%m-%dT%H:%M:%fZ','now'))`, name); err != nil {
 			tx.Rollback()
+			log.Error().Err(err).Str("migration", name).Msg("record migration failed")
 			return fmt.Errorf("record migration %s: %w", name, err)
 		}
 		if err := tx.Commit(); err != nil {
+			log.Error().Err(err).Str("migration", name).Msg("commit migration failed")
 			return fmt.Errorf("commit migration %s: %w", name, err)
 		}
+		log.Info().Str("migration", name).Int("bytes", len(script)).Msg("applied migration")
 	}
 	return nil
 }

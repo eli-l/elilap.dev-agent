@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/eli-l/elilap.dev-agent/internal/config"
+	"github.com/eli-l/elilap.dev-agent/internal/logging"
 	"github.com/eli-l/elilap.dev-agent/internal/sources/shared"
 )
 
@@ -34,6 +35,7 @@ func (p *Provider) Type() string { return "ghost" }
 // come back with full html in the list response, but List only carries the
 // fingerprint fields (uuid, updated_at, url); Fetch pulls the body.
 func (p *Provider) List(ctx context.Context, since time.Time) ([]shared.Item, error) {
+	log := logging.Sources().With().Str("provider", p.Type()).Logger()
 	var items []shared.Item
 	page := 1
 	for {
@@ -41,6 +43,11 @@ func (p *Provider) List(ctx context.Context, since time.Time) ([]shared.Item, er
 		if err != nil {
 			return nil, err
 		}
+		log.Debug().
+			Int("page", page).
+			Int("pages", pp.Meta.Pagination.Pages).
+			Int("posts", len(pp.Posts)).
+			Msg("listed posts page")
 		for _, post := range pp.Posts {
 			if !p.opts.IncludeDrafts && post.PublishedAt.IsZero() {
 				continue // drafts have no published_at
@@ -58,6 +65,10 @@ func (p *Provider) List(ctx context.Context, since time.Time) ([]shared.Item, er
 		}
 		page = pp.Meta.Pagination.Next
 	}
+	log.Info().
+		Time("since", since).
+		Int("items", len(items)).
+		Msg("listed posts")
 	return items, nil
 }
 
@@ -65,8 +76,10 @@ func (p *Provider) List(ctx context.Context, since time.Time) ([]shared.Item, er
 // returned by List. Ghost's list response already carries html; Fetch
 // re-requests the single post for a fresh, authoritative body.
 func (p *Provider) Fetch(ctx context.Context, it shared.Item) (shared.Document, error) {
+	log := logging.Sources().With().Str("provider", p.Type()).Str("item_id", it.ID).Logger()
 	post, err := p.client.GetPost(ctx, it.ID)
 	if err != nil {
+		log.Error().Err(err).Msg("fetch post failed")
 		return shared.Document{}, err
 	}
 	doc := shared.Document{
@@ -85,6 +98,12 @@ func (p *Provider) Fetch(ctx context.Context, it shared.Item) (shared.Document, 
 		"updated_at": post.UpdatedAt.Format(time.RFC3339),
 		"excerpt":    post.Excerpt,
 	}
+	log.Debug().
+		Str("slug", post.Slug).
+		Int("html_bytes", len(post.HTML)).
+		Int("plaintext_bytes", len(post.Plaintext)).
+		Int("tags", len(doc.Tags)).
+		Msg("fetched post")
 	return doc, nil
 }
 

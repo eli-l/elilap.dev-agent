@@ -59,6 +59,10 @@ go build -o agent ./cmd/agent
 ./agent query "when did I write about burnout"
 ```
 
+Logs go to stderr; raise verbosity with `--log-level debug` (or
+`AGENT_LOG_LEVEL`) and switch to one JSON record per line with `--log-format
+json`. See [`docs/logging.md`](./docs/logging.md).
+
 ## What is NOT in this repo
 
 * The corpus itself — owned by Ghost and Postiz.

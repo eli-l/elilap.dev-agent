@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	"github.com/eli-l/elilap.dev-agent/internal/logging"
 )
 
 // ErrUnknownItem reports that the ledger/index has no such item, so there
@@ -53,6 +55,10 @@ func (c *Chunk) metaJSON() (string, error) {
 // stable: a mid-item edit that changes the chunk count renumbers every
 // chunk_id in the item together.
 func (s *Store) ReplaceItemChunks(item ItemKey, chunks []Chunk) (added, updated int, err error) {
+	log := logging.DB().With().
+		Str("source_kind", item.Kind).
+		Str("source_id", item.ID).
+		Logger()
 	if item.Kind == "" {
 		return 0, 0, errors.New("replace item chunks: source_kind is required")
 	}
@@ -114,6 +120,7 @@ FROM chunks WHERE source_kind = ? AND source_id = ?`, item.Kind, item.ID)
 	if unchanged {
 		// Same chunk ids, same content: nothing to write. ingested_at keeps
 		// its original stamp and embedded rows stay valid.
+		log.Debug().Int("chunks", len(chunks)).Msg("chunks unchanged, skipped write")
 		return 0, len(chunks), nil
 	}
 
@@ -159,15 +166,24 @@ VALUES (?,?,?,?)`,
 	}
 
 	if err := tx.Commit(); err != nil {
+		log.Error().Err(err).Msg("commit chunk replace failed")
 		return 0, 0, fmt.Errorf("commit replace %s/%s: %w", item.Kind, item.ID, err)
 	}
 	for _, c := range chunks {
-		if _, ok := old[c.ChunkID]; ok {
+		// `added` counts chunks whose stored row is new or whose content
+		// changed (both need a fresh embed); `updated` counts ids whose
+		// content survived the re-ingest untouched.
+		if o, ok := old[c.ChunkID]; ok && o.hash == c.ContentHash {
 			updated++
 		} else {
 			added++
 		}
 	}
+	log.Info().
+		Int("added", added).
+		Int("updated", updated).
+		Int("removed", len(old)-updated).
+		Msg("replaced item chunks")
 	return added, updated, nil
 }
 
@@ -193,6 +209,7 @@ func selectItemChunkIDs(tx *sql.Tx, kind, id string) ([]string, error) {
 // uses it for items the ledger knows but this run did not see. Unknown items
 // return ErrUnknownItem and write nothing.
 func (s *Store) DeleteItem(item ItemKey) error {
+	log := logging.DB().With().Str("source_kind", item.Kind).Str("source_id", item.ID).Logger()
 	tx, err := s.db.Begin()
 	if err != nil {
 		return fmt.Errorf("begin delete %s/%s: %w", item.Kind, item.ID, err)
@@ -204,6 +221,7 @@ func (s *Store) DeleteItem(item ItemKey) error {
 		return err
 	}
 	if len(ids) == 0 {
+		log.Debug().Msg("delete skipped: item not indexed")
 		return ErrUnknownItem
 	}
 	for _, id := range ids {
@@ -215,7 +233,12 @@ func (s *Store) DeleteItem(item ItemKey) error {
 		item.Kind, item.ID); err != nil {
 		return fmt.Errorf("delete chunks of %s/%s: %w", item.Kind, item.ID, err)
 	}
-	return tx.Commit()
+	if err := tx.Commit(); err != nil {
+		log.Error().Err(err).Msg("commit item delete failed")
+		return err
+	}
+	log.Debug().Int("chunks", len(ids)).Msg("deleted item chunks")
+	return nil
 }
 
 // tagsString flattens the chunk's tags into the FTS tags column.
