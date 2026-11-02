@@ -216,3 +216,21 @@ sources:
 		}
 	})
 }
+
+func TestBuildRequiresConstructor(t *testing.T) {
+	r := sources.NewRegistry()
+	if err := sources.RegisterBuiltins(r); err != nil {
+		t.Fatalf("RegisterBuiltins() error = %v", err)
+	}
+	parsed, err := r.ParseOptions(source(t, "id: postiz\ntype: postiz\noptions: { platforms: [x] }\n"))
+	if err != nil {
+		t.Fatalf("ParseOptions() error = %v", err)
+	}
+	_, err = r.Build(source(t, "id: postiz\ntype: postiz\noptions: { platforms: [x] }\n"), parsed, nil)
+	if err == nil {
+		t.Fatal("Build(postiz) = nil error, want a not-implemented error")
+	}
+	if !strings.Contains(err.Error(), "no constructor") {
+		t.Errorf("Build(postiz) error = %q, want it to mention the missing constructor", err)
+	}
+}

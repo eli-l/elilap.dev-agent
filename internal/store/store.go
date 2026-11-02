@@ -13,6 +13,7 @@ package store
 
 import (
 	"database/sql"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -72,6 +73,30 @@ func Open(path, migrationsDir string) (*Store, error) {
 		Dur("duration", time.Since(start)).
 		Msg("database ready")
 	return s, nil
+}
+
+// ErrNoDatabase reports that the index file does not exist. Read-only commands
+// surface it instead of creating an empty database.
+var ErrNoDatabase = errors.New("index database does not exist")
+
+// OpenReadOnly opens an existing index without creating it or applying
+// migrations. It is the path for read-only commands (stats, ingest
+// --dry-run): a missing file is an error rather than a silently created empty
+// schema.
+func OpenReadOnly(path string) (*Store, error) {
+	if _, err := os.Stat(path); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, fmt.Errorf("%w: %s", ErrNoDatabase, path)
+		}
+		return nil, fmt.Errorf("stat %s: %w", path, err)
+	}
+	dsn := "file:" + path + "?mode=ro&_fk=1&_busy_timeout=5000"
+	db, err := sql.Open("sqlite3", dsn)
+	if err != nil {
+		return nil, fmt.Errorf("open %s (read-only): %w", path, err)
+	}
+	db.SetMaxOpenConns(1)
+	return &Store{db: db}, nil
 }
 
 // Close releases the database handle.

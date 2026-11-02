@@ -27,4 +27,4 @@ sources:
     credentials:
       api_url: { env: POSTIZ_API_URL }
       api_key: { env: POSTIZ_API_KEY }
-    options: { platforms: [instagram, linkedin, x], include_scheduled: false }
+    options: { platforms: [linkedin], include_scheduled: false }

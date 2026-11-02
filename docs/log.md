@@ -1,3 +1,12 @@
+## 2026-11-02
+
+* **Creation**: Recorded the clean-database full Ghost ingest - 126 posts, 588 chunks and FTS rows in about eight seconds across two paginated pages, with a near-no-op incremental rerun - plus the retry transport, Admin limit clamp, and `include_drafts` warning it verified. [Ghost full-corpus ingest (clean rebuild)](/runs/ingest-ghost-full-2026-11-02.md)
+* **Update**: Documented the shared provider HTTP client (per-request timeout, retry with backoff on 408/429/5xx and network errors, `Retry-After`), the Admin API page-size clamp, and that `include_drafts` is inert with a Content key. [Ghost API shape (live capture)](/ghost.md)
+* **Update**: Noted the Ghost option caveats (`include_drafts` needs an Admin key, `limit` clamps to 100) and the shared retrying HTTP client every provider now uses. [Import configuration and provider contract](/sources-config.md)
+* **Creation**: Captured the live Ghost Content API shape - key formats, `updated_at` filter syntax, the 100-post page cap, `primary_author` as an object, and the uuid-versus-id read endpoint - from the first real ingest. [Ghost API shape (live capture)](/ghost.md)
+* **Creation**: Recorded the first windowed Ghost ingest run: two posts from the last seven days, 17 chunks and FTS rows, and an idempotent rerun. [Ghost windowed ingest (last week)](/runs/ingest-ghost-2026-11-02.md)
+* **Update**: Documented the provider constructor registry, the Content API fallback for bare keys, the `--since` windowed ingest (no drift deletion), and the new `agent stats` surface. [Import configuration and provider contract](/sources-config.md)
+
 ## 2026-10-28
 
 * **Creation**: Documented the environment layer - `.env` loaded at startup by godotenv, real-environment precedence, the `envconfig` structs behind every static setting, the complete variable inventory with defaults, the `example.env` rule for new variables, and the dynamic credential lookup for `sources.yaml`. [Environment configuration and .env loading](/environment.md)

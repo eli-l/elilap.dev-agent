@@ -114,22 +114,34 @@ func (c *Client) get(ctx context.Context, path string, query url.Values, v any) 
 	return nil
 }
 
-// Post is the subset of the Ghost Admin post resource this repo consumes.
+// Post is the subset of the Ghost Admin/Content post resource this repo
+// consumes. The Admin and Content API return the same shape for these
+// fields; primary_author is an object, not an id.
 type Post struct {
-	ID          string    `json:"id"`
-	UUID        string    `json:"uuid"`
-	Title       string    `json:"title"`
-	Slug        string    `json:"slug"`
-	HTML        string    `json:"html"`
-	Plaintext   string    `json:"plaintext"`
-	Excerpt     string    `json:"excerpt"`
-	CreatedAt   time.Time `json:"created_at"`
-	PublishedAt time.Time `json:"published_at"`
-	UpdatedAt   time.Time `json:"updated_at"`
-	Visibility  string    `json:"visibility"`
-	URL         string    `json:"url"`
-	AuthorID    string    `json:"primary_author"`
-	Tags        []Tag     `json:"tags"`
+	ID            string    `json:"id"`
+	UUID          string    `json:"uuid"`
+	Title         string    `json:"title"`
+	Slug          string    `json:"slug"`
+	Status        string    `json:"status"`
+	HTML          string    `json:"html"`
+	Plaintext     string    `json:"plaintext"`
+	Excerpt       string    `json:"excerpt"`
+	CreatedAt     time.Time `json:"created_at"`
+	PublishedAt   time.Time `json:"published_at"`
+	UpdatedAt     time.Time `json:"updated_at"`
+	Visibility    string    `json:"visibility"`
+	URL           string    `json:"url"`
+	PrimaryAuthor *Author   `json:"primary_author"`
+	Authors       []Author  `json:"authors"`
+	Tags          []Tag     `json:"tags"`
+}
+
+// Author is a Ghost author reference.
+type Author struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+	Slug string `json:"slug"`
+	URL  string `json:"url"`
 }
 
 // Tag is a Ghost tag reference.
@@ -154,8 +166,16 @@ type PostsPage struct {
 	} `json:"meta"`
 }
 
+// adminMaxLimit is the largest page the Admin API accepts. sources.yaml
+// configures a larger limit, which both clients clamp rather than forward (an
+// over-limit request is rejected upstream).
+const adminMaxLimit = 100
+
 // ListPosts fetches one page of posts, newest first, with full content.
 func (c *Client) ListPosts(ctx context.Context, page, limit int, updatedSince time.Time) (*PostsPage, error) {
+	if limit > adminMaxLimit {
+		limit = adminMaxLimit
+	}
 	q := url.Values{}
 	q.Set("page", fmt.Sprint(page))
 	q.Set("limit", fmt.Sprint(limit))

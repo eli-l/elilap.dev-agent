@@ -88,12 +88,9 @@ func splitByHeadings(md string) []headingSec {
 	for _, line := range lines {
 		if d := atxDepth(line); d == depth {
 			flush()
-			title := strings.TrimSpace(strings.TrimLeft(line, "#"))
-			if curHeading == "" {
-				curHeading = title
-			} else {
-				curHeading = curHeading + " > " + title
-			}
+			// Sibling headings at the split depth are separate sections;
+			// concatenating them would mislabel every chunk after the first.
+			curHeading = strings.TrimSpace(strings.TrimLeft(line, "#"))
 			continue
 		}
 		cur.WriteString(line)
@@ -183,26 +180,103 @@ func splitSection(text, heading string, cfg ChunkerConfig) []Chunk {
 	return out
 }
 
-// hardWrap splits one oversized paragraph by lines into budget-sized pieces.
+// hardWrap splits one oversized paragraph into budget-sized pieces. Lines
+// are the first boundary (code blocks stay intact); a single line that on its
+// own exceeds the budget is wrapped at word boundaries, so a long unbroken
+// paragraph cannot become one giant chunk.
 func hardWrap(para string, cfg ChunkerConfig) []string {
 	var pieces []string
 	var cur strings.Builder
 	curTokens := 0
+	flush := func() {
+		if t := strings.TrimSpace(cur.String()); t != "" {
+			pieces = append(pieces, t)
+		}
+		cur.Reset()
+		curTokens = 0
+	}
 	for _, line := range strings.Split(para, "\n") {
 		lineTokens := EstimateTokens(line)
+		if cfg.TargetTokens > 0 && lineTokens > cfg.TargetTokens {
+			flush()
+			pieces = append(pieces, wrapWords(line, cfg.TargetTokens)...)
+			continue
+		}
 		if curTokens > 0 && curTokens+lineTokens > cfg.TargetTokens {
-			pieces = append(pieces, strings.TrimSpace(cur.String()))
-			cur.Reset()
-			curTokens = 0
+			flush()
 		}
 		cur.WriteString(line)
 		cur.WriteString("\n")
 		curTokens += lineTokens
 	}
-	if t := strings.TrimSpace(cur.String()); t != "" {
-		pieces = append(pieces, t)
-	}
+	flush()
 	return pieces
+}
+
+// wrapWords splits one long line into budget-sized pieces on word boundaries.
+// The estimate is the chunker's coarse 4-chars-per-token heuristic, never an
+// exact tokenizer.
+func wrapWords(line string, target int) []string {
+	words := strings.Fields(line)
+	var (
+		out    []string
+		cur    []string
+		tokens int
+	)
+	for _, w := range words {
+		wt := EstimateTokens(w)
+		if wt < 1 {
+			wt = 1
+		}
+		if wt > target {
+			// A single unbroken token (long URL, base64, CJK run) still has
+			// to be split, or it becomes an oversized chunk on its own.
+			if len(cur) > 0 {
+				out = append(out, strings.Join(cur, " "))
+				cur = nil
+				tokens = 0
+			}
+			out = append(out, splitToken(w, target)...)
+			continue
+		}
+		if tokens > 0 && tokens+wt > target {
+			out = append(out, strings.Join(cur, " "))
+			cur = nil
+			tokens = 0
+		}
+		cur = append(cur, w)
+		tokens += wt
+	}
+	if len(cur) > 0 {
+		out = append(out, strings.Join(cur, " "))
+	}
+	return out
+}
+
+// splitToken splits one token into budget-sized pieces by byte length while
+// respecting UTF-8 rune boundaries, so it works for prose URLs and unspaced
+// CJK text alike. Each piece stays at or below target estimated tokens.
+func splitToken(word string, target int) []string {
+	byteLimit := target * avgCharsPerToken
+	if byteLimit < 1 {
+		return []string{word}
+	}
+	var (
+		out []string
+		cur strings.Builder
+	)
+	for _, r := range word {
+		rs := string(r)
+		if cur.Len() > 0 && cur.Len()+len(rs) > byteLimit {
+			out = append(out, cur.String())
+			cur.Reset()
+		}
+		cur.WriteString(rs)
+	}
+	if cur.Len() > 0 {
+		out = append(out, cur.String())
+	}
+	return out
 }
 
 // tailOverlap returns the last lines of prev worth about overlapTokens.

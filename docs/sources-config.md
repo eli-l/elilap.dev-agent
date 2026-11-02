@@ -86,8 +86,25 @@ type Provider interface {
 ```
 
 `List` is cheap, `Fetch` is expensive - that split is what makes an
-incremental run cheap. A registry maps the config `type` to a constructor;
-an unknown `type` or invalid options is a startup error.
+incremental run cheap. A registry maps the config `type` to an options
+parser and a constructor; an unknown `type` or invalid options is a startup
+error. A type may have options but no constructor yet (Postiz today): ingest
+reports it as not implemented instead of silently importing nothing.
+
+The Ghost provider accepts both credential shapes: an Admin key
+(`<id>:<secret>`) uses the JWT-authenticated Admin API, while a bare key uses
+the read-only Content API with `?key=`. See [Ghost API shape](ghost.md) for
+the captured requests and the uuid-versus-id detail. `options.include_drafts`
+only takes effect with an Admin key; with a Content key the provider warns
+and returns published posts only. `options.limit` is clamped to the API's
+100-post page size in both clients, so a larger configured value pages
+instead of failing.
+
+Both clients share `shared.NewHTTPClient`: a 60-second per-request timeout
+and a retry transport for network errors and `408`/`429`/`5xx` (three total
+attempts, exponential backoff, `Retry-After` honored, cancelled contexts
+stop immediately). Retries live in the transport, so every provider gets the
+same behavior without touching its request code.
 
 ## The ledger
 
@@ -114,13 +131,24 @@ colliding item ids require a namespace/schema decision before support is added.
 
 ## Ingest modes
 
-* **Incremental (default)** - list candidates since `last_run_at`, skip
-  items whose cheap fingerprint is unchanged, fetch and chunk the rest, and
-  delete the chunks of items that disappeared upstream.
+* **Incremental (default)** - list candidates since
+  `last_run_at - overlap`, skip items whose cheap fingerprint is unchanged,
+  and fetch and chunk the rest. The listing is bounded, so it does **not**
+  delete items it did not see: an older item that quietly fell outside the
+  watermark window is indistinguishable from a deleted one. Drift deletion
+  happens on an unbounded list only (a full run without `--since`).
 * **Full reindex (`--full`)** - re-fetch, re-chunk and **re-embed**
   everything. Decided 2026-10-23: the index is worth rebuilding exactly as
   the sources stand today, and the corpus is small enough that the CPU cost
   is acceptable.
+* **Windowed (`--since`)** - an explicit lower bound for listing:
+  RFC3339, `YYYY-MM-DD`, or a relative duration (`168h`, `7d`, `1w`).
+  `--since 7d` indexes the last week. A windowed list cannot prove that an
+  item outside the window was deleted upstream, so drift deletion is
+  disabled for that run; like an incremental run, only a full unbounded
+  list may delete drift.
+  The bound is applied to `updated_at`, so a post published earlier but
+  edited this week is intentionally re-fetched.
 
 ## CLI
 
@@ -130,6 +158,8 @@ agent ingest --source ghost       # one provider
 agent ingest --full               # full reindex: re-fetch + re-chunk + re-embed
 agent ingest --full --source postiz
 agent ingest --dry-run            # what would change, no writes
+agent ingest --source ghost --since 7d   # windowed run: the last week
+agent stats                       # chunk, FTS, vector and ledger counts
 agent sources list                # enabled/disabled + resolved options (no secrets)
 agent sources validate            # validate config/options; missing credentials warn
 agent sources validate --strict   # missing credentials fail (exit 1)

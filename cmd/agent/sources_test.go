@@ -238,16 +238,16 @@ func TestRunDispatches(t *testing.T) {
 			wantStderr: "unknown subcommand",
 		},
 		{
-			name:       "ingest is still a placeholder",
-			args:       []string{"ingest"},
-			wantCode:   0,
-			wantStdout: "ingest: not implemented (Phase 1)\n",
+			name:       "ingest reports a missing config",
+			args:       []string{"ingest", "--config", filepath.Join(t.TempDir(), "absent.yaml")},
+			wantCode:   1,
+			wantStderr: "read config",
 		},
 		{
 			name:       "serve is still a placeholder",
 			args:       []string{"serve"},
 			wantCode:   0,
-			wantStdout: "serve: not implemented (Phase 1)\n",
+			wantStdout: "serve: not implemented\n",
 		},
 	}
 

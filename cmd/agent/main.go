@@ -75,10 +75,14 @@ func run(args []string, stdout, stderr io.Writer) int {
 	switch args[0] {
 	case "sources":
 		code = runSources(args[1:], stdout, stderr)
-	case "ingest", "embed", "query", "stats", "serve":
-		// Placeholders until the store layer lands.
-		log.Warn().Str("command", args[0]).Msg("not implemented (Phase 1)")
-		fmt.Fprintf(stdout, "%s: not implemented (Phase 1)\n", args[0])
+	case "ingest":
+		code = runIngest(args[1:], rtCfg.DBPath, stdout, stderr)
+	case "stats":
+		code = runStats(args[1:], rtCfg.DBPath, stdout, stderr)
+	case "embed", "query", "serve":
+		// Placeholders until the remaining Phase 1/2 commands land.
+		log.Warn().Str("command", args[0]).Msg("not implemented")
+		fmt.Fprintf(stdout, "%s: not implemented\n", args[0])
 	default:
 		log.Error().Str("command", args[0]).Msg("unknown subcommand")
 		fmt.Fprintf(stderr, "agent: unknown subcommand %q\n\n", args[0])

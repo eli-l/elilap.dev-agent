@@ -32,6 +32,10 @@ type Item struct {
 	// ID is the upstream identifier (Ghost uuid, Postiz post id). It is the
 	// ledger key together with the source's config id.
 	ID string
+	// Ref is an opaque provider handle Fetch needs when the upstream's
+	// content endpoint does not accept ID (the Ghost uuid versus its 24-hex
+	// id, for example). Empty means Fetch may use ID.
+	Ref string
 	// URL is the canonical upstream URL, when the provider knows it.
 	URL string
 	// ETag is an upstream entity tag, when the provider exposes one.

@@ -122,6 +122,16 @@ type LedgerDiff struct {
 	Seen     int          // items listed this run (new+changed+unchanged)
 }
 
+// CountItems returns how many items the ledger currently holds for sourceID.
+// It is the corpus size, unlike a bounded listing window's length.
+func (s *Store) CountItems(sourceID string) (int, error) {
+	var n int
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM source_items WHERE source_id = ?`, sourceID).Scan(&n); err != nil {
+		return 0, fmt.Errorf("count source_items for %s: %w", sourceID, err)
+	}
+	return n, nil
+}
+
 // DiffLedger compares one provider's listed items against the ledger and
 // classifies them. Unchanged items (same etag + last_modified) are skipped
 // entirely - no fetch, no chunk, no embed.

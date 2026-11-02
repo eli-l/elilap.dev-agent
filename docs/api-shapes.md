@@ -12,7 +12,8 @@ tags: [api, capture, phase-0, schema]
 # API shapes
 
 Populated in Phase 0 from live `postiz posts:list` and Ghost
-`/ghost/api/admin/posts/` responses.
+`/ghost/api/*/posts/` responses. The Ghost capture is now real and lives in
+[Ghost API shape (live capture)](/ghost.md); Postiz remains a placeholder.
 
 Goal: capture the **actual** response shape from each upstream
 (not as their docs claim, but as we observe), so the schema
@@ -20,7 +21,7 @@ in `migrations/0001_init.sql` is honest.
 
 Sections:
 
-- [Ghost Admin API shape (live capture)](/ghost.md) — populated after Phase 0 capture.
+- [Ghost API shape (live capture)](/ghost.md) — populated; Content/Admin key shapes, filters, pagination, and the uuid-vs-id fetch detail.
 - [Postiz API shape (live capture)](/postiz.md) — populated after Phase 0 capture.
 
 Until these exist, the `migrations/0001_init.sql` schema is
