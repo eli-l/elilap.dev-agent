@@ -205,6 +205,9 @@ func (s *Store) RemoveItem(sourceID string, it LedgerItem) error {
 			return fmt.Errorf("delete fts row %s: %w", id, err)
 		}
 	}
+	if err := clearItemVectors(tx, ids); err != nil {
+		return err
+	}
 	for _, kind := range []string{"ghost_post", "postiz_post"} {
 		if _, err := tx.Exec(`DELETE FROM chunks WHERE source_kind = ? AND source_id = ?`,
 			kind, it.ItemID); err != nil {

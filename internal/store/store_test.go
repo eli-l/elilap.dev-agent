@@ -182,3 +182,69 @@ func TestSetSourceStateWatermark(t *testing.T) {
 		t.Errorf("LastRunAt = %v; want %v", got, now)
 	}
 }
+
+func TestRemoveItemClearsVectors(t *testing.T) {
+	s := newTestStore(t)
+	k := store.ItemKey{Kind: "ghost_post", ID: "uuid-1"}
+	if _, _, err := s.ReplaceItemChunks(k, []store.Chunk{testChunk("c1")}); err != nil {
+		t.Fatalf("replace: %v", err)
+	}
+	now := time.Date(2026, 11, 2, 12, 0, 0, 0, time.UTC)
+	if _, _, err := s.WriteEmbeddings([]store.ChunkEmbedding{
+		{ChunkID: "c1", ContentHash: "hash-c1", Vector: make([]float32, store.EmbeddingDims)},
+	}, "localai:test/text-v1", now); err != nil {
+		t.Fatalf("write embeddings: %v", err)
+	}
+	if c, _ := s.Stats(); c.VecRows != 1 {
+		t.Fatalf("vec rows = %d, want 1 before removal", c.VecRows)
+	}
+
+	// RemoveItem is the drift-deletion path ingest uses; it must drop the
+	// vector with the chunk row or KNN returns an unjoinable id.
+	if err := s.RemoveItem("ghost", store.LedgerItem{ItemID: "uuid-1"}); err != nil {
+		t.Fatalf("remove item: %v", err)
+	}
+	c, err := s.Stats()
+	if err != nil {
+		t.Fatalf("stats: %v", err)
+	}
+	if c.Chunks != 0 || c.FTSRows != 0 || c.VecRows != 0 {
+		t.Errorf("stats after removal = %+v, want chunks/fts/vec all zero", c)
+	}
+}
+
+func TestWriteEmbeddingsRejectsStaleContentHash(t *testing.T) {
+	s := newTestStore(t)
+	k := store.ItemKey{Kind: "ghost_post", ID: "uuid-1"}
+	if _, _, err := s.ReplaceItemChunks(k, []store.Chunk{testChunk("c1")}); err != nil {
+		t.Fatalf("replace: %v", err)
+	}
+	vec := make([]float32, store.EmbeddingDims)
+	tag := "localai:test/text-v1"
+	now := time.Date(2026, 11, 2, 12, 0, 0, 0, time.UTC)
+
+	// A vector computed from the pre-rewrite body must not be stamped as
+	// current: the positional chunk_id survives an item rewrite.
+	written, skipped, err := s.WriteEmbeddings([]store.ChunkEmbedding{
+		{ChunkID: "c1", ContentHash: "stale-hash", Vector: vec},
+	}, tag, now)
+	if err != nil {
+		t.Fatalf("write stale: %v", err)
+	}
+	if written != 0 || skipped != 1 {
+		t.Errorf("stale write = %d written, %d skipped; want 0, 1", written, skipped)
+	}
+	if c, err := s.Stats(); err != nil || c.VecRows != 0 || c.Embedded != 0 {
+		t.Fatalf("stats after stale write = %+v (err %v); want no vector and no stamp", c, err)
+	}
+
+	written, skipped, err = s.WriteEmbeddings([]store.ChunkEmbedding{
+		{ChunkID: "c1", ContentHash: "hash-c1", Vector: vec},
+	}, tag, now)
+	if err != nil {
+		t.Fatalf("write current: %v", err)
+	}
+	if written != 1 || skipped != 0 {
+		t.Errorf("current write = %d written, %d skipped; want 1, 0", written, skipped)
+	}
+}

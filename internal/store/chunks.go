@@ -129,6 +129,14 @@ FROM chunks WHERE source_kind = ? AND source_id = ?`, item.Kind, item.ID)
 			return 0, 0, fmt.Errorf("delete stale fts row: %w", err)
 		}
 	}
+	// Vectors go with the chunk rows: a rewritten chunk (even one whose id
+	// survives) is re-embedded later, and a dropped chunk must not leave a
+	// vec row that KNN can return but nothing can join to.
+	for id := range old {
+		if _, err := tx.Exec(`DELETE FROM chunks_vec WHERE chunk_id = ?`, id); err != nil {
+			return 0, 0, fmt.Errorf("delete stale vector row: %w", err)
+		}
+	}
 	if _, err := tx.Exec(`DELETE FROM chunks WHERE source_kind = ? AND source_id = ?`,
 		item.Kind, item.ID); err != nil {
 		return 0, 0, fmt.Errorf("delete stale chunk rows: %w", err)
@@ -228,6 +236,9 @@ func (s *Store) DeleteItem(item ItemKey) error {
 		if _, err := tx.Exec(`DELETE FROM chunks_fts WHERE chunk_id = ?`, id); err != nil {
 			return fmt.Errorf("delete fts row %s: %w", id, err)
 		}
+	}
+	if err := clearItemVectors(tx, ids); err != nil {
+		return err
 	}
 	if _, err := tx.Exec(`DELETE FROM chunks WHERE source_kind = ? AND source_id = ?`,
 		item.Kind, item.ID); err != nil {

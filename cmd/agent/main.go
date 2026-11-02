@@ -77,9 +77,11 @@ func run(args []string, stdout, stderr io.Writer) int {
 		code = runSources(args[1:], stdout, stderr)
 	case "ingest":
 		code = runIngest(args[1:], rtCfg.DBPath, stdout, stderr)
+	case "embed":
+		code = runEmbed(args[1:], rtCfg, stdout, stderr)
 	case "stats":
 		code = runStats(args[1:], rtCfg.DBPath, stdout, stderr)
-	case "embed", "query", "serve":
+	case "query", "serve":
 		// Placeholders until the remaining Phase 1/2 commands land.
 		log.Warn().Str("command", args[0]).Msg("not implemented")
 		fmt.Fprintf(stdout, "%s: not implemented\n", args[0])

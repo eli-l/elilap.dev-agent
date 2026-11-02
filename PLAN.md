@@ -90,6 +90,7 @@ original schema.
 | 14 | Ingest modes | Default = incremental against a state ledger (`source_state` + `source_items`); `--full` = re-fetch + re-chunk + **re-embed** (decided 2026-10-23) | On a full reindex the index is rebuilt exactly as the sources stand today, and the corpus is small enough (≤1,500 chunks) that the CPU cost is acceptable |
 | 15 | Agent locus | The agent loop lives **in this service** (decided 2026-10-27): one tool-calling loop over the OpenAI-compatible chat model, one internal tool `search_writing` bound to `internal/retrieval`, bounded iterations, citation-or-refusal | A2A peers ask; we answer grounded from the corpus — "generation is the caller's problem" is rescoped: the caller is remote, the loop is ours |
 | 16 | A2A surface | A2A v0.3 JSON-RPC (`message/send`, agent card at `/.well-known/agent.json`) exposing the **agent**, plus a plain `POST /v1/retrieve` for deterministic search clients; bearer-token, read-only, local-bind default. Dev build (2026-10-27): Phase 2 ships the same two paths token-less on loopback (`agent serve`), before any A2A work | Peers get answers, not bare search results; streaming and task resumability stay out until a peer actually needs them |
+| 17 | Embedding pass | **Separate resumable command after ingest** (decided 2026-11-02): `agent embed` pages over pending chunks, batches `/v1/embeddings`, and stamps `embedded_with = localai:<model>/text-v1`; `--full` re-embeds the corpus. Ingest never calls the model host | Keeps upstream sync independent of model availability, makes an interrupted run resume at the first unembedded chunk, and turns a model/template change into an explicit invalidation instead of a hidden side effect |
 
 ### 1.5 Verified environment (audited 2026-10-21; Go floor re-verified 2026-10-23)
 
@@ -508,9 +509,13 @@ intentionally a separate command.
 - [ ] `agent stats`: chunk counts, last-ingest timestamp, drift report.
 - [ ] Source-aware chunker rules (table below).
 - [ ] Idempotency on `chunk_id` + content hash.
-- [ ] `agent embed`: separate command, LocalAI default via the connector
+- [x] `agent embed`: separate command, LocalAI default via the connector
       (any OpenAI-compatible base URL works); batch + resume (skip rows
-      where `embedded_with` is current).
+      where `embedded_with` is current; a missing `chunks_vec` row is also
+      pending), `--full` re-embed, and `--progress` (one overwriting stderr
+      line: processed/total, in-flight batch, elapsed, rate, ETA).
+      **Done 2026-11-02** (886 chunks, 12 batches, resumed after an
+      interrupted run).
 - [ ] `docs/runbook.md` starter: "verifying ingestion is correct."
 - [ ] End-of-phase commit + push.
 
@@ -864,8 +869,9 @@ rate limits).
 1. Should `postiz:status='scheduled'` posts that are *past* their publish
    time be indexed, or only those the API now reports `published`?
    **Default**: skip until status flips to `published`.
-2. Should `agent embed` also embed `meta_json`-only fields (tags, titles
-   without body)? **Default**: no; tags appear in FTS5 path.
+2. ~~Should `agent embed` also embed `meta_json`-only fields?~~ —
+   **decided 2026-11-02**: the embed text is title + section + body
+   (`embed.EmbedText`, `TextVersion`); tags stay on the FTS5 path only.
 3. Phase 4 token storage: env-only (simplest) vs. a `0600` token file.
    **Default**: env-driven pairs; decide when Phase 4 starts, not before.
 4. ~~Default LocalAI chat model~~ — **decided 2026-10-23**: `spark-x2.5-4b`
