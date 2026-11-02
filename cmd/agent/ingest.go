@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -99,7 +100,7 @@ func runIngest(args []string, dbPath string, stdout, stderr io.Writer) int {
 	runner := &ingest.Runner{Store: st, Registry: registry}
 	results, runErr := runner.Run(ctx, selected, opts)
 
-	printIngestResults(stdout, results, *dryRun)
+	printIngestResults(stdout, results, *dryRun, logging.Format())
 	log := logging.Main()
 	if runErr != nil {
 		log.Error().Err(runErr).Msg("ingest finished with errors")
@@ -125,9 +126,50 @@ func openIngestStore(dbPath, migrationsDir string, dryRun bool) (*store.Store, e
 	return store.Open(dbPath, migrationsDir)
 }
 
-// printIngestResults writes the per-source summary to stdout.
-func printIngestResults(w io.Writer, results []ingest.Result, dryRun bool) {
+// printIngestResults writes the per-source summary to stdout in the
+// configured output format: one text line per source, or one JSON object per
+// source (JSONL) when the format is json, so `agent ingest | jq` parses
+// cleanly without a second format flag. Logs stay on stderr.
+//
+// "listed" is what the provider returned for the window; "indexed" is how many
+// of those were actually fetched and written, so a near-no-op rerun reads
+// "listed 2, indexed 0" instead of claiming it indexed two items. Labelling
+// the candidate count "indexed" made every no-op rerun look like a small
+// import.
+func printIngestResults(w io.Writer, results []ingest.Result, dryRun bool, format string) {
+	enc := json.NewEncoder(w)
 	for _, r := range results {
+		toIndex, toRemove := splitPlan(r.Planned)
+		if format == logging.FormatJSON {
+			report := ingestReport{
+				SourceID:      r.SourceID,
+				SourceKind:    r.Kind,
+				Listed:        r.Listed,
+				Indexed:       r.Fetched,
+				Unchanged:     r.Unchanged,
+				ChunksAdded:   r.Added,
+				ChunksUpdated: r.Updated,
+				Removed:       r.Removed,
+				DryRun:        dryRun,
+			}
+			if dryRun {
+				// Result.Planned is filled on every run, but only a dry run
+				// reports it: a real run's line must not carry the whole
+				// listing, and a consumer must not read a plan that already
+				// happened.
+				report.Planned = toIndex
+				report.PlannedRemovals = toRemove
+			}
+			if !r.Since.IsZero() {
+				since := r.Since.UTC().Format(time.RFC3339)
+				report.Since = &since
+			}
+			// A failed write to stdout is not actionable at this point; the
+			// exit code already reflects the run.
+			_ = enc.Encode(report)
+			continue
+		}
+
 		since := "all"
 		if !r.Since.IsZero() {
 			since = r.Since.Format(time.RFC3339)
@@ -135,21 +177,46 @@ func printIngestResults(w io.Writer, results []ingest.Result, dryRun bool) {
 		if dryRun {
 			// The run returned before writing, so Fetched/Added/Removed are
 			// zero; the plan itself is the only source of truth here.
-			toIndex, toRemove := 0, 0
-			for _, id := range r.Planned {
-				if strings.HasPrefix(id, "-") {
-					toRemove++
-				} else {
-					toIndex++
-				}
-			}
-			fmt.Fprintf(w, "%s: would index %d item(s) since %s, remove %d\n", r.SourceID, toIndex, since, toRemove)
+			fmt.Fprintf(w, "%s: would index %d of %d listed item(s) since %s, remove %d\n",
+				r.SourceID, len(toIndex), r.Listed, since, len(toRemove))
 			for _, id := range r.Planned {
 				fmt.Fprintf(w, "  %s\n", id)
 			}
 			continue
 		}
-		fmt.Fprintf(w, "%s: indexed %d item(s) since %s: fetched %d, chunks +%d/~%d, removed %d\n",
-			r.SourceID, r.Listed, since, r.Fetched, r.Added, r.Updated, r.Removed)
+		fmt.Fprintf(w, "%s: since %s: listed %d, indexed %d, unchanged %d, chunks +%d/~%d, removed %d\n",
+			r.SourceID, since, r.Listed, r.Fetched, r.Unchanged, r.Added, r.Updated, r.Removed)
 	}
+}
+
+// ingestReport is the machine-readable form of one source's run. It is
+// emitted as a single JSON line per source when the output format is json;
+// `since` is null for an unbounded listing, and the planned arrays are only
+// populated for a dry run.
+type ingestReport struct {
+	SourceID        string   `json:"source_id"`
+	SourceKind      string   `json:"source_kind"`
+	Since           *string  `json:"since"`
+	Listed          int      `json:"listed"`
+	Indexed         int      `json:"indexed"`
+	Unchanged       int      `json:"unchanged"`
+	ChunksAdded     int      `json:"chunks_added"`
+	ChunksUpdated   int      `json:"chunks_updated"`
+	Removed         int      `json:"removed"`
+	DryRun          bool     `json:"dry_run"`
+	Planned         []string `json:"planned,omitempty"`
+	PlannedRemovals []string `json:"planned_removals,omitempty"`
+}
+
+// splitPlan separates the planned item ids into fetches and removals. The
+// removal marker ("-<id>") is a display convention of Result.Planned.
+func splitPlan(planned []string) (index, remove []string) {
+	for _, id := range planned {
+		if after, ok := strings.CutPrefix(id, "-"); ok {
+			remove = append(remove, after)
+			continue
+		}
+		index = append(index, id)
+	}
+	return index, remove
 }

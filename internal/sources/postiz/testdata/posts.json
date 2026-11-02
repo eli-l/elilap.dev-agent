@@ -1,0 +1,124 @@
+{
+  "posts": [
+    {
+      "id": "cmbl13bfo000gnx5ijv2b17eu",
+      "content": "That’s crazy how I first went for hunting each comma, dash and semicolon. And now with AI we are getting back to creative, emotional and imaginary language. ",
+      "publishDate": "2025-06-06T16:37:00.000Z",
+      "releaseURL": "https://www.linkedin.com/feed/update/urn:li:share:7336793331315740676",
+      "releaseId": "urn:li:share:7336793331315740676",
+      "state": "PUBLISHED",
+      "error": null,
+      "intervalInDays": null,
+      "group": "29a98331-5d70-4112-811d-050c3532198b",
+      "creationMethod": "UNKNOWN",
+      "settings": "{}",
+      "tags": [],
+      "integration": {
+        "id": "cm87r52mq0001m3mdapjay7r0",
+        "providerIdentifier": "linkedin",
+        "name": "Ilja Lapkovsky",
+        "picture": "https://postiz.mist.lv/uploads/2026/09/28/c572e6310a3406f1242132c0b6a50d34c.jpg"
+      }
+    },
+    {
+      "id": "cmcf8xhds0012nx5i70ynwyln",
+      "content": "After a week of AI-buzz around me I finally sat down and spent a couple of hours building software.\n\nBefore I could get coding I had to update and install a bunch of tools, fix configs for other tools, read some of my previous notes to get back to the context.\n\nAnd then yes, magically Claude Code wrote a small module within 10 minutes. And it worked! It's not a surprise anymore.\n\nBut I felt emptiness, like there is something I'm missing. The thing is the code I would write stays in my memory pretty sharp for a noticeable time. This always allowed me to get back with some improvements, experiment with other solutions or even get back after time with more appropriate solution I have learned about.\nThis was the thing that made me different. \n\nAnd it was never about the code - it was about the part of the system, how it works. \nAnd the best question was always: \"How does it work?\"\n\nSo after AI wrote some code that I have doubts about - it took me at least 3x the time to read it and I was using ChatGPT for asking all the same question: \"how does it work?\" ending up... in a Playground (yeah, writing Swift and NodeJS these days).\n\nAI may fail, may shut down, may become unavailable. You may not have powerful enough machine to run it on your own (agentic AI is not running on self-hosted models). \nSo use it to become a better human - not a glue between the machines.",
+      "publishDate": "2025-06-27T20:09:00.000Z",
+      "releaseURL": "https://www.linkedin.com/feed/update/urn:li:share:7344456950408970240",
+      "releaseId": "urn:li:share:7344456950408970240",
+      "state": "PUBLISHED",
+      "error": null,
+      "intervalInDays": null,
+      "group": "0c4c7902-2c20-4e4c-b11b-f35812126577",
+      "creationMethod": "UNKNOWN",
+      "settings": "{\"plug--linkedin-repost-post-users--integrations\":[]}",
+      "tags": [],
+      "integration": {
+        "id": "cm87r52mq0001m3mdapjay7r0",
+        "providerIdentifier": "linkedin",
+        "name": "Ilja Lapkovsky",
+        "picture": "https://postiz.mist.lv/uploads/2026/09/28/c572e6310a3406f1242132c0b6a50d34c.jpg"
+      }
+    },
+    {
+      "id": "cm86ak4ji0003yic5nyjlpme6",
+      "content": "This was quite an effort to setup self-hosted postiz, but now I hope it works, at least.",
+      "publishDate": "2025-03-12T19:06:00.000Z",
+      "releaseURL": "https://twitter.com/theEliLap/status/1899899900881514918",
+      "releaseId": "1899899900881514918",
+      "state": "PUBLISHED",
+      "error": null,
+      "intervalInDays": null,
+      "group": "456186f8-9a67-48df-9c53-ddc0d78104a0",
+      "creationMethod": "UNKNOWN",
+      "settings": "{}",
+      "tags": [],
+      "integration": {
+        "id": "cm86ac3ea0001yic5coo7n5ru",
+        "providerIdentifier": "x",
+        "name": "Eli Lap",
+        "picture": "https://postiz.mist.lv/uploads/2026/03/24/133536ebe993d597a411cdc7a91b3fac.jpeg"
+      }
+    },
+    {
+      "id": "cmcf9uf3n0002xa903ow1iob1",
+      "content": "Just connected my Postiz instance via MCP - pretty cool being able to manage social media scheduling programmatically! 🚀 Big thanks to the @getpostiz team for building such a solid platform. #MCP #SocialMediaAutomation",
+      "publishDate": "2025-06-27T20:30:00.000Z",
+      "releaseURL": null,
+      "releaseId": null,
+      "state": "QUEUE",
+      "error": null,
+      "intervalInDays": null,
+      "group": "d02f22c6-30f8-4230-bf07-18a2e57fe8cb",
+      "creationMethod": "UNKNOWN",
+      "settings": "{}",
+      "tags": [],
+      "integration": {
+        "id": "cm866hm190007rkm6stkugtgn",
+        "providerIdentifier": "bluesky",
+        "name": "Eli Lap",
+        "picture": "https://postiz.mist.lv/uploads/2025/03/12/3dce103417c6cc604b2d127d45cb5db4f.jpeg"
+      }
+    },
+    {
+      "id": "cmu5fa7aa002rmk7q5zm0kqk7",
+      "content": "Sparx is live: a 24/7 OpenClaw local agent on the cheapest PC I could justify (RTX 2070, i7-4770, 16 GB RAM). Spark-X2.5-4B + nomic-embed on LocalAI. No API. No cancellation.",
+      "publishDate": "2026-09-18T12:00:00.000Z",
+      "releaseURL": null,
+      "releaseId": null,
+      "state": "DRAFT",
+      "error": null,
+      "intervalInDays": null,
+      "group": "cab4a52c-7b84-4e60-9d02-6994f63eae75",
+      "creationMethod": "API",
+      "settings": "{\"__type\":\"bluesky\"}",
+      "tags": [],
+      "integration": {
+        "id": "cm866hm190007rkm6stkugtgn",
+        "providerIdentifier": "bluesky",
+        "name": "Eli Lap",
+        "picture": "https://postiz.mist.lv/uploads/2025/03/12/3dce103417c6cc604b2d127d45cb5db4f.jpeg"
+      }
+    },
+    {
+      "id": "cm93y7e5y0000nx5c0crsqw36",
+      "content": "When it feels like there's no way out, remember that every challenge is an opportunity for growth. Even weekends are tempting to feel the freedom and live the life of the dream - it won't become permanent, unless there is conscious work done during these periods. Keep building!",
+      "publishDate": "2025-04-05T11:10:00.000Z",
+      "releaseURL": null,
+      "releaseId": null,
+      "state": "ERROR",
+      "error": null,
+      "intervalInDays": null,
+      "group": "9db56e0e-9ea6-4188-84e1-05538602de5f",
+      "creationMethod": "UNKNOWN",
+      "settings": "{}",
+      "tags": [],
+      "integration": {
+        "id": "cm866hm190007rkm6stkugtgn",
+        "providerIdentifier": "bluesky",
+        "name": "Eli Lap",
+        "picture": "https://postiz.mist.lv/uploads/2025/03/12/3dce103417c6cc604b2d127d45cb5db4f.jpeg"
+      }
+    }
+  ]
+}

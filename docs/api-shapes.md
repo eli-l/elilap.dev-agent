@@ -1,28 +1,32 @@
 ---
 type: Reference
 title: API shapes
-description: Index of captured upstream API response shapes (Ghost, Postiz) that migrations/0001_init.sql must stay honest to.
-status: draft
+description: Index of captured upstream API response shapes (Ghost, Postiz) that migrations/0001_init.sql and the provider packages must stay honest to.
+status: stable
 generated:
   by: z-ai/glm-5.3-flashx
-  at: 2026-10-21T21:34:39Z
+  at: 2026-11-02T20:15:00Z
 tags: [api, capture, phase-0, schema]
 ---
 
 # API shapes
 
-Populated in Phase 0 from live `postiz posts:list` and Ghost
-`/ghost/api/*/posts/` responses. The Ghost capture is now real and lives in
-[Ghost API shape (live capture)](/ghost.md); Postiz remains a placeholder.
-
-Goal: capture the **actual** response shape from each upstream
-(not as their docs claim, but as we observe), so the schema
-in `migrations/0001_init.sql` is honest.
+Both captures are real. Each one records what the upstream actually
+returned, not what its documentation claims, so `migrations/0001_init.sql`
+and the provider packages stay honest to observed data.
 
 Sections:
 
-- [Ghost API shape (live capture)](/ghost.md) — populated; Content/Admin key shapes, filters, pagination, and the uuid-vs-id fetch detail.
-- [Postiz API shape (live capture)](/postiz.md) — populated after Phase 0 capture.
+- [Ghost API shape (live capture)](/ghost.md) — Content/Admin key shapes,
+  `updated_at` filters, the 100-post page cap, and the uuid-versus-id fetch
+  detail.
+- [Postiz API shape (live capture)](/postiz.md) — the required date-range
+  listing, no pagination and no read-by-id, one record per platform copy,
+  and the post states that decide what gets indexed.
 
-Until these exist, the `migrations/0001_init.sql` schema is
-based on best-effort inference, not verified data.
+Fixtures replayed by the provider tests:
+
+- Ghost: inline capture-shaped JSON in `internal/sources/ghost/provider_test.go`
+  (no testdata directory).
+- Postiz: `internal/sources/postiz/testdata/posts.json` — a trimmed Postiz
+  capture covering published, scheduled, draft, and failed records.

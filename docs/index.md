@@ -4,9 +4,9 @@ okf_version: "0.2"
 
 # Docs
 
-* [API shapes](api-shapes.md) - Index of captured upstream API response shapes (Ghost, Postiz) that migrations/0001_init.sql must stay honest to.
+* [API shapes](api-shapes.md) - Index of captured upstream API response shapes (Ghost, Postiz) that migrations/0001_init.sql and the provider packages must stay honest to.
 * [Ghost API shape (live capture)](ghost.md) - Observed Ghost Content/Admin post shapes, key formats, incremental filters, pagination, and the uuid-versus-id fetch detail behind the importer.
-* [Postiz API shape (live capture)](postiz.md) - Placeholder for the captured Postiz posts response; the honest schema source for migrations/0001_init.sql once Phase 0 lands.
+* [Postiz API shape (live capture)](postiz.md) - The observed Postiz public-API listing: required date range, no pagination, no read-by-id, one record per platform copy, post states, and the provider's item/chunk mapping.
 * [Self-hosted LocalAI endpoint](localai.md) - Verified facts about the LocalAI instance at http://192.168.78.243:8080: version, model ids, embedding dimensions, and chat behaviour.
 * [Import configuration and provider contract](sources-config.md) - The sources.yaml schema and chunking validation, credential warnings and strict mode, item identity, the Provider interface, the incremental/full ingest ledger, and the CLI surface for enabling, disabling, and reconfiguring providers.
 * [Environment configuration and .env loading](environment.md) - The environment layer: godotenv loading .env at startup, real-environment precedence, the envconfig structs behind every static setting, the full variable inventory with defaults, the example.env rule for new variables, and the dynamic credential lookup for sources.yaml.
@@ -15,6 +15,7 @@ okf_version: "0.2"
 
 # Runs
 
+* [Postiz full-corpus ingest](runs/ingest-postiz-2026-11-02.md) - First live Postiz public-API ingest: 1,710 posts listed, 280 LinkedIn cross-posts indexed into 298 chunks, and an idempotent incremental rerun.
 * [Ghost full-corpus ingest (clean rebuild)](runs/ingest-ghost-full-2026-11-02.md) - A deleted index was rebuilt from the Content API: 126 posts, 588 chunks and FTS rows, and a near-no-op incremental rerun.
 * [Ghost windowed ingest (last week)](runs/ingest-ghost-2026-11-02.md) - First live Ghost Content API ingest; two posts, 17 chunks and FTS rows, idempotent rerun.
 * [Source config review verification](runs/source-config-review-2026-10-25.md) - Offline build, vet, tests, credential probes, and schema/documentation checks.

@@ -16,9 +16,7 @@ func RegisterBuiltins(r *Registry) error {
 		constructor Constructor
 	}{
 		{typeName: "ghost", parser: ghost.ParseOptions, constructor: ghost.NewFromSource},
-		// Postiz has options but no client yet; ingest reports it as not
-		// implemented instead of pretending to import it.
-		{typeName: "postiz", parser: postiz.ParseOptions},
+		{typeName: "postiz", parser: postiz.ParseOptions, constructor: postiz.NewFromSource},
 	}
 	for _, b := range builtins {
 		if err := r.Register(b.typeName, b.parser); err != nil {

@@ -410,15 +410,19 @@ actual response shapes before writing any schema.
 - [ ] Obtain **both** credentials (Postiz and Ghost) — neither exists on
       this host today. They enter via env / `.env` only; we will not echo,
       log, or commit them.
-- [ ] Confirm `POSTIZ_API_KEY` works against `https://postiz.mist.lv/api`
+- [x] Confirm `POSTIZ_API_KEY` works against `https://postiz.mist.lv/api`
       using `curl` (no `postiz` CLI on this host). Capture the real
       `/posts` (or equivalent) response shape: post id, content text,
       integrations (per-platform), status, publish date, media, release id.
-- [ ] Write the captured Postiz response shape into `docs/postiz.md`.
+      **Done 2026-11-02**: the public listing is
+      `GET /api/public/v1/posts` and **requires** `startDate`/`endDate`;
+      `page`/`limit` are ignored, there is no read-by-id endpoint, and one
+      record exists per platform copy.
+- [x] Write the captured Postiz response shape into `docs/postiz.md`.
 - [ ] Confirm `GHOST_API_URL` + `GHOST_API_KEY` work; one full post JSON
       captured for schema reference (with `html`, `plaintext`,
       `published_at`, `updated_at`, tags) into `docs/ghost.md`.
-- [ ] Update `docs/api-shapes.md` to link both captures as the honest source.
+- [x] Update `docs/api-shapes.md` to link both captures as the honest source.
 
 **Exit criteria**
 
@@ -494,9 +498,11 @@ intentionally a separate command.
 - [ ] Store layer: migration runner that loads the sqlite-vec extension
       *before* applying `0001_init.sql` (the `vec0` DDL fails without it).
       `scripts/check-ddl.py` stays green as the schema evolves.
-- [ ] Source clients (`internal/sources/ghost`, `postiz`) + shared chunker;
+- [x] Source clients (`internal/sources/ghost`, `postiz`) + shared chunker;
       unit tests against captured fixture JSON from Phase 0, so chunker
       logic is testable without live credentials.
+      **Postiz done 2026-11-02** (listing cache, platform/state filters,
+      320-token chunking); Ghost landed earlier.
 - [ ] `agent ingest`: walks both sources, normalizes, chunks, writes
       chunks + FTS rows in one transaction.
 - [ ] `agent stats`: chunk counts, last-ingest timestamp, drift report.
@@ -829,7 +835,7 @@ rate limits).
 | Risk | Likelihood | Impact | Mitigation |
 |---|---|---|---|
 | Credentials missing entirely (verified 2026-10-21) | Certain today | Phase 0+ blocked | Keys are the one human blocker; Phase 1 store/chunker work can start in parallel against fixtures |
-| Postiz response shape differs from docs | Medium | Phase 1 schema rework | Phase 0 captures real shape first |
+| Postiz response shape differs from docs | Fixed | Phase 1 schema rework | Captured live 2026-11-02; the real shape (no pagination, no read-by-id, one record per platform copy) is in `docs/postiz.md` and the schema needed no change |
 | Ghost response shape differs from expectations | Low | Same as above | Phase 0 captures one real post |
 | sqlite-vec CGO build trouble on darwin/arm64 | Medium | Build fragility | Phase 1 driver spike decides mattn vs ncruces before store code lands; pin versions |
 | CGO/sqlite-vec misbehaves inside the container | Medium | Image build breaks | Driver spike must prove `docker compose build` + KNN round-trip in-container before store code lands |

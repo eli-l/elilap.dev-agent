@@ -66,6 +66,14 @@ variables.
 **Streams:** logs always go to stderr. stdout carries only command output, so
 `agent ... | jq` is never polluted.
 
+**Command output follows the same format switch.** `logging.Format()` reports
+the resolved `text`/`json` value, and commands render their stdout summaries
+through it: `agent ingest` prints one text line per source, or one JSON object
+per source (JSONL) when the format is `json`, so a collector parses the run
+summary without a second flag or a second code path. Human-readable data
+output (`agent stats`, `agent sources list`'s YAML) stays as-is; the
+`logs to stderr, output to stdout` split is what keeps the two separable.
+
 **Defaults stay quiet:** `info` is reserved for real milestones (database
 ready, migrations applied, items fetched). Per-page and per-config lines are
 `debug`, so an unflagged CLI run prints only what it printed before logging

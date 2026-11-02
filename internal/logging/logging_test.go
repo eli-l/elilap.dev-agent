@@ -229,3 +229,32 @@ func TestRequestMiddlewareDefaultsTo200(t *testing.T) {
 		t.Fatalf("log lines = %v, want one with status 200", recs)
 	}
 }
+
+func TestFormatReportsTheResolvedEncoding(t *testing.T) {
+	// Before any Setup the package reports the default, so command output
+	// never depends on whether a logger was installed.
+	if got := logging.Format(); got != logging.FormatText {
+		t.Errorf("Format() before Setup = %q, want %q", got, logging.FormatText)
+	}
+
+	for _, tc := range []struct {
+		config string
+		want   string
+	}{
+		{config: "json", want: logging.FormatJSON},
+		{config: "JSON", want: logging.FormatJSON},
+		{config: "text", want: logging.FormatText},
+		{config: "", want: logging.FormatText},
+	} {
+		t.Run(tc.config, func(t *testing.T) {
+			buf := setup(t, logging.Config{Level: "info", Format: tc.config})
+			if got := logging.Format(); got != tc.want {
+				t.Errorf("Format() = %q, want %q", got, tc.want)
+			}
+			logging.Reset()
+			if buf.Len() != 0 {
+				t.Errorf("Setup wrote %q, want silence before any log call", buf.String())
+			}
+		})
+	}
+}

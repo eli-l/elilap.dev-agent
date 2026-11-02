@@ -63,6 +63,14 @@ const (
 	DefaultFormat = "text"
 )
 
+// Format names accepted by Config.Format and reported by Format.
+const (
+	// FormatText is human-readable console output (the default).
+	FormatText = DefaultFormat
+	// FormatJSON is one JSON record per line.
+	FormatJSON = "json"
+)
+
 // Config is the resolved logging configuration. Values come from the
 // environment through envconfig (see ConfigFromEnv); the Default* constants
 // are what an unset or empty variable yields.
@@ -93,6 +101,10 @@ var (
 	// child holds the module loggers; empty (all lookups fall back to a
 	// no-op logger) until Setup runs.
 	child = map[string]zerolog.Logger{}
+	// format is the resolved output format ("text" or "json"). Command
+	// output follows it too, so a JSON run never mixes a human line into a
+	// stream a collector is parsing.
+	format = DefaultFormat
 )
 
 // Setup installs the root logger writing to out and rebuilds every module
@@ -119,6 +131,7 @@ func Setup(cfg Config, out io.Writer) error {
 
 	mu.Lock()
 	child = next
+	format = normalizeFormat(cfg.Format)
 	mu.Unlock()
 	return nil
 }
@@ -128,7 +141,27 @@ func Setup(cfg Config, out io.Writer) error {
 func Reset() {
 	mu.Lock()
 	child = map[string]zerolog.Logger{}
+	format = DefaultFormat
 	mu.Unlock()
+}
+
+// Format returns the resolved output format: "text" or "json". Command
+// output renders through it so `agent ingest | jq` works under
+// AGENT_LOG_FORMAT=json without a second format flag. Before Setup it is
+// DefaultFormat.
+func Format() string {
+	mu.RLock()
+	defer mu.RUnlock()
+	return format
+}
+
+// normalizeFormat lower-cases a format name, mapping empty to the default.
+func normalizeFormat(name string) string {
+	name = strings.ToLower(strings.TrimSpace(name))
+	if name == "" {
+		return DefaultFormat
+	}
+	return name
 }
 
 // Logger returns the child logger for one module. An unknown module, or any
@@ -170,13 +203,13 @@ func ParseLevel(name string) (zerolog.Level, error) {
 // for text when out is a terminal, plain JSON otherwise.
 func writerFor(format string, out io.Writer) (io.Writer, error) {
 	switch strings.ToLower(strings.TrimSpace(format)) {
-	case "", "text":
+	case "", FormatText:
 		return zerolog.ConsoleWriter{
 			Out:        out,
 			TimeFormat: time.RFC3339,
 			NoColor:    !isTerminal(out),
 		}, nil
-	case "json":
+	case FormatJSON:
 		return out, nil
 	default:
 		return nil, fmt.Errorf("log format %q: want text or json", format)

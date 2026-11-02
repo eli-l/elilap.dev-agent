@@ -88,8 +88,10 @@ type Provider interface {
 `List` is cheap, `Fetch` is expensive - that split is what makes an
 incremental run cheap. A registry maps the config `type` to an options
 parser and a constructor; an unknown `type` or invalid options is a startup
-error. A type may have options but no constructor yet (Postiz today): ingest
-reports it as not implemented instead of silently importing nothing.
+error. A type may have options but no constructor yet (a provider whose
+client has not landed): ingest reports it as not implemented instead of
+silently importing nothing. Both built-ins, `ghost` and `postiz`, are
+implemented.
 
 The Ghost provider accepts both credential shapes: an Admin key
 (`<id>:<secret>`) uses the JWT-authenticated Admin API, while a bare key uses
@@ -104,7 +106,25 @@ Both clients share `shared.NewHTTPClient`: a 60-second per-request timeout
 and a retry transport for network errors and `408`/`429`/`5xx` (three total
 attempts, exponential backoff, `Retry-After` honored, cancelled contexts
 stop immediately). Retries live in the transport, so every provider gets the
-same behavior without touching its request code.
+same behavior without touching its request code. Credential `{ env: VAR }`
+references are resolved through `shared.ResolveEnvRef`, which names a missing
+variable in its error and never prints a value.
+
+The Postiz provider reads `GET <instance>/api/public/v1/posts`, which
+**requires** a `startDate`/`endDate` window and returns every post in it: no
+pagination, and no read-by-id route. `options.platforms` selects the
+`integration.providerIdentifier` values to import (`linkedin`, `x`,
+`bluesky`, `threads`, `mastodon`, ...; normalized to lower case). Published
+posts are always imported; drafts and failures never are; scheduled (`QUEUE`)
+posts only with `options.include_scheduled`, and only once their publish date
+has passed. Because the API exposes neither an ETag nor a modification time,
+the ledger fingerprint hashes content, state, publish date, and platform,
+`last_modified` carries `publishDate`, and an incremental window is bounded
+by `publishDate` - a post whose publish date is old and whose state changes
+later needs `--full`. `Fetch` serves the post from the listing made in the
+same run, since that is the only place the content exists. Cross-posts chunk
+at 320 tokens with no overlap, independent of the configured defaults. See
+[Postiz API shape](postiz.md) for the captured requests and fields.
 
 ## The ledger
 
@@ -148,7 +168,9 @@ colliding item ids require a namespace/schema decision before support is added.
   disabled for that run; like an incremental run, only a full unbounded
   list may delete drift.
   The bound is applied to `updated_at`, so a post published earlier but
-  edited this week is intentionally re-fetched.
+  edited this week is intentionally re-fetched. Postiz exposes no modified
+  time, so its window is bounded by `publishDate` instead (see the provider
+  notes above).
 
 ## CLI
 
@@ -164,6 +186,27 @@ agent sources list                # enabled/disabled + resolved options (no secr
 agent sources validate            # validate config/options; missing credentials warn
 agent sources validate --strict   # missing credentials fail (exit 1)
 ```
+
+Each run prints one summary line per source, in the configured output format
+(`AGENT_LOG_FORMAT` / `--log-format`):
+
+```
+ghost: since 2026-11-01T20:11:31Z: listed 1, indexed 0, unchanged 1, chunks +0/~0, removed 0
+```
+
+```json
+{"source_id":"ghost","source_kind":"ghost_post","since":"2026-11-01T20:11:31Z","listed":1,"indexed":0,"unchanged":1,"chunks_added":0,"chunks_updated":0,"removed":0,"dry_run":false}
+```
+
+`listed` is what the provider returned for the window (bounded by the
+incremental watermark, `--since`, or unbounded for a first/full run),
+`indexed` is how many of those were actually fetched and written, and
+`unchanged` is the rest - candidates the ledger already knew. An incremental
+rerun on an unchanged corpus therefore reads `listed 2, indexed 0`, not
+"indexed 2": listing is cheap and expected every run, writing is not.
+`--dry-run` prints `would index <n> of <listed>` plus the planned item ids
+and never writes; in JSON it is the same object with `"dry_run": true` and
+`planned` / `planned_removals` arrays.
 
 ## Deferred
 

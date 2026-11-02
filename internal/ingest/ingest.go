@@ -205,7 +205,12 @@ func (r *Runner) runSource(ctx context.Context, src config.Source, opts Options)
 		// the listing window. Only an unbounded list may delete drift.
 		toRemove = nil
 	}
+	// A full run fetches every listed item, so nothing it lists is unchanged;
+	// keeping the ledger-diff count would double-count against Fetched.
 	res.Unchanged = diff.Seen - len(diff.ToFetch)
+	if opts.Full {
+		res.Unchanged = 0
+	}
 
 	now := opts.Now().UTC()
 	runID := shared.NewRunID(src.ID, now)
@@ -285,10 +290,16 @@ func (r *Runner) runSource(ctx context.Context, src config.Source, opts Options)
 	return res, nil
 }
 
+// postizChunkTokens is the per-chunk budget for cross-posts (PLAN.md §3):
+// 320 tokens with no overlap, because one social post is one thought and
+// overlapping would duplicate it across chunks.
+const postizChunkTokens = 320
+
 // BuildChunks turns one fetched document into hash-addressed store chunks.
 // HTML is preferred over plaintext so the chunker can split on real headings;
 // plaintext is the fallback when the upstream sent no HTML.
 func BuildChunks(doc shared.Document, kind, itemID, sourceURL string, cfg shared.ChunkerConfig) ([]store.Chunk, error) {
+	cfg = chunkSizing(kind, cfg)
 	text := doc.Body
 	if doc.HTML != "" {
 		md, err := shared.HTMLToMarkdown(doc.HTML)
@@ -353,6 +364,21 @@ func kindFor(typeName string) (string, error) {
 	default:
 		return "", fmt.Errorf("provider type %q has no source_kind", typeName)
 	}
+}
+
+// chunkSizing applies a source kind's chunking policy (PLAN.md §3) to the
+// configured defaults: cross-posts cap at 320 tokens with no overlap, and a
+// smaller configured target is honored. Every other kind uses the defaults
+// as configured.
+func chunkSizing(kind string, cfg shared.ChunkerConfig) shared.ChunkerConfig {
+	if kind != "postiz_post" {
+		return cfg
+	}
+	if cfg.TargetTokens > postizChunkTokens {
+		cfg.TargetTokens = postizChunkTokens
+	}
+	cfg.OverlapTokens = 0
+	return cfg
 }
 
 // configHash fingerprints the provider options (never credentials) so a

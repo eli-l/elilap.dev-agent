@@ -228,3 +228,73 @@ func TestBuildChunksIDsAndHashes(t *testing.T) {
 		}
 	}
 }
+
+func TestBuildChunksAppliesPerKindSizing(t *testing.T) {
+	// 320 tokens is ~1280 characters; the body sits between the postiz cap
+	// and the configured 400-token default, so it must split under the
+	// cross-post policy and stay whole under the default one.
+	body := strings.Repeat("social cross post sentence ", 55) // ~1485 chars, ~372 tokens
+	doc := shared.Document{
+		Title:       "A cross post",
+		Body:        body,
+		PublishedAt: time.Date(2026, 6, 27, 20, 9, 0, 0, time.UTC),
+		Author:      "Eli",
+		Platform:    "linkedin",
+	}
+	cfg := shared.ChunkerConfig{TargetTokens: 400, OverlapTokens: 60}
+
+	ghostChunks, err := ingest.BuildChunks(doc, "ghost_post", "item-1", "", cfg)
+	if err != nil {
+		t.Fatalf("BuildChunks(ghost_post) error = %v", err)
+	}
+	postizChunks, err := ingest.BuildChunks(doc, "postiz_post", "item-1", "", cfg)
+	if err != nil {
+		t.Fatalf("BuildChunks(postiz_post) error = %v", err)
+	}
+	if len(ghostChunks) != 1 {
+		t.Fatalf("ghost_post produced %d chunks, want the 400-token default to keep it whole", len(ghostChunks))
+	}
+	if len(postizChunks) < 2 {
+		t.Fatalf("postiz_post produced %d chunks, want the 320-token cap to split it", len(postizChunks))
+	}
+	for i, c := range postizChunks {
+		if c.BodyTokens > 320 {
+			t.Errorf("postiz chunk %d has %d tokens, want at most 320", i, c.BodyTokens)
+		}
+		if c.Platform != "linkedin" {
+			t.Errorf("postiz chunk %d platform = %q, want linkedin", i, c.Platform)
+		}
+	}
+}
+
+func TestFullRunReportsNothingUnchanged(t *testing.T) {
+	fp := &fakeProvider{items: []shared.Item{testItem("a")}, docs: map[string]shared.Document{"a": testDoc("A")}}
+	runner, cfg := newRunner(t, fp)
+	opts := testOptions()
+
+	first, err := runner.Run(context.Background(), cfg.Sources, opts)
+	if err != nil {
+		t.Fatalf("first Run() error = %v", err)
+	}
+	if first[0].Fetched != 1 || first[0].Unchanged != 0 {
+		t.Fatalf("first run = fetched %d, unchanged %d; want 1 and 0", first[0].Fetched, first[0].Unchanged)
+	}
+
+	// --full re-fetches every listed item, so "unchanged" must report 0 or it
+	// double-counts items against Fetched (and against the documented
+	// "unchanged is the rest of listed" invariant).
+	opts.Full = true
+	full, err := runner.Run(context.Background(), cfg.Sources, opts)
+	if err != nil {
+		t.Fatalf("full Run() error = %v", err)
+	}
+	if full[0].Fetched != full[0].Listed {
+		t.Errorf("full run fetched %d of %d listed, want every listed item", full[0].Fetched, full[0].Listed)
+	}
+	if full[0].Unchanged != 0 {
+		t.Errorf("full run unchanged = %d, want 0 (nothing listed was skipped)", full[0].Unchanged)
+	}
+	if full[0].Fetched+full[0].Unchanged != full[0].Listed {
+		t.Errorf("fetched %d + unchanged %d != listed %d", full[0].Fetched, full[0].Unchanged, full[0].Listed)
+	}
+}

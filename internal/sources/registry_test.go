@@ -2,6 +2,7 @@ package sources_test
 
 import (
 	"bytes"
+	"net/http"
 	"strings"
 	"testing"
 
@@ -219,18 +220,52 @@ sources:
 
 func TestBuildRequiresConstructor(t *testing.T) {
 	r := sources.NewRegistry()
+	// A declared type whose client has not landed yet is parseable but not
+	// buildable; the registry is the seam that keeps that addition local.
+	if err := r.Register("stub", func(config.Source) (any, error) { return nil, nil }); err != nil {
+		t.Fatalf("Register() error = %v", err)
+	}
+	_, err := r.Build(source(t, "id: stub\ntype: stub\n"), nil, nil)
+	if err == nil {
+		t.Fatal("Build(stub) = nil error, want a not-implemented error")
+	}
+	if !strings.Contains(err.Error(), "no constructor") {
+		t.Errorf("Build(stub) error = %q, want it to mention the missing constructor", err)
+	}
+}
+
+func TestBuildConstructsEveryBuiltin(t *testing.T) {
+	r := sources.NewRegistry()
 	if err := sources.RegisterBuiltins(r); err != nil {
 		t.Fatalf("RegisterBuiltins() error = %v", err)
 	}
-	parsed, err := r.ParseOptions(source(t, "id: postiz\ntype: postiz\noptions: { platforms: [x] }\n"))
+	t.Setenv("AGENT_TEST_POSTIZ_URL", "https://postiz.example.com")
+	t.Setenv("AGENT_TEST_POSTIZ_KEY", "test-key")
+
+	src := source(t, `id: postiz
+type: postiz
+credentials:
+  api_url: { env: AGENT_TEST_POSTIZ_URL }
+  api_key: { env: AGENT_TEST_POSTIZ_KEY }
+options: { platforms: [LinkedIn, x] }
+`)
+	parsed, err := r.ParseOptions(src)
 	if err != nil {
 		t.Fatalf("ParseOptions() error = %v", err)
 	}
-	_, err = r.Build(source(t, "id: postiz\ntype: postiz\noptions: { platforms: [x] }\n"), parsed, nil)
-	if err == nil {
-		t.Fatal("Build(postiz) = nil error, want a not-implemented error")
+	opts, ok := parsed.(*postiz.Options)
+	if !ok {
+		t.Fatalf("options type = %T, want *postiz.Options", parsed)
 	}
-	if !strings.Contains(err.Error(), "no constructor") {
-		t.Errorf("Build(postiz) error = %q, want it to mention the missing constructor", err)
+	if got, want := strings.Join(opts.Platforms, ","), "linkedin,x"; got != want {
+		t.Errorf("platforms = %q, want %q (normalized)", got, want)
+	}
+
+	p, err := r.Build(src, parsed, http.DefaultClient)
+	if err != nil {
+		t.Fatalf("Build(postiz) error = %v", err)
+	}
+	if p.Type() != "postiz" {
+		t.Errorf("Type() = %q, want postiz", p.Type())
 	}
 }
