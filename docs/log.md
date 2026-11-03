@@ -1,5 +1,10 @@
 # Directory Update Log
 
+## 2026-11-03
+
+* **Creation**: Documented the promptfoo red-team suite - the `tests-ai/promptfooconfig.yaml` target on loopback `/v1/ask`, its bias/harmful/PII/agency/hijacking/hallucination/RAG-attribution plugins, `basic` + `jailbreak:meta` strategies, run commands, result-reading caveats, and the separate promptfoo credential requirement. No full run report captured yet. [Red-team evaluation with promptfoo](/red-team.md)
+* **Update**: Added the red-team suite to the runbook and README, and ignored promptfoo's generated `redteam.yaml`/cache artifacts. [Runbook - build, ingest, embed, query, ask, serve](/runbook.md)
+
 ## 2026-11-02
 
 * **Update**: Applied the open-code-review fixes: the citation finalizer ignores 64-hex hashes quoted from retrieved excerpts (no more false refusals), `scripts/ask` runs from the repo root and checks the binary, eval subprocesses are deadline-bounded and the threshold floor is 1, `agent ask`'s HTTP timeout follows `--timeout`, `--top 0` is a usage error, filtered vector search errors above the 4096-row vec0 cap instead of truncating, `DefaultMaxElapsed` matches the documented 90s, and shutdown treats a drain deadline as an expected forced close. [Hybrid retrieval and the /v1/retrieve + agent query surfaces](/retrieval.md)

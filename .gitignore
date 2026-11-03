@@ -27,3 +27,8 @@
 .idea/
 .vscode/
 *.swp
+# Promptfoo red-team artifacts (config lives in tests-ai/)
+/tests-ai/redteam.yaml
+/tests-ai/results.json
+/redteam.yaml
+/.promptfoo/

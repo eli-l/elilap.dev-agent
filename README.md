@@ -91,3 +91,5 @@ json`. See [`docs/logging.md`](./docs/logging.md).
 ## See also
 
 * [`PLAN.md`](./PLAN.md) — full step-by-step build plan with exit criteria.
+* [`docs/runbook.md`](./docs/runbook.md) — build, ingest, query, ask, serve.
+* [`docs/red-team.md`](./docs/red-team.md) — promptfoo red-team suite for `/v1/ask`.

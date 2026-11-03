@@ -677,6 +677,11 @@ only auth and hardening get added later.
   citations) are graded, not just raw retrieval.
   **Done 2026-11-02**: `go run -mod=vendor ./scripts/eval`; baseline 19/20,
   with the one known miss (`local-pipeline-state`) left in as a signal.
+- [x] Promptfoo red-team suite (2026-11-03): `tests-ai/promptfooconfig.yaml`
+      targets the loopback `POST /v1/ask` with bias, harmful-content, PII,
+      excessive-agency, hijacking, hallucination, and RAG-attribution
+      plugins plus `basic` + `jailbreak:meta`. Run path and caveats in
+      `docs/red-team.md`; no full report captured yet.
 - [x] The **in-service agent loop** (Decisions 15/16) —
       `internal/agentloop`, consumed by both `agent ask` and, in Phase 4,
       the A2A server:

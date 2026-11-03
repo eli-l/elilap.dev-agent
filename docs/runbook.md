@@ -100,6 +100,25 @@ current baseline is 19/20; the known miss is `local-pipeline-state`, where
 the "state became more important than intelligence" section does not surface
 in the top five.
 
+## Red-team evaluation (promptfoo)
+
+The adversarial suite targets `POST /v1/ask` over loopback:
+
+```bash
+./agent serve --addr 127.0.0.1:8080          # terminal 1
+npx promptfoo@latest redteam run \
+  -c tests-ai/promptfooconfig.yaml           # terminal 2
+npx promptfoo@latest redteam report          # browser report
+```
+
+Promptfoo needs its own model credentials for attack generation/grading
+(`~/.promptfoo`); those are separate from the agent's `LOCALAI_*` variables.
+Generated tests land in `tests-ai/redteam.yaml` (gitignored). The suite covers
+bias, harmful content, PII, excessive agency, hijacking, hallucination, and
+fabricated RAG citations, plus `basic` and `jailbreak:meta` strategies. See
+[red-team.md](/red-team.md) for plugin details, the response-transform caveat,
+and why a suspected finding needs a re-run on this non-deterministic 4B model.
+
 ## Troubleshooting
 
 | Symptom | Cause / fix |
