@@ -2,6 +2,8 @@
 
 ## 2026-11-03
 
+* **Creation**: Added the Python/Ragas harness in `rag_eval/` to the repository: the demo keyword RAG, the three-question discrete-metric experiment, the endpoint smoke test, and the committed `uv.lock`. Generated datasets, experiment CSVs, trace logs, `.venv/`, and egg-info are gitignored; the three `EVAL_*` variables entered the `example.env` inventory. [RAG evaluation with Ragas (rag_eval)](/rag-eval.md)
+* **Update**: The environment reference now lists `EVAL_BASE_URL`, `EVAL_MODEL`, and `EVAL_API_KEY` as a non-Go inventory checked by an explicit allowlist in `TestExampleEnvIsComplete`, and documents that the harness does not read `.env` itself. [Environment configuration and .env loading](/environment.md)
 * **Creation**: Documented the promptfoo red-team suite - the `tests-ai/promptfooconfig.yaml` target on loopback `/v1/ask`, its bias/harmful/PII/agency/hijacking/hallucination/RAG-attribution plugins, `basic` + `jailbreak:meta` strategies, run commands, result-reading caveats, and the separate promptfoo credential requirement. No full run report captured yet. [Red-team evaluation with promptfoo](/red-team.md)
 * **Update**: Added the red-team suite to the runbook and README, and ignored promptfoo's generated `redteam.yaml`/cache artifacts. [Runbook - build, ingest, embed, query, ask, serve](/runbook.md)
 

@@ -11,6 +11,9 @@ go test -tags sqlite_fts5 ./...  # tests (use fixtures, not live APIs; FTS5 need
 gofmt -l cmd internal migrations   # must print nothing (vendor/ is upstream code, not ours)
 python3 scripts/check-ddl.py    # schema smoke check; Phase 1 deliverable, not in the repo yet
 go run ./cmd/agent sources validate   # strict-parse sources.yaml (no credentials needed)
+cd rag_eval && uv sync           # Python 3.12 venv for the Ragas harness
+cd rag_eval && uv run python test_llm.py   # endpoint smoke test, exit 0 = ok
+cd rag_eval && uv run python evals.py      # Ragas discrete-metric experiment
 ```
 
 Run target: `go build -o agent ./cmd/agent` (the five `cmd/*` stubs collapse into `cmd/agent/` with subcommands `ingest`, `embed`, `query`, `ask`, `stats`, `serve` (`ask` and the dev `serve` land in Phase 2, token-gated A2A `serve` in Phase 4) — do not add new top-level `cmd/` dirs).
@@ -54,6 +57,7 @@ Workflow for any docs/ change:
 - `internal/store` — SQLite, migration runner, FTS5/vec glue.
 - `internal/embed`, `internal/retrieval`, `internal/llm` — embedding, hybrid RRF retrieval (the `search_writing` tool's engine), OpenAI-compatible HTTP connector.
 - `internal/agentloop` — the in-service loop (Phase 2): tool schema, grounded prompt, iteration/token budgets, citation-or-refusal; shared by `agent ask` and the Phase 4 A2A server.
+- `rag_eval/` — experimental Python (uv + Ragas) answer-quality harness: `rag.py` (demo RAG under test), `test_llm.py` (endpoint smoke test), `evals.py` (discrete correctness experiment). Commit `uv.lock`; `.venv/`, `__pycache__/`, `*.egg-info/`, and generated `evals/` data are gitignored. Its `EVAL_*` variables are declared in `example.env` and pinned by an allowlist in `TestExampleEnvIsComplete`.
 - `migrations/` — SQL schema; `0001_init.sql` must stay in sync with the schema block in `PLAN.md` §3.
 - `docs/` — OKF v0.2 bundle (see **OKF docs bundle** above); captured upstream API shapes (`ghost.md`, `postiz.md`) are the honest reference for clients.
 

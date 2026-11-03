@@ -93,3 +93,4 @@ json`. See [`docs/logging.md`](./docs/logging.md).
 * [`PLAN.md`](./PLAN.md) — full step-by-step build plan with exit criteria.
 * [`docs/runbook.md`](./docs/runbook.md) — build, ingest, query, ask, serve.
 * [`docs/red-team.md`](./docs/red-team.md) — promptfoo red-team suite for `/v1/ask`.
+* [`rag_eval/`](./rag_eval/README.md) — experimental Python/Ragas answer-quality harness (`EVAL_*` endpoint, not yet wired to the agent).

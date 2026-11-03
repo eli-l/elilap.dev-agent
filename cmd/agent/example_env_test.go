@@ -14,9 +14,10 @@ import (
 // TestExampleEnvIsComplete enforces the repository rule that every environment
 // variable the agent reads is listed in example.env with an empty value
 // (secrets) or its default: a new variable lands in code and example.env in
-// the same change. The inventory is derived from the envconfig struct tags and
-// sources.yaml, so adding a field without listing it fails; a stale entry
-// fails too.
+// the same change. The Go inventory is derived from the envconfig struct tags
+// and sources.yaml, so adding a field without listing it fails; a stale entry
+// fails too. rag_eval/ is a Python harness with no envconfig structs, so its
+// EVAL_* variables are pinned explicitly below.
 func TestExampleEnvIsComplete(t *testing.T) {
 	values, err := godotenv.Read(filepath.Join("..", "..", "example.env"))
 	if err != nil {
@@ -41,6 +42,19 @@ func TestExampleEnvIsComplete(t *testing.T) {
 		envcfg.EnvLocalAIAPIKey:  "",
 		envcfg.EnvEmbedModel:     envcfg.DefaultEmbedModel,
 		envcfg.EnvChatModel:      envcfg.DefaultChatModel,
+	}
+
+	// rag_eval/ (Python, uv) reads EVAL_* directly; no Go envconfig struct
+	// declares them. Pin them here so the inventory stays complete in both
+	// directions. Values must match rag_eval/README.md and example.env.
+	evalVars := map[string]string{
+		"EVAL_BASE_URL": "http://localhost:8000/v1",
+		"EVAL_MODEL":    "mtplx-qwen36-35b-a3b-optimized-speed",
+		"EVAL_API_KEY":  "",
+	}
+	for name, value := range evalVars {
+		static[name] = true
+		defaults[name] = value
 	}
 
 	// Dynamic credential names come from sources.yaml; secrets stay blank.

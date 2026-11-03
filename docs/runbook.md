@@ -119,6 +119,23 @@ fabricated RAG citations, plus `basic` and `jailbreak:meta` strategies. See
 [red-team.md](/red-team.md) for plugin details, the response-transform caveat,
 and why a suspected finding needs a re-run on this non-deterministic 4B model.
 
+## Ragas experiment (rag_eval)
+
+`rag_eval/` is an experimental Python/Ragas harness that grades end-to-end
+answers with an LLM judge. It has its own endpoint variables and is not part
+of the Go build or the retrieval eval above:
+
+```bash
+cd rag_eval
+uv sync
+uv run python test_llm.py     # endpoint check first; exit 0 = usable
+uv run python evals.py        # writes evals/datasets, evals/experiments, evals/logs
+```
+
+`EVAL_BASE_URL` / `EVAL_MODEL` / `EVAL_API_KEY` are in `example.env`; the
+harness does not read `.env` itself (use `uv run --env-file ../.env …`).
+Generated files are gitignored. See [rag-eval.md](/rag-eval.md).
+
 ## Troubleshooting
 
 | Symptom | Cause / fix |
