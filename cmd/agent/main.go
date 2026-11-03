@@ -81,10 +81,12 @@ func run(args []string, stdout, stderr io.Writer) int {
 		code = runEmbed(args[1:], rtCfg, stdout, stderr)
 	case "stats":
 		code = runStats(args[1:], rtCfg.DBPath, stdout, stderr)
-	case "query", "serve":
-		// Placeholders until the remaining Phase 1/2 commands land.
-		log.Warn().Str("command", args[0]).Msg("not implemented")
-		fmt.Fprintf(stdout, "%s: not implemented\n", args[0])
+	case "query":
+		code = runQuery(args[1:], rtCfg, stdout, stderr)
+	case "ask":
+		code = runAsk(args[1:], rtCfg, stdout, stderr)
+	case "serve":
+		code = runServe(args[1:], rtCfg, stderr)
 	default:
 		log.Error().Str("command", args[0]).Msg("unknown subcommand")
 		fmt.Fprintf(stderr, "agent: unknown subcommand %q\n\n", args[0])
@@ -139,13 +141,16 @@ Commands:
   sources validate   strictly validate sources.yaml and provider options
   ingest             import configured sources into the index
   embed              embed indexed chunks
-  query              retrieve chunks for a query
+  query              retrieve chunks for a query (hybrid, no LLM)
+  ask                answer a question from the index (grounded loop)
   stats              report index statistics
-  serve              serve the read-only A2A surface
+  serve              serve the read-only dev HTTP surface (loopback only)
 
 Missing credential variables warn in sources validate; --strict makes them errors.
 
 `+loggingFlagHelp+`
-Run "agent sources list --help" or "agent sources validate --help" for flags.
+Run "agent serve --help" for the dev server flags (default 127.0.0.1:8080,
+POST /v1/retrieve). Run "agent sources list --help" or
+"agent sources validate --help" for source flags.
 `)
 }

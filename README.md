@@ -1,6 +1,10 @@
 # elilap.dev-agent
 
-Local-first **agentic A2A connector** over Eli's published writing.
+An agent representing Eli Lap's published technical knowledge, engineering
+experience, experiments, and opinions. It answers questions using published
+sources and provides verifiable citations.
+
+Local-first **agentic A2A connector** over that writing.
 Indexes Ghost posts (blog) + Postiz cross-posts (social), answers questions
 from them with its own grounded tool-calling loop — retrieval is the loop's
 internal `search_writing` tool — and exposes that agent to remote peers
@@ -12,8 +16,12 @@ and rebuild at any time.
 
 ## Status
 
-Bootstrap only. No code yet. See [`PLAN.md`](./PLAN.md) for the
-build plan and current phase.
+Phases 1 and 2 are implemented: ingestion, resumable embeddings, hybrid
+retrieval (BM25 + vectors, RRF), the grounded tool-calling loop
+(`agent ask`), and the loopback dev HTTP surface (`/v1/retrieve`,
+`/v1/ask`). Phase 3 operations and the Phase 4 A2A binding remain. See
+[`PLAN.md`](./PLAN.md) for the build plan and
+[`docs/runbook.md`](./docs/runbook.md) for the operator path.
 
 ## Concept
 
@@ -45,15 +53,18 @@ Postiz (social)   ─┘        ▲                                (hybrid RRF)
   raw retriever over loopback HTTP (`/v1/retrieve`, `/v1/ask`); A2A
   `message/send` + agent card land in Phase 4 on the same paths.
 
-## Quick reference (after Phase 1 ships)
+## Quick reference
 
 ```bash
 cp example.env .env       # then fill in the credentials
+go mod vendor             # vendor/ is gitignored
 
-go build -o agent ./cmd/agent
+go build -tags sqlite_fts5 -o agent ./cmd/agent
 ./agent ingest
 ./agent embed
 ./agent query "when did I write about burnout"
+./agent ask "what did I write about harnesses?"
+./agent serve             # 127.0.0.1:8080, loopback only
 ```
 
 `example.env` lists every environment variable the agent reads, with defaults

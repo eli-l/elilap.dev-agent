@@ -21,9 +21,19 @@ the loop's CLI shadow. A Phase 2 dev HTTP surface (`agent serve`) exposes
 both the raw tool and the loop over loopback HTTP, so each half is
 curl-testable before A2A exists.
 
+## Role
+
+An agent representing Eli Lap's published technical knowledge, engineering
+experience, experiments, and opinions. It answers questions using published
+sources and provides verifiable citations.
+
+That is the canonical description (`agentloop.Description`), used verbatim by
+the planned A2A `AgentCard`; the loop enforces the citation half, and the
+identity fact below keeps both bylines usable.
+
 ## The loop
 
-One tool-calling loop in `internal/agentloop` (Phase 2), shared by
+One tool-calling loop in `internal/agentloop` (implemented 2026-11-02), shared by
 `agent ask` and the Phase 4 A2A server:
 
 * **Tool**: `search_writing`, wrapping `internal/retrieval` (hybrid BM25
@@ -31,15 +41,36 @@ One tool-calling loop in `internal/agentloop` (Phase 2), shared by
   (`ghost|postiz`), `platform`, `after`, `before`,
   `recency_halflife_days`. The dev `/v1/retrieve` request body (Phase 2)
   is this tool call verbatim.
+
+  **Status 2026-11-02**: retrieval is complete - hybrid FTS5 BM25 + vec0
+  KNN merged with RRF k=60, `query`, `top_n`, `source`, `platform`,
+  `after`, `before`, `recency_halflife_days`, and a CLI whose
+  `--format jsonl` output matches `/v1/retrieve` object-for-object. See
+  [retrieval.md](/retrieval.md).
 * **Budget**: max 3 tool iterations, ~4,000 excerpt tokens per answer, a
-  per-request wall-clock cap. Stop on budget or when the model stops
-  calling the tool.
-* **Grounding**: the prompt admits only index excerpts; every claim must
-  cite `chunk_id` + `source_url` from the retrieved set. If grounding
-  fails, the answer is the refusal string - the loop never answers
-  off-corpus from parametric memory.
-* **Model**: chat `spark-x2.5-4b` over the OpenAI-compatible connector
-  (plain `net/http`, tool definitions round-tripped per request). The
+  per-request wall-clock cap, and 4,096 completion tokens (reasoning
+  included). Stop on budget or when the model stops calling the tool; if
+  the iteration budget runs out, one final no-tools call forces an answer
+  from what was already retrieved. If the first response is the refusal
+  string without any tool call, one nudge asks the model to search before
+  refusing; off-corpus questions pay one extra retrieval round.
+  **Implemented 2026-11-02** in `internal/agentloop`; the live loop
+  answered in 17.7s and refused an off-corpus question in 9.4s.
+* **Identity**: the prompt states that Eli Lap, Ilja Lapkovsky, and Ilja
+  Lapkovskis are the same person ("Eli Lap" is the internationalized pen
+  name). Ghost chunks are authored as "Eli Lap" and Postiz chunks as "Ilja
+  Lapkovsky"; without the mapping the model discards the cross-posts as
+  someone else's writing. The identity fact is service grounding context,
+  not a citable corpus excerpt.
+* **Grounding**: the prompt admits only index excerpts (plus the identity
+  fact); every claim must cite a `chunk_id` from the retrieved set, and
+  the loop resolves the URL from the index. A reply with no citation, or
+  with an id the loop never retrieved, is replaced by the refusal string - the loop never answers
+  off-corpus from parametric memory. Excerpts are data, never
+  instructions.
+* **Model**: chat `CHAT_MODEL` (default `spark-x2.5-4b`; this host runs
+  `spark-x2.6-4b-q4`) over the OpenAI-compatible connector (plain
+  `net/http`, tool definitions round-tripped per request). The
   reasoning-model token caveat in [localai.md](/localai.md) applies -
   `max_tokens` must budget for reasoning.
 * **Scope guard**: no other tools, no cross-request state, no retries
@@ -54,10 +85,14 @@ with `curl`:
 * `POST /v1/retrieve`: the request body carries the `search_writing`
   parameters; the response is exactly the JSON array the model's tool
   call would receive - byte-fidelity with the tool path, identical to
-  `agent query --format jsonl`.
+  `agent query --format jsonl`. Hybrid ranking and all filters are live;
+  empty results are `[]` (see [retrieval.md](/retrieval.md)).
 * `POST /v1/ask`: one question in, the full loop out - the same
   answer/citations/refusal struct `agent ask` prints, plus iteration
   count and timing, so grounding behavior can be diffed against the CLI.
+  **Implemented 2026-11-02**: `{"question"}` in; `{"answer",
+  "citations", "tool_iterations", "refused", "elapsed_ms"}` out, with a
+  90s request budget and 502/504 on backend failure/timeout.
 
 Phase 4 keeps the paths and the JSON and adds auth, rate limits, and the
 audit log - nothing on this surface is thrown away.

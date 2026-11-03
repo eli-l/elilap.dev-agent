@@ -1,6 +1,6 @@
 # AGENTS.md
 
-Local-first **agentic A2A connector** over Eli's published writing: ingests Ghost posts + Postiz cross-posts into a single-file SQLite index (FTS5 + sqlite-vec), and runs its own grounded tool-calling loop (one internal tool, `search_writing`, over `internal/retrieval`) exposed through one Go binary — CLI plus a loopback dev HTTP surface (`/v1/retrieve`, `/v1/ask`) in Phase 2, A2A (`message/send` + agent card) in Phase 4. **Status: bootstrap** — `cmd/*/main.go` are stubs, `internal/` is empty (`.gitkeep`). `PLAN.md` is the source of truth for scope and sequencing; read it before adding code.
+Local-first **agentic A2A connector** over Eli's published writing: ingests Ghost posts + Postiz cross-posts into a single-file SQLite index (FTS5 + sqlite-vec), and runs its own grounded tool-calling loop (one internal tool, `search_writing`, over `internal/retrieval`) exposed through one Go binary — CLI plus a loopback dev HTTP surface (`/v1/retrieve`, `/v1/ask`) in Phase 2, A2A (`message/send` + agent card) in Phase 4. **Status: Phase 2** — `ingest`, `embed`, `query`, `ask`, `stats`, and the loopback `serve` dev surface are implemented; `internal/retrieval` (hybrid BM25 + vec + RRF) and `internal/agentloop` (one grounded tool, citation-or-refusal) are live. A2A remains Phase 4. `PLAN.md` is the source of truth for scope and sequencing; read it before adding code.
 
 ## Commands
 

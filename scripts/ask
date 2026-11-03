@@ -1,15 +1,18 @@
 #!/usr/bin/env bash
-# ask — one-shot wrapper: rag query → LLM call.
+# ask — thin wrapper over `agent ask` (PLAN.md Phase 2).
 #
-# Real implementation lands in Phase 2.
-# See ../PLAN.md for the build plan.
+# The grounded tool-calling loop lives in the binary; this wrapper only keeps
+# the `scripts/ask "question"` muscle memory working from any directory.
 
 set -euo pipefail
 
-if [ "${1:-}" = "" ]; then
-  echo "usage: ask <question>" >&2
-  exit 2
+root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+if [ ! -x "$root/agent" ]; then
+  echo "ask: $root/agent not found; build it with 'go build -tags sqlite_fts5 -o agent ./cmd/agent'" >&2
+  exit 1
 fi
 
-echo "ask: not implemented (Phase 2). Question was: $1" >&2
-exit 1
+# The binary loads .env and resolves ./index.db relative to the working
+# directory, so run from the repo root rather than the caller's directory.
+cd "$root"
+exec "$root/agent" ask "$@"

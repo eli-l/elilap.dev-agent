@@ -238,16 +238,22 @@ func TestRunDispatches(t *testing.T) {
 			wantStderr: "unknown subcommand",
 		},
 		{
+			name:       "query without text is a usage error",
+			args:       []string{"query"},
+			wantCode:   2,
+			wantStderr: "provide a query",
+		},
+		{
 			name:       "ingest reports a missing config",
 			args:       []string{"ingest", "--config", filepath.Join(t.TempDir(), "absent.yaml")},
 			wantCode:   1,
 			wantStderr: "read config",
 		},
 		{
-			name:       "serve is still a placeholder",
-			args:       []string{"serve"},
-			wantCode:   0,
-			wantStdout: "serve: not implemented\n",
+			name:       "serve refuses a non-loopback bind",
+			args:       []string{"serve", "--addr", "0.0.0.0:8080"},
+			wantCode:   2,
+			wantStderr: "must not be exposed",
 		},
 	}
 

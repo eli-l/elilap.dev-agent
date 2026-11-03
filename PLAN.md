@@ -4,11 +4,13 @@ Build plan for a local-first RAG agent over Eli's published writing.
 This document is the source of truth for scope, sequencing, and exit criteria.
 Update it as we learn.
 
-**Last refined**: 2026-10-27. **Scope change (2026-10-27)**: this repo is
-an **agentic A2A connector** — the agent loop lives here. A remote peer
-sends a conversational task, and *our* service runs its own tool-using
-loop (retrieve → ground → answer with citations) against the local index
-over the OpenAI-compatible chat model. The A2A surface exposes the
+**Last refined**: 2026-11-02 (Phase 2 retrieval and the grounded loop are
+implemented and verified; eval baseline 19/20). **Scope change
+(2026-10-27)**: this repo is an **agentic A2A connector** — the agent loop
+lives here. A remote peer sends a conversational task, and *our* service
+runs its own tool-using loop (retrieve → ground → answer with citations)
+against the local index over the OpenAI-compatible chat model. The A2A
+surface exposes the
 **agent**, not a raw retriever; RAG is an internal tool of the service,
 and `agent ask` is its CLI shadow. Same-day refinement (2026-10-27): a
 minimal **HTTP dev surface** — `agent serve` in Phase 2, token-less and
@@ -516,7 +518,9 @@ intentionally a separate command.
       line: processed/total, in-flight batch, elapsed, rate, ETA).
       **Done 2026-11-02** (886 chunks, 12 batches, resumed after an
       interrupted run).
-- [ ] `docs/runbook.md` starter: "verifying ingestion is correct."
+- [x] `docs/runbook.md` starter: "verifying ingestion is correct."
+      **Done 2026-11-02** - covers build, ingest/embed, query, ask, serve,
+      the eval, and troubleshooting.
 - [ ] End-of-phase commit + push.
 
 **Schema** (`migrations/0001_init.sql`, synced with this file):
@@ -625,20 +629,55 @@ what `search_writing` hands the model (retrieval in isolation, no LLM),
 and `POST /v1/ask` runs the full loop. Same paths and JSON as Phase 4;
 only auth and hardening get added later.
 
+**Retrieval policy (pinned 2026-11-02, hybrid slice)**
+
+* Hybrid = FTS5 `bm25` over `chunks_fts` + vec0 KNN over `chunks_vec`,
+  merged by reciprocal-rank fusion with `k = 60`; per-path depth is
+  `clamp(top_n * 4, 20, 200)` before the merge, and the final list is
+  cut to `top_n` after recency weighting.
+* `recency_halflife_days > 0` multiplies the merged score by
+  `0.5^(age_days / halflife)`; `0` (the default) disables recency
+  weighting. Scores are therefore RRF values in hybrid mode and cosine
+  values when `--hybrid=false` (CLI-only); each hit also reports the
+  path-native `distance`, `bm25`, and `cosine` when applicable.
+* Filters (`source`, `platform`, `after`, `before`, `exclude_scheduled`)
+  apply to both paths. vec0 applies outer filters *after* the KNN, so a
+  filtered vector query asks for the whole corpus and then filters — exact
+  rather than quietly truncated. Above the 4096-row vec0 cap it returns an
+  explicit error instead of truncating. Text filters are pushed into SQL.
+* `after` is inclusive, `before` exclusive; a date-only value covers
+  that whole day. `exclude_scheduled` drops Postiz chunks whose
+  `meta_json.state` is `QUEUE`.
+
 **Tasks**
 
-- [ ] `agent query` (no LLM in the loop — the raw tool, fully visible):
+- [x] Vector-retrieval slice of `internal/retrieval` (2026-11-02): query
+      text → one `/v1/embeddings` call → vec0 KNN over `chunks_vec`
+      joined to `chunks` → ranked chunks with metadata, a cosine `score`,
+      and the raw L2 `distance`. `internal/store.SearchVectors` owns the
+      KNN query; `POST /v1/retrieve` on the loopback-only `agent serve`
+      dev surface returns that array (empty results are `[]`). Serve also
+      refuses an index with no embeddings or vectors stamped for a
+      different model than `EMBED_MODEL`. Hybrid BM25 + RRF, the filter
+      parameters, and `agent query` landed in the same slice; the grounded
+      loop remains open.
+- [x] `agent query` (no LLM in the loop — the raw tool, fully visible):
   - inputs: free-text, `--top N`, `--hybrid` (on by default),
     `--source ghost|postiz|all`, `--platform` (repeatable), `--after`,
     `--before`, `--exclude-scheduled`, `--recency-halflife-days`,
     `--format jsonl|text`.
   - outputs: per-chunk metadata + body + score.
-- [ ] `eval/queries.yaml`: 20 hand-picked queries with ground-truth
+  **Done 2026-11-02** (`cmd/agent/query.go`), plus P0: hybrid RRF,
+  filters, recency weighting, and live CLI/HTTP parity on the 886-chunk
+  index.
+- [x] `eval/queries.yaml`: 20 hand-picked queries with ground-truth
   chunk_ids, so the eval is a reviewable artifact, not a one-off script.
   Target ≥15/20 with a clearly correct, verifiable answer. Once the loop
   lands, the same 20 run end-to-end: the loop's *answers* (with
   citations) are graded, not just raw retrieval.
-- [ ] The **in-service agent loop** (Decisions 15/16) —
+  **Done 2026-11-02**: `go run -mod=vendor ./scripts/eval`; baseline 19/20,
+  with the one known miss (`local-pipeline-state`) left in as a signal.
+- [x] The **in-service agent loop** (Decisions 15/16) —
       `internal/agentloop`, consumed by both `agent ask` and, in Phase 4,
       the A2A server:
   - one internal tool, `search_writing`, wrapping `internal/retrieval`
@@ -653,27 +692,46 @@ only auth and hardening get added later.
     string — the loop never answers off-corpus from parametric memory;
   - no retries across requests, no cross-request state, no host `codex`
     dependency.
-- [ ] `agent ask`: CLI form of the loop — same prompt, same budget, same
+  **Done 2026-11-02** (`internal/agentloop`): the tool schema, grounded
+  prompt, 3-iteration/4,000-excerpt-token/wall-clock budgets, and
+  citation-resolve-or-refusal; live answer 17.7s, refusal 9.4s.
+- [x] `agent ask`: CLI form of the loop — same prompt, same budget, same
       refusal behavior. `scripts/ask` stays as a thin wrapper around
-      `./agent ask` for muscle memory.
-- [ ] `agent serve` (dev form): plain `net/http`, binds `127.0.0.1:8080`
+      `./agent ask` for muscle memory. **Done 2026-11-02**
+      (`cmd/agent/ask.go`; `scripts/ask` is now a wrapper).
+- [x] `agent serve` (dev form): plain `net/http`, binds `127.0.0.1:8080`
       (override with `--addr`), **no auth, loopback-only** — it exists to
       be curl-tested during development, never exposed:
   - `POST /v1/retrieve` — request body carries the `search_writing`
     params (`query`, `top_n`, `source`, `platform`, `after`, `before`,
     `recency_halflife_days`); the response is exactly the JSON array the
     model's tool call would receive — same shape as
-    `agent query --format jsonl` (Decision 16 dev variant).
+    `agent query --format jsonl` (Decision 16 dev variant). **Retrieval
+    path done 2026-11-02**: `query`, `top_n` (default 5, max 50), `source`,
+    `platform`, `after`, `before`, `recency_halflife_days`, hybrid BM25 +
+    RRF; blank query and bad filters are 400, unknown fields are 400, body
+    ≤64 KiB, request budget 30s. Non-loopback binds and model-tag
+    mismatches are refused at startup. `POST /v1/ask` landed 2026-11-02.
   - `POST /v1/ask` — `{"question": "..."}` in; the full loop out:
     `{"answer", "citations": [{"chunk_id", "source_url"}],
     "tool_iterations", "refused", "elapsed_ms"}` — the same struct
     `agent ask` prints; Phase 4 wraps it in an A2A `Message` without
-    redefining it.
+    redefining it. **Done 2026-11-02**; 90s request budget, 502/504 on
+    backend failure/timeout, empty citations rendered as `[]`.
 
 **Prompt template (for `agent ask`)**:
 
 ```
-Use only the excerpts below from Eli Lap's published writing to answer.
+You answer questions about Eli Lap's published writing.
+
+Identity fact: Eli Lap, Ilja Lapkovsky, and Ilja Lapkovskis are the same
+person. "Eli Lap" is the internationalized pen name; "Ilja Lapkovsky"
+and "Ilja Lapkovskis" are the same author's name. Treat writing attributed
+to any of those names as Eli's writing, and never treat a name difference
+as evidence that a source belongs to someone else.
+
+Use only the excerpts below from Eli Lap's published writing to answer
+(the identity fact above is the one exception).
 If the answer is not present in the excerpts, say "Not in my published
 writing" and stop.
 Cite each claim with the chunk_id and source_url from the excerpt metadata.
@@ -686,33 +744,53 @@ body
 {question}
 ```
 
+**Implementation note (2026-11-02)**: the loop hands excerpts to the model as
+`search_writing` tool results rather than pasting them into one prompt; the
+citation and refusal rules above are unchanged.
+
 **Loop policy (shared by `agent ask` and the A2A task runner)**
 
 * One internal tool: `search_writing` (params: `query`, `top_n`,
   `source`, `platform`, `after`, `before`, `recency_halflife_days`).
-* Budget: max 3 tool iterations and ~4,000 total prompt tokens of
-  excerpts per answer; stop on budget or when the model stops calling
-  the tool.
-* Every claim in the answer must cite a `chunk_id` + `source_url` from
-  the retrieved set; if grounding fails, the answer is the refusal
-  string. No tool other than `search_writing` exists in Phase 2 — the
-  loop is intentionally minimal, and new tools are new decisions.
+* Budget: max 3 tool iterations, ~4,000 total prompt tokens of excerpts
+  per answer, and 4,096 completion tokens (reasoning included); stop on
+  budget or when the model stops calling the tool. If the iteration
+  budget runs out, one final no-tools call forces an answer from what
+  was already retrieved. An immediate refusal with zero tool calls gets
+  one "search before refusing" nudge (2026-11-02), so an answerable
+  question cannot be refused without at least one retrieval attempt.
+* Every claim in the answer must cite a `chunk_id` from the retrieved
+  set, and the loop resolves the `source_url` from the index; an
+  uncited answer or a fabricated id is the refusal string.
+* The prompt carries one service identity fact: Eli Lap, Ilja Lapkovsky,
+  and Ilja Lapkovskis are the same person ("Eli Lap" is the
+  internationalized pen name). It is the only non-excerpt grounding and
+  it keeps Postiz cross-posts (authored as Ilja) usable
+  (`docs/runs/identity-aliases-2026-11-02.md`).
+* No tool other than `search_writing` exists in Phase 2 — the loop is
+  intentionally minimal, and new tools are new decisions.
 
 **Exit criteria**
 
 - 20-query eval reaches ≥15/20 with verified chunk_ids.
+  **Verified 2026-11-02: 19/20.**
 - p50 retrieval latency <300ms; end-to-end `ask` p50 <8s on a GPU-capable
   host, ≤60s on the CPU-only Docker setup (small chat model, reasoning
-  budget included).
-- Loop behavior verified against `spark-x2.5-4b`: tool calls round-trip,
+  budget included). **Measured 2026-11-02: retrieval p50 58ms on the
+  886-chunk index; `ask` 9-24s on this CPU host.**
+- Loop behavior verified against a reasoning chat model (`spark-x2.5-4b`
+  default; this host's `.env` runs `spark-x2.6-4b-q4`): tool calls round-trip,
   the iteration/token budget holds, and unanswerable questions return
-  the refusal string instead of hallucinated content.
+  the refusal string instead of hallucinated content. **Verified
+  2026-11-02** (cited answer, refusal, HTTP parity).
 - A second human can read `README.md` + `docs/runbook.md` and run `ask`
   without help — including via `docker compose up` on a clean host.
+  **Runbook written 2026-11-02**; compose path still Phase 1 work.
 - `POST /v1/retrieve` and `agent query --format jsonl` return identical
   results for identical inputs; `POST /v1/ask` returns the same answer
   content as `agent ask` for the same question (model non-determinism
-  aside).
+  aside). **Verified 2026-11-02** (byte-identical retrieval objects;
+  shared answer struct).
 - The dev server refuses to start with a non-loopback bind address —
   token-less dev convenience must not be exposable (auth is Phase 4).
 
@@ -790,7 +868,10 @@ bind behind an explicit flag, rate limits, and the audit log.
   `name`, `description`, `version`, `supportedInterfaces` (JSONRPC
   binding + `protocolVersion`), `capabilities`, `securitySchemes`
   (bearer), and one skill describing grounded Q&A over Eli's published
-  writing.
+  writing. The `description` is the canonical agent copy (2026-11-02):
+  "An agent representing Eli Lap's published technical knowledge,
+  engineering experience, experiments, and opinions. It answers questions
+  using published sources and provides verifiable citations."
 - [ ] Audit log: per-task timestamp, token id (not token), query, tool
   iteration count, result count, answer/refusal. Bodies never logged.
 - [ ] Token store: env-driven list of `id:token` pairs; `--add-token`,
