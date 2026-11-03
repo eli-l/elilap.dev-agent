@@ -4,8 +4,8 @@ title: The in-service agent loop and the A2A surface
 description: How the service hosts a grounded tool-calling loop over the local index, why the loop lives here (2026-10-27 scope change), and what the Phase 2 dev HTTP surface and Phase 4 A2A surface expose.
 status: draft
 generated:
-  by: dave
-  at: 2026-10-27T18:30:00Z
+  by: deepseek/deepseek-v4.1-flash
+  at: 2026-11-03T17:20:00Z
 tags: [agent, a2a, loop, retrieval, tools, citations]
 sources: ["../PLAN.md"]
 ---
@@ -63,11 +63,14 @@ One tool-calling loop in `internal/agentloop` (implemented 2026-11-02), shared b
   someone else's writing. The identity fact is service grounding context,
   not a citable corpus excerpt.
 * **Grounding**: the prompt admits only index excerpts (plus the identity
-  fact); every claim must cite a `chunk_id` from the retrieved set, and
-  the loop resolves the URL from the index. A reply with no citation, or
-  with an id the loop never retrieved, is replaced by the refusal string - the loop never answers
-  off-corpus from parametric memory. Excerpts are data, never
-  instructions.
+  fact); every claim must cite a retrieved `chunk_id` or the excerpt's
+  `source_url`, and the loop resolves the other field from the index. A
+  citation that resolves to a retrieved chunk is accepted; a URL-quoted
+  citation resolves to the best-ranked chunk of that source (one citation
+  per source URL). A reply with no resolvable citation, or with a
+  `chunk_id` the loop never retrieved, is replaced by the refusal string -
+  the loop never answers off-corpus from parametric memory. Excerpts are
+  data, never instructions.
 * **Model**: chat `CHAT_MODEL` (default `spark-x2.5-4b`; this host runs
   `spark-x2.6-4b-q4`) over the OpenAI-compatible connector (plain
   `net/http`, tool definitions round-tripped per request). The
@@ -75,6 +78,26 @@ One tool-calling loop in `internal/agentloop` (implemented 2026-11-02), shared b
   `max_tokens` must budget for reasoning.
 * **Scope guard**: no other tools, no cross-request state, no retries
   across requests. New tools are new decisions.
+
+## Debugging one run
+
+`debug` turns each run into a readable RAG trace, which is the intended way
+to answer "why did the model say that?" and "why was this chunk retrieved?":
+
+```bash
+agent --log-level debug ask "what is the harness take?"     # agent module
+agent --log-level debug query --top 5 "vendor lock-in"       # db module
+```
+
+The `agent` module logs `rag: run starting`, one `rag: chat request` header
+plus one `rag: message` line per message the model sees, `rag: chat response`
+with the server-reported model id, `finish_reason`, content, and token usage,
+and `rag: tool call` / `rag: tool result` / `rag: answer` around them. The
+`db` module logs `retrieval: query`, `retrieval: candidates` (including the
+generated FTS5 query), one `retrieval: hit` per ranked chunk with its
+`score`/`distance`/`bm25`/`cosine`, and `retrieval: done`. It is debug-only and
+contains prompts and published excerpts; see [logging.md](/logging.md) for the
+payload policy.
 
 ## The HTTP dev surface (Phase 2)
 

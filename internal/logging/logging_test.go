@@ -51,16 +51,17 @@ func TestSetupTagsEachModule(t *testing.T) {
 		{"http", logging.HTTP()},
 		{"sources", logging.Sources()},
 		{"db", logging.DB()},
+		{"agent", logging.Agent()},
 	} {
 		log := m.log
 		log.Info().Msg("from " + m.name)
 	}
 
 	recs := lines(t, buf)
-	if len(recs) != 4 {
-		t.Fatalf("got %d log lines, want 4:\n%s", len(recs), buf.String())
+	if len(recs) != 5 {
+		t.Fatalf("got %d log lines, want 5:\n%s", len(recs), buf.String())
 	}
-	want := []string{"main", "http", "sources", "db"}
+	want := []string{"main", "http", "sources", "db", "agent"}
 	for i, rec := range recs {
 		if got := rec["module"]; got != want[i] {
 			t.Errorf("line %d module = %v, want %q", i, got, want[i])

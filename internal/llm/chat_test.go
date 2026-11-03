@@ -23,6 +23,7 @@ func TestChatRoundTripsTools(t *testing.T) {
 		// Include a reasoning field and an unknown field: the client must
 		// ignore them rather than fail the decode.
 		_ = json.NewEncoder(w).Encode(map[string]any{
+			"model": "served-model",
 			"choices": []map[string]any{{
 				"message": map[string]any{
 					"role":      "assistant",
@@ -85,6 +86,9 @@ func TestChatRoundTripsTools(t *testing.T) {
 	}
 	if resp.Usage.TotalTokens != 15 {
 		t.Errorf("usage = %+v", resp.Usage)
+	}
+	if resp.Model != "served-model" {
+		t.Errorf("model = %q, want the server-reported id", resp.Model)
 	}
 }
 

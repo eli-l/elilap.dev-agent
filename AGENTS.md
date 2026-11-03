@@ -91,6 +91,7 @@ Workflow for any docs/ change:
 - Timestamps are ISO-8601 UTC; ids are sha256-based hex (`chunk_id = sha256(source_kind|source_id|chunk_seq)`). Here `source_id` is the upstream item id (Ghost uuid / Postiz id), not the config id; `chunk_seq` is the ordinal within that item across all its platform chunks.
 - Dependencies are **vendored locally but never committed**: `vendor/` is gitignored and must exist on disk — run `go mod vendor` after any `go.mod`/`go.sum` change and build with `-mod=vendor` (the sandboxed worker has no network and its module cache is hidden). `go.mod`/`go.sum` are the source of truth for versions.
 - Keep `chunks` and `chunks_fts` writes in one transaction.
+- **A debug run is the supported RAG trace.** With `--log-level debug` / `AGENT_LOG_LEVEL=debug`, `internal/agentloop` logs on the `agent` module the chat request header, one line per message the model sees, the server-reported model id and reply, the tool call with its full excerpt payload, and the enforced answer; `internal/retrieval` logs on the `db` module the query, the generated FTS5 query, per-path candidate counts, and each ranked hit with `score`/`distance`/`bm25`/`cosine`. Those payload lines exist only at `debug`: `info` and above still log no prompts, excerpts, or bodies, and the Phase 4 audit log never does (`docs/logging.md`).
 
 ## Avoid
 

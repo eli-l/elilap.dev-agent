@@ -16,7 +16,7 @@ okf_version: "0.2"
 * [Red-team evaluation with promptfoo](red-team.md) - The adversarial suite in tests-ai/promptfooconfig.yaml: an HTTP target on /v1/ask, bias/harmful-content/PII/agency/hijacking/hallucination/RAG-attribution plugins, basic + jailbreak:meta strategies, and how to run and read it.
 * [Runbook - build, ingest, embed, query, ask, serve](runbook.md) - The operator path from a clean checkout to grounded answers, including the dev server, the retrieval eval, and the failures you are likely to hit.
 * [The in-service agent loop and the A2A surface](agent-architecture.md) - The agent's canonical role (published technical knowledge, engineering experience, experiments, opinions, verifiable citations), the grounded tool-calling loop, the `search_writing` tool over hybrid retrieval, the Phase 2 loopback dev HTTP surface (`/v1/retrieve`, `/v1/ask`), and the Phase 4 A2A `message/send` surface with citation-or-refusal policy.
-* [Logging configuration and module loggers](logging.md) - The zerolog setup, the four module sub-loggers (main, http, sources, db), the global `--log-level`/`--log-format` flags and `AGENT_LOG_*` variables, and what must never reach a log line.
+* [Logging configuration and module loggers](logging.md) - The zerolog setup, the five module sub-loggers (main, http, sources, db, agent), the global `--log-level`/`--log-format` flags and `AGENT_LOG_*` variables, the debug-only RAG/retrieval trace, and what must never reach a log line.
 
 # Runs
 

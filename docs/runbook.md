@@ -5,7 +5,7 @@ description: The operator path from a clean checkout to grounded answers - build
 status: draft
 generated:
   by: deepseek/deepseek-v4.1-flash
-  at: 2026-11-02T22:00:00Z
+  at: 2026-11-03T17:20:00Z
 tags: [runbook, operations, cli, http, eval, troubleshooting]
 sources: ["../PLAN.md", "../AGENTS.md"]
 ---
@@ -64,9 +64,11 @@ Every command below is read-only over the index except `ingest` and `embed`.
 ./agent ask "What is the capital of France?"     # -> "Not in my published writing"
 ```
 
-Every claim must cite a retrieved `chunk_id`; a reply without a resolvable
-citation, or with one the loop never retrieved, is replaced by the refusal
-string. `tool_iterations` counts tool-executing rounds (max 3 by default).
+Every claim must cite a retrieved `chunk_id` or that excerpt's `source_url`
+(the small chat model often copies the URL but drops the 64-hex id; both
+resolve to the same citation). A reply without a resolvable citation, or with
+a `chunk_id` the loop never retrieved, is replaced by the refusal string.
+`tool_iterations` counts tool-executing rounds (max 3 by default).
 On this CPU host an answer takes roughly 10-25 seconds.
 
 ## Dev server
@@ -149,5 +151,7 @@ Generated files are gitignored. See [rag-eval.md](/rag-eval.md).
 | `agent query` says `provider is not enabled`-style config errors | `sources.yaml` scope: run `./agent sources validate`. |
 
 Logs go to stderr. Use `--log-level debug` or `AGENT_LOG_LEVEL=debug`; the
-HTTP server logs one line per request on the `http` module logger and never
-logs prompts, excerpts, or bodies.
+HTTP server logs one line per request on the `http` module logger, and at debug
+level the `agent` and `db` modules trace the whole RAG run - the chat request
+messages, the model's reply, and every retrieval hit - without logging prompts
+or excerpts at `info` or above. See [logging.md](/logging.md).

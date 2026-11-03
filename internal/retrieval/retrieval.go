@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/eli-l/elilap.dev-agent/internal/logging"
 	"github.com/eli-l/elilap.dev-agent/internal/store"
 )
 
@@ -138,6 +139,27 @@ func (s *Searcher) Search(ctx context.Context, q Query) ([]Hit, error) {
 	if math.IsNaN(q.RecencyHalflifeDays) || q.RecencyHalflifeDays < 0 {
 		return nil, fmt.Errorf("%w: recency_halflife_days must not be negative", ErrInvalidQuery)
 	}
+	depth := candidateDepth(topN)
+
+	// The debug stream is the retrieval half of the RAG trace: the normalized
+	// query and filters, how many rows each path contributed, and every ranked
+	// hit with its path-native scores. It only exists at debug level, so a
+	// default run logs no query text or bodies (docs/logging.md).
+	log := logging.DB()
+	log.Debug().
+		Str("query", text).
+		Int("top_n", topN).
+		Int("candidate_depth", depth).
+		Str("embed_model", s.Model).
+		Strs("source_kinds", filter.SourceKinds).
+		Strs("platforms", filter.Platforms).
+		Str("after", filter.After).
+		Str("before", filter.Before).
+		Bool("exclude_scheduled", filter.ExcludeScheduled).
+		Float64("recency_halflife_days", q.RecencyHalflifeDays).
+		Bool("vector_only", q.VectorOnly).
+		Msg("retrieval: query")
+	queryStart := time.Now()
 
 	vectors, err := s.Embedder.Embed(ctx, s.Model, []string{text})
 	if err != nil {
@@ -151,23 +173,72 @@ func (s *Searcher) Search(ctx context.Context, q Query) ([]Hit, error) {
 			len(vectors[0]), store.EmbeddingDims)
 	}
 
-	depth := candidateDepth(topN)
 	vectorHits, err := s.Store.SearchVectors(vectors[0], depth, filter)
 	if err != nil {
 		return nil, fmt.Errorf("retrieval: %w", err)
 	}
 
-	var textHits []store.SearchHit
+	var (
+		textHits []store.SearchHit
+		ftsQuery string
+		ftsUsed  bool
+	)
 	if !q.VectorOnly {
-		if ftsQuery, ok := store.FTSQuery(text); ok {
+		if ftsQuery, ftsUsed = store.FTSQuery(text); ftsUsed {
 			textHits, err = s.Store.SearchText(ftsQuery, depth, filter)
 			if err != nil {
 				return nil, fmt.Errorf("retrieval: %w", err)
 			}
 		}
 	}
+	log.Debug().
+		Bool("fts_used", ftsUsed).
+		Str("fts_query", ftsQuery).
+		Int("vector_candidates", len(vectorHits)).
+		Int("text_candidates", len(textHits)).
+		Msg("retrieval: candidates")
 
-	return s.merge(q, vectors[0], vectorHits, textHits, topN), nil
+	hits := s.merge(q, vectors[0], vectorHits, textHits, topN)
+	for i, h := range hits {
+		ev := log.Debug().
+			Int("rank", i+1).
+			Str("chunk_id", h.ChunkID).
+			Str("source_kind", h.SourceKind).
+			Str("title", h.Title).
+			Float64("score", h.Score).
+			Int("body_words", len(strings.Fields(h.Body))).
+			Str("preview", preview(h.Body))
+		if h.Platform != "" {
+			ev = ev.Str("platform", h.Platform)
+		}
+		if h.Distance != nil {
+			ev = ev.Float64("distance", *h.Distance)
+		}
+		if h.BM25 != nil {
+			ev = ev.Float64("bm25", *h.BM25)
+		}
+		if h.Cosine != nil {
+			ev = ev.Float64("cosine", *h.Cosine)
+		}
+		ev.Msg("retrieval: hit")
+	}
+	log.Debug().
+		Int("results", len(hits)).
+		Dur("duration", time.Since(queryStart)).
+		Msg("retrieval: done")
+	return hits, nil
+}
+
+// preview is a bounded, single-line glimpse of an excerpt for debug lines: the
+// full body belongs to the agent module's tool-result line, not to every hit.
+func preview(body string) string {
+	const limit = 200
+	line := strings.Join(strings.Fields(body), " ")
+	runes := []rune(line)
+	if len(runes) <= limit {
+		return line
+	}
+	return string(runes[:limit]) + "…"
 }
 
 // merge fuses the two ranked lists, applies the recency multiplier, and

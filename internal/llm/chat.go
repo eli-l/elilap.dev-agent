@@ -62,10 +62,13 @@ type Function struct {
 	Parameters  json.RawMessage `json:"parameters"`
 }
 
-// ChatResponse is the subset of /v1/chat/completions the loop needs. Usage is
-// kept for diagnostics; reasoning is intentionally ignored (the visible
-// content is what gets grounded).
+// ChatResponse is the subset of /v1/chat/completions the loop needs. Model is
+// the id the server reports having served the request, which is kept because a
+// debug run has to show which model actually answered (a gateway may route
+// elsewhere). Usage is kept for diagnostics; reasoning is intentionally ignored
+// (the visible content is what gets grounded).
 type ChatResponse struct {
+	Model   string `json:"model"`
 	Choices []struct {
 		Message      ChatMessage `json:"message"`
 		FinishReason string      `json:"finish_reason"`

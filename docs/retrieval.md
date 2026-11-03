@@ -5,7 +5,7 @@ description: The hybrid retrieval engine behind search_writing - FTS5 BM25 plus 
 status: draft
 generated:
   by: deepseek/deepseek-v4.1-flash
-  at: 2026-11-02T21:45:00Z
+  at: 2026-11-03T15:45:00Z
 tags: [retrieval, hybrid, rrf, bm25, vectors, http, cli, sqlite-vec]
 sources: ["../PLAN.md", "../AGENTS.md"]
 ---
@@ -125,6 +125,18 @@ curl -sS -X POST http://127.0.0.1:8080/v1/retrieve \
 `[]retrieval.Hit`; a live parity check on the 886-chunk index returned
 byte-identical objects for identical parameters (see
 [runs/retrieval-hybrid-2026-11-02.md](/runs/retrieval-hybrid-2026-11-02.md)).
+
+## Debugging retrieval
+
+`--log-level debug` makes the engine narrate one query on the `db` module:
+`retrieval: query` (normalized text, resolved filters, `embed_model`, candidate
+depth), `retrieval: candidates` (the generated FTS5 query and how many rows the
+vector and text paths each returned), `retrieval: hit` per ranked chunk (rank,
+`chunk_id`, title, merged `score`, path-native `distance`/`bm25`/`cosine`, body
+word count, and a 200-character preview), and `retrieval: done` (result count,
+duration). Nothing is logged at `info`, and the trace works for `agent query`,
+`POST /v1/retrieve`, and the loop's `search_writing` tool alike. See
+[logging.md](/logging.md) for the payload policy.
 
 ## Safety posture
 

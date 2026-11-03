@@ -1,7 +1,8 @@
 // Package logging owns the process-wide zerolog root and the per-module child
 // loggers the binary logs through: main (application lifecycle), http (HTTP
-// surfaces), sources (upstream fetchers such as Ghost and Postiz), and db (the
-// SQLite index).
+// surfaces), sources (upstream fetchers such as Ghost and Postiz), db (the
+// SQLite index, including retrieval reads), and agent (the grounded loop's
+// chat requests and responses).
 //
 // Every module logger is a child of one root and carries a "module" field, so
 // a single level knob and a single writer configure the whole process. The
@@ -10,7 +11,10 @@
 //
 // Nothing sensitive goes through these loggers: sources log item ids and
 // environment variable names, never credential values or document bodies
-// (AGENTS.md).
+// (AGENTS.md). The one deliberate exception is the agent module at debug
+// level, where the grounded loop logs the exact prompts, excerpts, and model
+// replies it processes so retrieval can be debugged end to end; see
+// docs/logging.md.
 package logging
 
 import (
@@ -35,12 +39,16 @@ const (
 	ModuleHTTP = "http"
 	// ModuleSources logs upstream fetchers (Ghost, Postiz).
 	ModuleSources = "sources"
-	// ModuleDB logs database open, migration, and write activity.
+	// ModuleDB logs database open, migration, and write activity, plus the
+	// retrieval read path (query, candidates, ranked hits) at debug level.
 	ModuleDB = "db"
+	// ModuleAgent logs the grounded agent loop: the chat requests sent to the
+	// model and the replies it returns, at debug level.
+	ModuleAgent = "agent"
 )
 
 // modules is the fixed set of module loggers Setup builds.
-var modules = []string{ModuleMain, ModuleHTTP, ModuleSources, ModuleDB}
+var modules = []string{ModuleMain, ModuleHTTP, ModuleSources, ModuleDB, ModuleAgent}
 
 // EnvPrefix is the prefix envconfig reads; Config's fields therefore map to
 // AGENT_LOG_LEVEL and AGENT_LOG_FORMAT. Runtime values live in the
@@ -186,6 +194,10 @@ func Sources() zerolog.Logger { return Logger(ModuleSources) }
 
 // DB returns the database logger.
 func DB() zerolog.Logger { return Logger(ModuleDB) }
+
+// Agent returns the grounded-loop logger. Its debug lines carry the prompts,
+// tool results, and model replies the loop processes.
+func Agent() zerolog.Logger { return Logger(ModuleAgent) }
 
 // ParseLevel maps a level name to its zerolog level. An empty name is info.
 func ParseLevel(name string) (zerolog.Level, error) {
