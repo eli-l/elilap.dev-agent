@@ -757,6 +757,13 @@ citation and refusal rules above are unchanged.
 
 * One internal tool: `search_writing` (params: `query`, `top_n`,
   `source`, `platform`, `after`, `before`, `recency_halflife_days`).
+* `query` is **extracted keys, not a paraphrase** (2026-11-03): the model
+  sends the 2-6 distinctive terms, keeps names and technical identifiers
+  verbatim, drops question scaffolding, and retries with different keys
+  instead of the original sentence. Filters are passed only when the
+  question names them. The keys feed the embedder verbatim and FTS5 as an
+  `OR` term list, so question words that never occur in the corpus would
+  dilute both paths.
 * Budget: max 3 tool iterations, ~4,000 total prompt tokens of excerpts
   per answer, and 4,096 completion tokens (reasoning included); stop on
   budget or when the model stops calling the tool. If the iteration

@@ -41,6 +41,18 @@ One tool-calling loop in `internal/agentloop` (implemented 2026-11-02), shared b
   (`ghost|postiz`), `platform`, `after`, `before`,
   `recency_halflife_days`. The dev `/v1/retrieve` request body (Phase 2)
   is this tool call verbatim.
+* **Query construction** (2026-11-03): `query` is **extracted keys, not a
+  paraphrase**. The prompt and the tool's parameter description both say:
+  extract the 2-6 most distinctive terms, drop the question's scaffolding
+  ("what did I write about", pronouns, "my", generic verbs), copy names,
+  library/API/flag spellings and identifiers verbatim, and prefer the
+  vocabulary the writing itself would use. Retries use different keys, not
+  the original sentence; filters (`source`, `platform`, `after`, `before`,
+  `recency_halflife_days`) are passed only when the question names them.
+  This matters because `query` feeds two consumers: the embeddings call
+  verbatim, and FTS5 as the `OR`-joined term list from
+  `store.FTSQuery`. A restated question dilutes both with words that appear
+  in the question but not in the corpus.
 
   **Status 2026-11-02**: retrieval is complete - hybrid FTS5 BM25 + vec0
   KNN merged with RRF k=60, `query`, `top_n`, `source`, `platform`,
