@@ -50,6 +50,32 @@ const (
 	DefaultMaxTokens = 4096
 )
 
+// Reasoning efforts pinned per request kind. The backend's own default is the
+// model config (an empty string), which for spark-x2.6-1.7b is effectively
+// unbounded: on a two-sentence question it spent all 4,096 tokens thinking and
+// returned empty content with finish_reason=length. Pinning both ends keeps the
+// loop inside that budget and turns reasoning off only where it buys nothing.
+//
+// These are the only values this llama-cpp template accepts; see
+// llm.ChatRequest.ReasoningEffort.
+const (
+	// ReasoningTransform dresses the calls that are still turning the question
+	// into search keys: no excerpts are in hand, so the model is parsing the
+	// question, not composing prose. It is the cheapest option - the first call
+	// of a live run took 0.23s and 20 completion tokens - but it is also the
+	// least reliable on the small models: with the full grounded prompt it
+	// skipped the tool call in 1 of 3 probes on spark-x2.6-1.7b (volunteering
+	// "The search for ... returned results" with no search run at all) and in 3
+	// of 3 on spark-x2.5-1.7b (replying with the refusal string immediately).
+	// Spark-X2.6-1.7B with ReasoningAnswer called the tool 3 of 3.
+	ReasoningTransform = "none"
+	// ReasoningAnswer dresses every call made with excerpts in hand - composing
+	// the answer, or refining the search that will ground it - and the final
+	// tools-withdrawn call. It is what makes the loop work: 3 of 3 tool calls on
+	// both 1.7b models, ~300 reasoning characters, well inside the budget.
+	ReasoningAnswer = "low"
+)
+
 // ErrBudget reports that the per-answer wall-clock or token budget ran out
 // before the loop could produce a grounded answer.
 var ErrBudget = errors.New("agent loop budget exhausted")
@@ -254,6 +280,15 @@ func (r *Runner) Run(ctx context.Context, question string) (Answer, error) {
 			Model:     r.Model,
 			Messages:  messages,
 			MaxTokens: maxTokens,
+			// Nothing retrieved yet means this call is still transforming the
+			// question into search keys, so reasoning buys nothing. Everything
+			// after that - a second-round search refinement, the answer the model
+			// volunteers mid-loop, and the forced tools-withdrawn answer - is
+			// answer generation and gets the deliberating effort.
+			ReasoningEffort: ReasoningAnswer,
+		}
+		if withTools && retrieved.len() == 0 {
+			req.ReasoningEffort = ReasoningTransform
 		}
 		if withTools {
 			req.Tools = tools
@@ -460,8 +495,9 @@ func toolError(msg string) string {
 }
 
 // logRequest writes one chat request to the debug stream: a header line with the
-// model and budget, then one line per message so the transcript reads in order.
-// Content is logged verbatim; the method is only reached at debug level.
+// model, the pinned reasoning effort, and the budget, then one line per message
+// so the transcript reads in order. Content is logged verbatim; the method is
+// only reached at debug level.
 func logRequest(log zerolog.Logger, req llm.ChatRequest, call int, withTools bool) {
 	names := make([]string, 0, len(req.Tools))
 	for _, t := range req.Tools {
@@ -470,6 +506,7 @@ func logRequest(log zerolog.Logger, req llm.ChatRequest, call int, withTools boo
 	log.Debug().
 		Int("call", call).
 		Str("model", req.Model).
+		Str("reasoning_effort", req.ReasoningEffort).
 		Int("max_tokens", req.MaxTokens).
 		Bool("tools_offered", withTools).
 		Strs("tool_names", names).

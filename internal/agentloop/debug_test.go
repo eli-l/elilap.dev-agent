@@ -64,10 +64,15 @@ func TestDebugLogsTheWholeRAGTrace(t *testing.T) {
 		}
 	}
 
-	// The request header names the chat model and the one offered tool.
+	// The request header names the chat model, the pinned reasoning effort, and
+	// the one offered tool.
 	header := recs["rag: chat request"][0]
 	if header["model"] != "chat-model" || header["tools_offered"] != true {
 		t.Errorf("request header = %v, want the chat model and tools offered", header)
+	}
+	if header["reasoning_effort"] != agentloop.ReasoningTransform {
+		t.Errorf("reasoning_effort = %v, want %q on the questionnaire call",
+			header["reasoning_effort"], agentloop.ReasoningTransform)
 	}
 	if names, _ := header["tool_names"].([]any); len(names) != 1 || names[0] != agentloop.ToolName {
 		t.Errorf("tool_names = %v, want [%s]", header["tool_names"], agentloop.ToolName)

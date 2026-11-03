@@ -18,12 +18,21 @@ import (
 // keyed by tool_call_id. spark-x2.5-4b is a reasoning model, so MaxTokens must
 // budget for reasoning tokens as well as the visible answer.
 type ChatRequest struct {
-	Model       string        `json:"model"`
-	Messages    []ChatMessage `json:"messages"`
-	Tools       []Tool        `json:"tools,omitempty"`
-	ToolChoice  string        `json:"tool_choice,omitempty"`
-	MaxTokens   int           `json:"max_tokens,omitempty"`
-	Temperature *float64      `json:"temperature,omitempty"`
+	Model    string        `json:"model"`
+	Messages []ChatMessage `json:"messages"`
+	Tools    []Tool        `json:"tools,omitempty"`
+	// ToolChoice is "auto" or "none"; empty leaves the backend default.
+	ToolChoice string `json:"tool_choice,omitempty"`
+	// ReasoningEffort is a flat OpenAI `reasoning_effort` string, not a nested
+	// object: /v1/chat/completions has no `reasoning` field, and a nested object
+	// is accepted and silently ignored (the model then reasons at its own
+	// config default, which for spark-x2.6 is unbounded). Empty means "model
+	// config"; the llama-cpp template behind spark-x2.5/2.6 accepts only
+	// "none", "low", and "high" - anything else ("medium", wrong casing) is
+	// an HTTP 500 from the backend, so callers must pick from that set.
+	ReasoningEffort string   `json:"reasoning_effort,omitempty"`
+	MaxTokens       int      `json:"max_tokens,omitempty"`
+	Temperature     *float64 `json:"temperature,omitempty"`
 }
 
 // ChatMessage is one OpenAI chat message. ToolCalls is set on assistant

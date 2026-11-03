@@ -5,7 +5,10 @@ description: How the service hosts a grounded tool-calling loop over the local i
 status: draft
 generated:
   by: deepseek/deepseek-v4.1-flash
-  at: 2026-11-03T17:20:00Z
+  at: 2026-11-03T19:40:00Z
+verified:
+  - by: process:localai-probe
+    at: 2026-11-03T19:20:00Z
 tags: [agent, a2a, loop, retrieval, tools, citations]
 sources: ["../PLAN.md"]
 ---
@@ -68,6 +71,23 @@ One tool-calling loop in `internal/agentloop` (implemented 2026-11-02), shared b
   refusing; off-corpus questions pay one extra retrieval round.
   **Implemented 2026-11-02** in `internal/agentloop`; the live loop
   answered in 17.7s and refused an off-corpus question in 9.4s.
+* **Reasoning effort**: pinned per call kind, never left to the backend
+  default - `reasoning_effort: "none"` while the loop is still turning the
+  question into search keys (nothing retrieved yet), `"low"` for every
+  call made with excerpts in hand and for the forced no-tools answer. The
+  backend default is "model config", which on `spark-x2.6-1.7b` is
+  unbounded: on a two-sentence question it spent all 4,096 tokens thinking
+  and returned empty `content` with `finish_reason=length` - which the
+  finalizer then reported as a refusal. The pinned settings are far cheaper:
+  0.6s/55 completion tokens on a two-sentence question (transform) and
+  4.0s/704 (answer). **Caveat**: `"none"` also costs tool-call reliability on
+  the small models - with the full grounded prompt it skipped `search_writing`
+  in 1 of 3 probes on `spark-x2.6-1.7b` and in 3 of 3 on `spark-x2.5-1.7b`
+  (immediate refusal, no retrieval), where `"low"` called the tool 3 of 3 on
+  both. If grounding regresses on a live run, the transform effort is the
+  knob to raise first. `"medium"` is not a valid value on this llama-cpp
+  template (HTTP 500), and a nested `reasoning` object is silently ignored;
+  see [localai.md](/localai.md).
 * **Identity**: the prompt states that Eli Lap, Ilja Lapkovsky, and Ilja
   Lapkovskis are the same person ("Eli Lap" is the internationalized pen
   name). Ghost chunks are authored as "Eli Lap" and Postiz chunks as "Ilja

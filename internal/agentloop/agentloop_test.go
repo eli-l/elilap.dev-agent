@@ -135,6 +135,54 @@ func TestRunCallsToolThenAnswersWithCitations(t *testing.T) {
 	}
 }
 
+func TestRunPinsReasoningEffortPerCallKind(t *testing.T) {
+	chatter := &scriptedChatter{responses: []llm.ChatResponse{
+		toolCallResponse(call("c1", agentloop.ToolName, `{"query":"one"}`)),
+		toolCallResponse(call("c2", agentloop.ToolName, `{"query":"two"}`)),
+		answerResponse("Grounded (" + idA + ")."),
+	}}
+	searcher := &fakeSearcher{hits: []retrieval.Hit{hit(idA, "excerpt")}}
+	if _, err := newRunner(chatter, searcher).Run(context.Background(), "q"); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+
+	// Nothing retrieved yet: the call is still turning the question into search
+	// keys, so reasoning is off. Once excerpts are in hand the same tool-offering
+	// call is composing the answer, so it deliberates.
+	if got := chatter.requests[0].ReasoningEffort; got != agentloop.ReasoningTransform {
+		t.Errorf("transform effort = %q, want %q", got, agentloop.ReasoningTransform)
+	}
+	if got := chatter.requests[1].ReasoningEffort; got != agentloop.ReasoningAnswer {
+		t.Errorf("composing effort = %q, want %q", got, agentloop.ReasoningAnswer)
+	}
+	for i, req := range chatter.requests {
+		if req.ReasoningEffort == "" {
+			t.Errorf("request %d left reasoning_effort empty; the backend default is unbounded", i+1)
+		}
+	}
+}
+
+func TestRunForcedFinalAnswerUsesAnswerEffort(t *testing.T) {
+	chatter := &scriptedChatter{responses: []llm.ChatResponse{
+		toolCallResponse(call("c1", agentloop.ToolName, `{"query":"one"}`)),
+		toolCallResponse(call("c2", agentloop.ToolName, `{"query":"two"}`)),
+		answerResponse("Grounded (" + idA + ")."),
+	}}
+	searcher := &fakeSearcher{hits: []retrieval.Hit{hit(idA, "excerpt")}}
+	runner := newRunner(chatter, searcher)
+	runner.MaxIterations = 2
+	if _, err := runner.Run(context.Background(), "q"); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	final := chatter.requests[len(chatter.requests)-1]
+	if len(final.Tools) != 0 {
+		t.Fatalf("final request still offers tools: %+v", final.Tools)
+	}
+	if final.ReasoningEffort != agentloop.ReasoningAnswer {
+		t.Errorf("final effort = %q, want %q", final.ReasoningEffort, agentloop.ReasoningAnswer)
+	}
+}
+
 func TestRunRefusesWithoutCitation(t *testing.T) {
 	chatter := &scriptedChatter{responses: []llm.ChatResponse{
 		toolCallResponse(call("call_1", agentloop.ToolName, `{"query":"harness"}`)),

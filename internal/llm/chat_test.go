@@ -51,8 +51,9 @@ func TestChatRoundTripsTools(t *testing.T) {
 	}
 	params := json.RawMessage(`{"type":"object"}`)
 	resp, err := c.Chat(context.Background(), ChatRequest{
-		Model:     "chat-model",
-		MaxTokens: 512,
+		Model:           "chat-model",
+		MaxTokens:       512,
+		ReasoningEffort: "none",
 		Messages: []ChatMessage{
 			{Role: "system", Content: "be grounded"},
 			{Role: "user", Content: "question"},
@@ -69,6 +70,9 @@ func TestChatRoundTripsTools(t *testing.T) {
 	}
 	if got.Model != "chat-model" || got.MaxTokens != 512 || len(got.Tools) != 1 {
 		t.Errorf("request = %+v", got)
+	}
+	if got.ReasoningEffort != "none" {
+		t.Errorf("reasoning_effort = %q, want the flat string the caller set", got.ReasoningEffort)
 	}
 	if len(got.Tools[0].Function.Parameters) == 0 {
 		t.Error("tool parameters were dropped")
