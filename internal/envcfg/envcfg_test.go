@@ -37,7 +37,7 @@ func writeEnvFile(t *testing.T, content string) string {
 }
 
 func TestLoadDefaults(t *testing.T) {
-	unsetFor(t, EnvDBPath, EnvLocalAIBaseURL, EnvLocalAIAPIKey, EnvEmbedModel, EnvChatModel)
+	unsetFor(t, EnvDBPath, EnvLocalAIBaseURL, EnvLocalAIAPIKey, EnvEmbedModel, EnvChatModel, EnvSearchMode)
 
 	cfg, err := Load()
 	if err != nil {
@@ -49,6 +49,7 @@ func TestLoadDefaults(t *testing.T) {
 		LocalAIAPIKey:  "",
 		EmbedModel:     DefaultEmbedModel,
 		ChatModel:      DefaultChatModel,
+		SearchMode:     DefaultSearchMode,
 	}
 	if cfg != want {
 		t.Errorf("Load() = %+v, want %+v", cfg, want)
@@ -61,6 +62,7 @@ func TestLoadReadsEnvironment(t *testing.T) {
 	t.Setenv(EnvLocalAIAPIKey, "token")
 	t.Setenv(EnvEmbedModel, "other-embed")
 	t.Setenv(EnvChatModel, "other-chat")
+	t.Setenv(EnvSearchMode, "fanout")
 
 	cfg, err := Load()
 	if err != nil {
@@ -72,6 +74,7 @@ func TestLoadReadsEnvironment(t *testing.T) {
 		LocalAIAPIKey:  "token",
 		EmbedModel:     "other-embed",
 		ChatModel:      "other-chat",
+		SearchMode:     "fanout",
 	}
 	if cfg != want {
 		t.Errorf("Load() = %+v, want %+v", cfg, want)
@@ -86,13 +89,15 @@ func TestLoadTreatsEmptyAsUnset(t *testing.T) {
 	t.Setenv(EnvLocalAIAPIKey, "")
 	t.Setenv(EnvEmbedModel, "")
 	t.Setenv(EnvChatModel, "")
+	t.Setenv(EnvSearchMode, "")
 
 	cfg, err := Load()
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
 	}
 	if cfg.DBPath != DefaultDBPath || cfg.LocalAIBaseURL != DefaultLocalAIBaseURL ||
-		cfg.EmbedModel != DefaultEmbedModel || cfg.ChatModel != DefaultChatModel {
+		cfg.EmbedModel != DefaultEmbedModel || cfg.ChatModel != DefaultChatModel ||
+		cfg.SearchMode != DefaultSearchMode {
 		t.Errorf("Load() with empty variables = %+v, want the defaults", cfg)
 	}
 	if cfg.LocalAIAPIKey != "" {
@@ -109,6 +114,7 @@ func TestConfigTagsMatchConstants(t *testing.T) {
 		"LocalAIAPIKey":  EnvLocalAIAPIKey,
 		"EmbedModel":     EnvEmbedModel,
 		"ChatModel":      EnvChatModel,
+		"SearchMode":     EnvSearchMode,
 	}
 	typ := reflect.TypeOf(Config{})
 	if typ.NumField() != len(want) {
@@ -131,6 +137,7 @@ func TestLoadTrimsValues(t *testing.T) {
 	t.Setenv(EnvLocalAIAPIKey, "  token  ")
 	t.Setenv(EnvEmbedModel, " other-embed ")
 	t.Setenv(EnvChatModel, " other-chat ")
+	t.Setenv(EnvSearchMode, "  fanout  ")
 
 	cfg, err := Load()
 	if err != nil {
@@ -142,6 +149,7 @@ func TestLoadTrimsValues(t *testing.T) {
 		LocalAIAPIKey:  "token",
 		EmbedModel:     "other-embed",
 		ChatModel:      "other-chat",
+		SearchMode:     "fanout",
 	}
 	if cfg != want {
 		t.Errorf("Load() = %+v, want %+v", cfg, want)

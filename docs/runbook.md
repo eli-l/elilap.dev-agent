@@ -1,7 +1,7 @@
 ---
 type: Guide
 title: Runbook - build, ingest, embed, query, ask, serve
-description: The operator path from a clean checkout to grounded answers - building the binary, rebuilding the index, running hybrid queries and the agent loop, the loopback dev server, the retrieval eval, and the failures you are likely to hit.
+description: The operator path from a clean checkout to grounded answers - building the binary, rebuilding the index, running hybrid queries and the agent loop, the loopback dev server, the two end-to-end test suites (Ragas and promptfoo), and the failures you are likely to hit.
 status: draft
 generated:
   by: deepseek/deepseek-v4.1-flash
@@ -90,21 +90,43 @@ curl -sS -X POST http://127.0.0.1:8080/v1/ask \
 
 The dev server is token-less; a non-loopback `--addr` is a startup error.
 
-## Evaluate retrieval
+## Testing the agent
+
+Two tools, two questions, no third harness:
+
+| Tool | Location | Question it answers |
+|---|---|---|
+| **Ragas** | `evals/` | Do the agent's answers stay faithful to the cited excerpts, state the right facts, and refuse what it cannot know? |
+| **promptfoo** | `tests-ai/` | Does the agent behave under adversarial input (bias, PII, hijacking, hallucination, fabricated citations)? |
+
+Retrieval quality is not graded on its own. There is no retrieval-eval runner
+and no query fixture: the Ragas answer metrics grade end-to-end behaviour,
+which is what a caller actually experiences. To inspect ranking by hand:
 
 ```bash
-go run -mod=vendor ./scripts/eval
+./agent query --format jsonl --top 5 "harness vendor lock-in"
 ```
 
-This runs the 20 human-verified queries in `eval/queries.yaml` through
-`agent query --format jsonl` and fails below the threshold (15/20). The
-current baseline is 19/20; the known miss is `local-pipeline-state`, where
-the "state became more important than intelligence" section does not surface
-in the top five.
+### Ragas (answer quality)
 
-## Red-team evaluation (promptfoo)
+`evals/` grades answers with an LLM judge. It has its own endpoint variables
+and is not part of the Go build:
 
-The adversarial suite targets `POST /v1/ask` over loopback:
+```bash
+cd evals
+uv sync
+uv run python test_llm.py     # endpoint check first; exit 0 = usable
+uv run python evaluate.py --kind answers --limit 3   # cheap smoke test
+uv run python evaluate.py     # both datasets -> output/
+```
+
+`EVAL_BASE_URL` / `EVAL_MODEL` / `EVAL_API_KEY` are in `example.env`; the
+harness does not read `.env` itself (use `uv run --env-file ../.env …`).
+Generated files are gitignored. See [ragas-eval.md](/ragas-eval.md).
+
+### promptfoo (adversarial behaviour)
+
+The red-team suite targets `POST /v1/ask` over loopback:
 
 ```bash
 ./agent serve --addr 127.0.0.1:8080          # terminal 1
@@ -119,24 +141,7 @@ Generated tests land in `tests-ai/redteam.yaml` (gitignored). The suite covers
 bias, harmful content, PII, excessive agency, hijacking, hallucination, and
 fabricated RAG citations, plus `basic` and `jailbreak:meta` strategies. See
 [red-team.md](/red-team.md) for plugin details, the response-transform caveat,
-and why a suspected finding needs a re-run on this non-deterministic 4B model.
-
-## Ragas experiment (rag_eval)
-
-`rag_eval/` is an experimental Python/Ragas harness that grades end-to-end
-answers with an LLM judge. It has its own endpoint variables and is not part
-of the Go build or the retrieval eval above:
-
-```bash
-cd rag_eval
-uv sync
-uv run python test_llm.py     # endpoint check first; exit 0 = usable
-uv run python evals.py        # writes evals/datasets, evals/experiments, evals/logs
-```
-
-`EVAL_BASE_URL` / `EVAL_MODEL` / `EVAL_API_KEY` are in `example.env`; the
-harness does not read `.env` itself (use `uv run --env-file ../.env …`).
-Generated files are gitignored. See [rag-eval.md](/rag-eval.md).
+and why a suspected finding needs a re-run on this non-deterministic model.
 
 ## Troubleshooting
 

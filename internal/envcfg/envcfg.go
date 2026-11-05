@@ -47,6 +47,10 @@ const (
 	EnvEmbedModel = "EMBED_MODEL"
 	// EnvChatModel is the chat model id used by the agent loop.
 	EnvChatModel = "CHAT_MODEL"
+	// EnvSearchMode selects how `agent ask` turns a question into retrievals:
+	// the model-driven tool-calling loop, or a deterministic fan-out over
+	// model-written query variants. See internal/agentloop.Mode.
+	EnvSearchMode = EnvPrefix + "_SEARCH_MODE"
 )
 
 // Defaults for the settings above. They are exported so callers, docs, and
@@ -61,6 +65,10 @@ const (
 	DefaultEmbedModel = "embeddinggemma-300m"
 	// DefaultChatModel is the reasoning model the agent loop calls.
 	DefaultChatModel = "spark-x2.5-4b"
+	// DefaultSearchMode keeps the shipped answer path the model-driven
+	// tool-calling loop; "fanout" is the deterministic-retrieval alternative
+	// under evaluation (internal/agentloop.ModeFanout).
+	DefaultSearchMode = "loop"
 )
 
 // Config is every static runtime setting, decoded by envconfig from the
@@ -80,6 +88,9 @@ type Config struct {
 	EmbedModel string `envconfig:"EMBED_MODEL"`
 	// ChatModel is the model id behind /v1/chat/completions.
 	ChatModel string `envconfig:"CHAT_MODEL"`
+	// SearchMode is the answer path: "loop" (tool-calling) or "fanout"
+	// (model-written query variants + deterministic retrieval).
+	SearchMode string `envconfig:"AGENT_SEARCH_MODE"`
 }
 
 // Load decodes Config from the environment, applying defaults for unset *and
@@ -98,6 +109,7 @@ func Load() (Config, error) {
 	cfg.LocalAIBaseURL = DefaultOr(cfg.LocalAIBaseURL, DefaultLocalAIBaseURL)
 	cfg.EmbedModel = DefaultOr(cfg.EmbedModel, DefaultEmbedModel)
 	cfg.ChatModel = DefaultOr(cfg.ChatModel, DefaultChatModel)
+	cfg.SearchMode = DefaultOr(cfg.SearchMode, DefaultSearchMode)
 	// An empty token is a legitimate value, not a missing one.
 	cfg.LocalAIAPIKey = strings.TrimSpace(cfg.LocalAIAPIKey)
 	return cfg, nil

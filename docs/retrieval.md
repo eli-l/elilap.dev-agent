@@ -146,8 +146,16 @@ Default is `127.0.0.1:8080`. Auth, rate limits, and the A2A binding are
 Phase 4 work (see [agent-architecture.md](/agent-architecture.md)); the path
 and JSON stay the same when they land.
 
-## Still open in Phase 2
+## How it is tested
 
-* `eval/queries.yaml`: 20 hand-picked queries with ground-truth chunk ids.
-* `internal/agentloop`, `agent ask`, and `POST /v1/ask` — the grounded
-  tool-calling loop that consumes `search_writing`.
+Retrieval has no eval runner of its own. Quality is graded end to end: the
+Ragas suite in `evals/` scores the answers retrieval feeds (faithfulness to the
+cited excerpts, context utilization, correctness, refusal discipline), and the
+promptfoo suite in `tests-ai/` covers adversarial behaviour. A ranking problem
+shows up as a faithfulness or correctness miss on the question that depended
+on the chunk. To inspect a single ranking by hand, use
+`agent query --format jsonl` and read the `chunk_id`s against the post text.
+
+The grounded loop that consumes this engine (`internal/agentloop`, `agent
+ask`, `POST /v1/ask`) is implemented; see
+[agent-architecture.md](/agent-architecture.md).

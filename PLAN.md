@@ -4,8 +4,10 @@ Build plan for a local-first RAG agent over Eli's published writing.
 This document is the source of truth for scope, sequencing, and exit criteria.
 Update it as we learn.
 
-**Last refined**: 2026-11-02 (Phase 2 retrieval and the grounded loop are
-implemented and verified; eval baseline 19/20). **Scope change
+**Last refined**: 2026-11-04 (Phase 2 retrieval and the grounded loop are
+implemented and verified. Testing is two end-to-end tools: **Ragas**
+(`evals/`) for answer quality and **promptfoo** (`tests-ai/`) for adversarial
+behaviour. The retrieval-only eval and its runner were removed). **Scope change
 (2026-10-27)**: this repo is an **agentic A2A connector** — the agent loop
 lives here. A remote peer sends a conversational task, and *our* service
 runs its own tool-using loop (retrieve → ground → answer with citations)
@@ -87,7 +89,7 @@ original schema.
 | 9 | Container runtime | Multi-stage Dockerfile (builder `golang:1.27` → minimal runtime) + `compose.yaml` with the agent service only (LocalAI is external — Decision 10) | Whole system runs on any Docker host; builder tag floats to the latest 1.27 patch ≥ go.mod's `1.27` |
 | 10 | Model serving | **Existing self-hosted LocalAI instance** at `http://192.168.78.243:8080` (LAN host `dev`, LocalAI `v4.12.0`) — models already loaded: `embeddinggemma-300m`, `spark-x2.5-4b`, `spark-x2.5-1.7b-q4`; `/readyz` → 200 (verified 2026-10-23) | One server covers embeddings + chat; nothing to pull on first boot; compose no longer runs LocalAI |
 | 11 | SQLite placement | `AGENT_DB_PATH` env: `/data/index.db` in container, `./index.db` on host; named volume `agent-data` by default | Keeps `index.db` + WAL/SHM siblings on one mount; clean, durable host mapping |
-| 12 | Import config file | One `sources.yaml` at the repo root (YAML, strict decode: `KnownFields(true)`, `version:` field) | Providers are declared in one place and can be enabled/disabled/reconfigured without a rebuild; TOML rejected — the repo already speaks YAML (`eval/queries.yaml`) and YAML carries comments in a hand-edited file (decided 2026-10-23) |
+| 12 | Import config file | One `sources.yaml` at the repo root (YAML, strict decode: `KnownFields(true)`, `version:` field) | Providers are declared in one place and can be enabled/disabled/reconfigured without a rebuild; TOML rejected — the repo already speaks YAML (`sources.yaml`) and YAML carries comments in a hand-edited file (decided 2026-10-23) |
 | 13 | Provider model | One `Provider` interface (`List` cheap → `Fetch` full) + a registry keyed by config `type`; unknown type or bad options = startup error | One code path for every source; the `List`/`Fetch` split is what makes incremental ingest cheap and fixtures-testable without credentials |
 | 14 | Ingest modes | Default = incremental against a state ledger (`source_state` + `source_items`); `--full` = re-fetch + re-chunk + **re-embed** (decided 2026-10-23) | On a full reindex the index is rebuilt exactly as the sources stand today, and the corpus is small enough (≤1,500 chunks) that the CPU cost is acceptable |
 | 15 | Agent locus | The agent loop lives **in this service** (decided 2026-10-27): one tool-calling loop over the OpenAI-compatible chat model, one internal tool `search_writing` bound to `internal/retrieval`, bounded iterations, citation-or-refusal | A2A peers ask; we answer grounded from the corpus — "generation is the caller's problem" is rescoped: the caller is remote, the loop is ours |
@@ -172,7 +174,8 @@ elilap.dev-agent/
 ├── migrations/
 │   ├── 0001_init.sql
 │   └── 0002_state.sql                # source_state + source_items ledger
-├── eval/                             # Phase 2: queries.yaml + ground truth
+├── evals/                            # Ragas: answer/refusal ground truth + evaluate.py
+├── tests-ai/                         # promptfoo red-team suite over POST /v1/ask
 ├── scripts/
 │   ├── ask                           # thin wrapper over `agent ask` (Phase 2+)
 │   ├── check-ddl.py                  # schema smoke check (runs under plain python3)
@@ -182,6 +185,8 @@ elilap.dev-agent/
     ├── api-shapes.md                 # Phase 0 output
     ├── ghost.md                      # Phase 0 capture
     ├── postiz.md                     # Phase 0 capture
+    ├── ragas-eval.md                 # Ragas answer-quality harness (evals/)
+    ├── red-team.md                   # promptfoo adversarial suite (tests-ai/)
     └── runbook.md                    # Phase 3: ops + evaluation
 ```
 
@@ -670,13 +675,13 @@ only auth and hardening get added later.
   **Done 2026-11-02** (`cmd/agent/query.go`), plus P0: hybrid RRF,
   filters, recency weighting, and live CLI/HTTP parity on the 886-chunk
   index.
-- [x] `eval/queries.yaml`: 20 hand-picked queries with ground-truth
-  chunk_ids, so the eval is a reviewable artifact, not a one-off script.
-  Target ≥15/20 with a clearly correct, verifiable answer. Once the loop
-  lands, the same 20 run end-to-end: the loop's *answers* (with
-  citations) are graded, not just raw retrieval.
-  **Done 2026-11-02**: `go run -mod=vendor ./scripts/eval`; baseline 19/20,
-  with the one known miss (`local-pipeline-state`) left in as a signal.
+- [x] Retrieval graded end to end. **Done 2026-11-04**: the retrieval-only
+  eval (`eval/queries.yaml` plus `scripts/eval`) was retired. Ragas (`evals/`)
+  now grades the loop's *answers* — faithfulness, context utilization,
+  correctness, refusal discipline — against hand-verified configs, which is
+  what the 20 raw-retrieval queries were a proxy for. History: the last
+  retrieval run scored 19/20 (`docs/runs/eval-hybrid-2026-11-02.md`,
+  deprecated).
 - [x] Promptfoo red-team suite (2026-11-03): `tests-ai/promptfooconfig.yaml`
       targets the loopback `POST /v1/ask` with bias, harmful-content, PII,
       excessive-agency, hijacking, hallucination, and RAG-attribution
@@ -784,8 +789,9 @@ citation and refusal rules above are unchanged.
 
 **Exit criteria**
 
-- 20-query eval reaches ≥15/20 with verified chunk_ids.
-  **Verified 2026-11-02: 19/20.**
+- Answer quality reaches the Ragas thresholds on the hand-verified configs in
+  `evals/configs/`; the retrieval-only 20-query hit@5 gate is retired.
+  **Last retrieval-only baseline 2026-11-02: 19/20.**
 - p50 retrieval latency <300ms; end-to-end `ask` p50 <8s on a GPU-capable
   host, ≤60s on the CPU-only Docker setup (small chat model, reasoning
   budget included). **Measured 2026-11-02: retrieval p50 58ms on the

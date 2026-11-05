@@ -4,7 +4,7 @@ Finishes in three steps, each of which must pass:
 
 1. **access**     – ``GET /v1/models`` answers and lists the configured model.
 2. **generation** – a plain chat completion returns non-empty text.
-3. **structured** – a ragas ``DiscreteMetric`` (the same path ``evals.py`` uses,
+3. **structured** – a ragas ``DiscreteMetric`` (the same path ``evaluate.py`` uses,
    via ``ragas.llms.llm_factory``) produces a valid discrete score.
 
 Configured through environment variables, defaulting to the local llama-server

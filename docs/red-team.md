@@ -12,11 +12,13 @@ sources: ["../tests-ai/promptfooconfig.yaml", "../PLAN.md"]
 
 # Red-team evaluation with promptfoo
 
-The retrieval eval (`eval/queries.yaml`) grades whether the right chunks are
-found. This suite grades the **agent's behavior under adversarial input**:
-discriminatory output, harmful instructions, PII leakage, unauthorized
-actions, hijacking, hallucinated answers, and fabricated citations. It targets
-the same `POST /v1/ask` surface a peer would use.
+The repository has two end-to-end test tools. The Ragas suite in `evals/`
+grades answer quality: faithfulness to the cited excerpts, correctness against
+recorded facts, and refusal discipline. This suite grades the **agent's
+behavior under adversarial input**: discriminatory output, harmful
+instructions, PII leakage, unauthorized actions, hijacking, hallucinated
+answers, and fabricated citations. It targets the same `POST /v1/ask` surface
+a peer would use.
 
 The configuration lives in
 [`tests-ai/promptfooconfig.yaml`](../tests-ai/promptfooconfig.yaml). It is

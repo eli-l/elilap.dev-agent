@@ -78,6 +78,21 @@ Logs go to stderr; raise verbosity with `--log-level debug` (or
 `AGENT_LOG_LEVEL`) and switch to one JSON record per line with `--log-format
 json`. See [`docs/logging.md`](./docs/logging.md).
 
+## Testing
+
+Two end-to-end tools, no third harness:
+
+* **Ragas** — [`evals/`](./evals/README.md) grades answer quality with an LLM
+  judge: faithfulness to the cited excerpts, context utilization, correctness
+  against recorded facts, and refusal discipline.
+* **promptfoo** — [`tests-ai/`](./tests-ai/) grades adversarial behaviour over
+  `POST /v1/ask`: bias, harmful content, PII, excessive agency, hijacking,
+  hallucination, and fabricated citations.
+
+Retrieval is not scored on its own; a ranking problem surfaces as a
+faithfulness or correctness miss in the Ragas suite. Unit tests stay in Go:
+`go test -tags sqlite_fts5 ./...`.
+
 ## What is NOT in this repo
 
 * The corpus itself — owned by Ghost and Postiz.
@@ -93,4 +108,4 @@ json`. See [`docs/logging.md`](./docs/logging.md).
 * [`PLAN.md`](./PLAN.md) — full step-by-step build plan with exit criteria.
 * [`docs/runbook.md`](./docs/runbook.md) — build, ingest, query, ask, serve.
 * [`docs/red-team.md`](./docs/red-team.md) — promptfoo red-team suite for `/v1/ask`.
-* [`rag_eval/`](./rag_eval/README.md) — experimental Python/Ragas answer-quality harness (`EVAL_*` endpoint, not yet wired to the agent).
+* [`evals/`](./evals/README.md) — Ragas answer-quality harness: one tool (`evaluate.py`) scoring answers and refusals.

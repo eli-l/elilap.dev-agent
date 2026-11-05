@@ -1,8 +1,8 @@
 ---
 type: Run
 title: Hybrid retrieval eval (20 queries)
-description: First run of eval/queries.yaml through the hybrid engine - 19/20 queries found a human-verified chunk in the top five, with one known miss on a section that vector and BM25 retrieval both rank below the cut.
-status: stable
+description: Deprecated historical record of eval/queries.yaml through the hybrid engine - 19/20 queries found a human-verified chunk in the top five. The runner and the fixture were removed on 2026-11-04; retrieval is now graded end to end by the Ragas suite in evals/.
+status: deprecated
 generated:
   by: deepseek/deepseek-v4.1-flash
   at: 2026-11-02T22:10:00Z
@@ -41,6 +41,12 @@ output: |
 ---
 
 # Result
+
+> **Deprecated 2026-11-04.** The retrieval-eval runner and its
+> `eval/queries.yaml` fixture were removed. This file is kept as a historical
+> record of what the hybrid engine did on that day; there is nothing left to
+> re-run. Retrieval quality is now graded end to end by the Ragas suite in
+> `evals/` — see [ragas-eval.md](/ragas-eval.md).
 
 The eval passed 19 of 20 queries, above the Phase 2 target of 15/20. The
 ground truth was chosen from content a human verified, not from whatever

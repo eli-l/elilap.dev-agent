@@ -34,6 +34,7 @@ func runAsk(args []string, rtCfg envcfg.Config, stdout, stderr io.Writer) int {
 	maxIterations := fs.Int("max-iterations", agentloop.DefaultMaxIterations, "maximum tool iterations")
 	excerptTokens := fs.Int("excerpt-tokens", agentloop.DefaultExcerptTokens, "total excerpt token budget")
 	maxTokens := fs.Int("max-tokens", agentloop.DefaultMaxTokens, "completion token budget per chat request")
+	searchMode := fs.String("search-mode", rtCfg.SearchMode, "answer path: loop (model calls search_writing) or fanout (model rephrases, the service searches)")
 	timeout := fs.Duration("timeout", askTimeout, "overall answer timeout")
 	if err := fs.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
@@ -57,6 +58,11 @@ func runAsk(args []string, rtCfg envcfg.Config, stdout, stderr io.Writer) int {
 	}
 	if *timeout <= 0 {
 		fmt.Fprintf(stderr, "agent ask: --timeout must be positive\n")
+		return 2
+	}
+	mode, err := agentloop.ParseSearchMode(*searchMode)
+	if err != nil {
+		fmt.Fprintf(stderr, "agent ask: %v\n", err)
 		return 2
 	}
 
@@ -94,6 +100,7 @@ func runAsk(args []string, rtCfg envcfg.Config, stdout, stderr io.Writer) int {
 		ExcerptTokens: *excerptTokens,
 		MaxElapsed:    *timeout,
 		MaxTokens:     *maxTokens,
+		Mode:          mode,
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), *timeout)

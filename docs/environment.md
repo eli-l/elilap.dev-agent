@@ -13,7 +13,7 @@ sources:
   - example.env
   - sources.yaml
   - cmd/agent/main.go
-  - rag_eval/README.md
+  - evals/README.md
 ---
 
 # Environment configuration and `.env` loading
@@ -66,9 +66,10 @@ constants, not in struct tags, so there is exactly one definition.
 | `LOCALAI_API_KEY` | `internal/envcfg` | empty | Optional bearer token |
 | `EMBED_MODEL` | `internal/envcfg` | `embeddinggemma-300m` | Must produce 768 dims |
 | `CHAT_MODEL` | `internal/envcfg` | `spark-x2.5-4b` | Reasoning model, used by the loop |
-| `EVAL_BASE_URL` | `rag_eval/` (Python) | `http://localhost:8000/v1` | Endpoint for the Ragas harness; independent of `LOCALAI_*` |
-| `EVAL_MODEL` | `rag_eval/` (Python) | `mtplx-qwen36-35b-a3b-optimized-speed` | Model the harness scores |
-| `EVAL_API_KEY` | `rag_eval/` (Python) | empty → `local` | Secret; local servers ignore its value |
+| `AGENT_SEARCH_MODE` | `internal/envcfg` | `loop` | `loop` (model calls `search_writing`) or `fanout` (model rephrases, the service searches); `agent ask --search-mode` wins over it |
+| `EVAL_BASE_URL` | `evals/` (Python) | `http://localhost:8000/v1` | Endpoint for the Ragas harness; independent of `LOCALAI_*` |
+| `EVAL_MODEL` | `evals/` (Python) | `mtplx-qwen36-35b-a3b-optimized-speed` | Model the harness scores |
+| `EVAL_API_KEY` | `evals/` (Python) | empty → `local` | Secret; local servers ignore its value |
 | `GHOST_API_URL` | `sources.yaml` ref | — | Credential reference, value required |
 | `GHOST_API_KEY` | `sources.yaml` ref | — | Secret |
 | `POSTIZ_API_URL` | `sources.yaml` ref | — | Credential reference, value required |
@@ -110,12 +111,12 @@ the credentials, blank is treated as missing: `agent sources validate` warns
 and `--strict` exits 1 until they are filled, matching the runtime credential
 resolver.
 
-The `EVAL_*` rows belong to the Python harness in `rag_eval/`, not to a Go
+The `EVAL_*` rows belong to the Python harness in `evals/`, not to a Go
 `envconfig` struct. `TestExampleEnvIsComplete` pins them with an explicit
 allowlist (`evalVars`), so they are checked for presence and default value but
 not derived from Go code. The harness does not load `.env`; run it with
 `uv run --env-file ../.env …` or export the variables. See
-[RAG evaluation with Ragas](rag-eval.md).
+[RAG evaluation with Ragas](ragas-eval.md).
 
 ## Adding a variable
 
@@ -126,7 +127,7 @@ not derived from Go code. The harness does not load `.env`; run it with
 4. Add the entry to `example.env` with the default or an empty secret value.
 5. Add the row to the table above; update `docs/log.md`.
 
-For a non-Go consumer (today only `rag_eval/`), also add the name and default
+For a non-Go consumer (today only `evals/`), also add the name and default
 to `evalVars` in `cmd/agent/example_env_test.go`; a variable in `example.env`
 that no allowlist entry or struct tag knows is a test failure.
 

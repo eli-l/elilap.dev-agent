@@ -1,0 +1,156 @@
+version: 1
+# Answer gold set for the Ragas harness (evals/evaluate.py).
+#
+# Each case is a question a peer would plausibly ask this agent, the chunk a
+# human verified as the evidence, and the facts a correct grounded answer has
+# to state. `must_mention` holds only headline facts — a proper noun, a model
+# id, a number — never phrasing, so a correct answer worded differently still
+# passes.
+#
+# evaluate.py turns this into a Ragas dataset: `query` -> question,
+# `must_mention` -> grading notes for the correctness metric, and
+# `expect_chunk_ids` stays for traceability.
+#
+#   cd evals && uv run python evaluate.py --kind answers
+#
+# This needs the chat endpoint up; check it first with
+# `cd evals && uv run python test_llm.py` or a single `./agent ask`.
+queries:
+  - id: ans-agent-vms
+    kind: answer
+    query: What do the OpenClaw and Hermes setups run on?
+    expect_chunk_ids:
+      - 888a0fbe3faf82658ef313b8fd3825a6a135f17f137820ea0f2e46449299a027
+      - c5851de10c21299c0b033fc02be6bc50c6495c85ab05ed1a5af879f9226cd230
+      # The same claim cross-posted to LinkedIn. A correct answer may cite the
+      # social copy instead of the post; both state the fact verbatim.
+      - 67fbdceb8833e86e1bbd9a070392e5a5beb12f5a2954b1a0ff41a5fd471786b0
+    must_mention: [Proxmox, Hermes]
+    note: Two VMs on a Proxmox host; OpenClaw and Hermes are the two setups.
+
+  - id: ans-local-hardware
+    kind: answer
+    query: How much RAM does his local model machine have and which models does he run?
+    expect_chunk_ids:
+      - 45d34a05711db1e85c012a4f34a89672b24c4e33fc4bc07761d0c2732a65b0dd
+    must_mention: [128GB, Qwen]
+    note: Bumped from 64GB to 128GB; Qwen3.6 27B/35B.
+
+  - id: ans-daily-driver
+    kind: answer
+    query: Which models does he use for daily non-agentic work?
+    expect_chunk_ids:
+      - c83722bba346af41ec6aea1a27fd24f240592d573f322b0e2719c41432841426
+    must_mention: [GPT-5.5, Codex]
+    note: GPT-5.5 for thinking, Codex for code-heavy tasks.
+
+  - id: ans-open-problem
+    kind: answer
+    query: What is still broken in the agentic setup that he wants to fix next?
+    expect_chunk_ids:
+      - 5c7f6df9f3f4f222001d5e1ad285d95959d832193347c009a40ad0c1c2794c01
+    must_mention: [credentials]
+    note: Credentials live in the same VM as the agent; Vault is the idea.
+
+  - id: ans-dropped-mcp
+    kind: answer
+    query: Why did he drop two MCP integrations?
+    expect_chunk_ids:
+      - 7bda02a97e199488580be72afa4ea28b2c89cc69e185ac828a72302e5c5bc0eb
+      - f27ab4885559bd7ed87d3c3ce2985885c29068cde276efd83cceba212452467b
+      - b2b11495f4c1141ba05c16492ef2003e93a79c095802881306ce9fc9cc9927bf
+    must_mention: [InvenTree, EliteDesk]
+    note: One hung InvenTree, one burned CPU on the EliteDesk.
+
+  - id: ans-memory-structure
+    kind: answer
+    query: How is the second memory layer of his Hermes agent structured?
+    expect_chunk_ids:
+      - 797712a8faf5c647c212682aba81111ccc8eb29659cdb576739e01ca73c87cb7
+      - 962a08991a010dca57df908e810743f7cb05c4306604672251b06b088ba70762
+      - 10eae9071d0c483700a8edbb621dbd144227f22742ab242625d167f3e5f9f19f
+    must_mention: [OKF, markdown]
+    note: OKF bundle — markdown files with YAML frontmatter, ~15 concepts.
+
+  - id: ans-local-inference
+    kind: answer
+    query: Which inference server does he run locally and why?
+    expect_chunk_ids:
+      - 5d89bdcaa1b89072339658cf7e1c0d71095ff81846efb5f597770d8b0647072c
+    must_mention: [LocalAI]
+    note: LocalAI — ChatGPT-compatible API, modular backends, one entry point.
+
+  - id: ans-8gb-model
+    kind: answer
+    query: Which model did he settle on for the 8GB RTX 2070 server?
+    expect_chunk_ids:
+      - 23f9e8e86d0e51f7840aeb47691c4af45796f888cc3cf5de9c31f721dc985b13
+      # The LinkedIn post stating the same conclusion directly: "I ended up
+      # running the Spark and nomic-embed on a single 2070 8GB GPU."
+      - 6681d7edccb5971e8ded63961d49297192b5c150d3afb0e5c2bebad61d32be0f
+    must_mention: [Spark-X2.5-4B]
+    note: Qwen3.5-9B was too slow; Spark-X2.5-4B was the fit.
+
+  - id: ans-embedding-model
+    kind: answer
+    query: Which embedding model does he use for local search?
+    expect_chunk_ids:
+      - ffddc7dee261518444d9c26944f466b66c0d634ca163e5e03f852d3cf606f2d9
+    must_mention: [nomic-embed-text-v1.5]
+    note: English-only downside, but fast and reliable, CPU-only.
+
+  - id: ans-left-zero
+    kind: answer
+    query: Why did he stop using the Zero harness and what does he use now?
+    expect_chunk_ids:
+      - 196919536dc908b38f256b4b9a02f58be34d061c1fc374ef74d476295cd25caa
+      - d67cc7a682cc2b80802055b9e276b00e2af017078162ec037c50adc9717b6fbb
+    must_mention: [Pi]
+    note: Zero needed work on the tool instead of with it; he moved to Pi.
+
+  - id: ans-escalation
+    kind: answer
+    query: What is the missing piece when agents replace human conversations?
+    expect_chunk_ids:
+      - 6f7c595d5cbb8238e46986fec42b22891e572a02002eedc30c915173b8777e58
+    must_mention: [escalation]
+    note: Bots should know when to stop and hand off to a human.
+
+  - id: ans-terminal
+    kind: answer
+    query: Which terminal multiplexer did he end up using?
+    expect_chunk_ids:
+      - 6cdc85d7dee64e25ba3864ec3d643258100d9b674ca60fa5045b0394e4430288
+      - e707e4357162ad5dd1541521f38c7844f5eb3ad36921861be85caa9104baedfb
+      - d40741bb0ad31633fae19f1fc128be9314f8bbedb7f2d87963256d7449a597e4
+    must_mention: [Zellij]
+    note: Switched from the iTerm2 + tmux combination to Zellij.
+
+  - id: ans-identity-alias
+    kind: answer
+    query: What did Ilja Lapkovsky write about the MCP noise tax?
+    expect_chunk_ids:
+      - 699593dca0defb1c52a340de92f2166a50f68c7c32afcb40d1bf6945976a60d7
+      - 05bc479ae43735bc22d579597a3f967bc4685cc5770adb107b97dfa5de2278f5
+      # The LinkedIn summary of the same post, which states the thesis directly.
+      - 7bda02a97e199488580be72afa4ea28b2c89cc69e185ac828a72302e5c5bc0eb
+    must_mention: [noise]
+    note: Pen-name alias must not be treated as a different author (identityFact).
+
+  - id: ans-social-windsurf
+    kind: answer
+    query: What did he say about Windsurf?
+    expect_chunk_ids:
+      - 17ca9d9f47c27858133dd4102c5b4aed079e35c7a1e93f63133a241a4f0bafc0
+      - eab5dc80deaa04bcc75c483e6fb636a930a6c9da5095d1ec4158be99bf05eb0e
+    must_mention: [afraid]
+    note: Postiz-only evidence — the social corpus must be answerable on its own.
+
+  - id: ans-social-local-memory
+    kind: answer
+    query: Which tool does he use to give Claude local memory?
+    expect_chunk_ids:
+      - 5a4890c93aed53fde93b7f6cb6e49ba8b65458a92cf0c9d24ea0b91c6c89165b
+      - 405080bf4734c7fe202c40489d201f6789058c0f6924b7bb0b2df2886048f402
+    must_mention: [basic-memory]
+    note: Postiz-only; duplicated rows, either id is valid evidence.

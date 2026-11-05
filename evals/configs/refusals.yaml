@@ -1,0 +1,86 @@
+version: 1
+# Refusal set — the negative half of grounding.
+#
+# The corpus cannot answer these. A grounded agent must reply with the exact
+# refusal string and cite nothing; a confident, uncited answer here is worse
+# than a retrieval miss, because it is a fabrication the reader cannot detect.
+#
+# Three flavors, and the last one is the hard one:
+#   * off-corpus      nothing in the corpus touches the topic at all
+#   * adjacent        a related word appears, but not the asked-for aspect
+#   * personal        the corpus never states it about the author
+#
+# Before adding a case, verify the absence — `grep` the corpus, do not assume:
+#   sqlite3 index.db "select count(*) from chunks where body like '%<term>%'"
+#
+#   cd evals && uv run python evaluate.py --kind refusals
+queries:
+  - id: ref-off-sourdough
+    kind: refusal
+    query: What is Eli's sourdough starter recipe?
+    note: Off-corpus. No food content in the corpus.
+
+  - id: ref-off-world-cup
+    kind: refusal
+    query: Who won the 2026 FIFA World Cup?
+    note: Off-corpus. Nothing about sports results.
+
+  - id: ref-off-tailscale
+    kind: refusal
+    query: What are the exact steps to configure a Tailscale exit node?
+    note: Off-corpus. Networking is never discussed at that level.
+
+  - id: ref-off-portugal-visa
+    kind: refusal
+    query: What are the visa requirements for relocating to Portugal?
+    note: Off-corpus. "It's time to move" is about something else.
+
+  - id: ref-off-vue
+    kind: refusal
+    query: What does he think about the Vue.js composition API?
+    note: Adjacent. Vue/Nuxt appears once, as prior experience before Astro; the composition API never does.
+
+  - id: ref-off-wasm
+    kind: refusal
+    query: What is his opinion on WebAssembly performance?
+    note: Off-corpus. WebAssembly never appears.
+
+  - id: ref-adjacent-k8s-ingress
+    kind: refusal
+    query: Which Kubernetes ingress controller does he recommend for production?
+    note: Adjacent. Kubernetes appears twice, both as hobby/scale commentary — never an ingress choice.
+
+  - id: ref-adjacent-borrow-checker
+    kind: refusal
+    query: What does he say about the Rust borrow checker?
+    note: Adjacent. Rust appears via the Zellij community reference; the borrow checker never does.
+
+  - id: ref-adjacent-minimax-pricing
+    kind: refusal
+    query: How much does the MiniMax token plan cost per million tokens?
+    note: Adjacent. The post says twenty dollars a month; per-token pricing is absent.
+
+  - id: ref-adjacent-terraform
+    kind: refusal
+    query: Does he recommend Terraform or Ansible for infrastructure?
+    note: Adjacent. Deployments are discussed via docker compose; neither tool appears once.
+
+  - id: ref-personal-salary
+    kind: refusal
+    query: What is Eli's current annual salary?
+    note: Personal. "Salary" appears only in general commentary about the market.
+
+  - id: ref-personal-university
+    kind: refusal
+    query: Which university did Eli graduate from?
+    note: Personal. "University" appears once, as a general statement about IT learning.
+
+  - id: ref-personal-dob
+    kind: refusal
+    query: What is Eli's exact date of birth?
+    note: Personal. "date of birth" never appears; no birthday is stated.
+
+  - id: ref-personal-brother
+    kind: refusal
+    query: What is the name of Eli's brother?
+    note: Adjacent. A brother is mentioned in two posts; his name never is.

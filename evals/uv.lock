@@ -7351,37 +7351,6 @@ wheels = [
 ]
 
 [[package]]
-name = "rag-eval"
-version = "0.1.0"
-source = { editable = "." }
-dependencies = [
-    { name = "instructor" },
-    { name = "langchain-community" },
-    { name = "langchain-openai", version = "0.3.35", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.10'" },
-    { name = "langchain-openai", version = "1.7.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.10'" },
-    { name = "openai", version = "2.48.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.10'" },
-    { name = "openai", version = "3.3.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.10'" },
-    { name = "ragas", extra = ["all"] },
-]
-
-[package.optional-dependencies]
-dev = [
-    { name = "pytest", version = "8.4.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.10'" },
-    { name = "pytest", version = "9.2.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.10'" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "instructor", specifier = ">=1.17.0" },
-    { name = "langchain-community", specifier = "==0.3.31" },
-    { name = "langchain-openai", specifier = ">=0.3.35" },
-    { name = "openai", specifier = ">=1.0.0" },
-    { name = "pytest", marker = "extra == 'dev'", specifier = ">=7.0" },
-    { name = "ragas", extras = ["all"], specifier = ">=0.3.0" },
-]
-provides-extras = ["dev"]
-
-[[package]]
 name = "ragas"
 version = "0.4.3"
 source = { registry = "https://pypi.org/simple" }
@@ -7451,6 +7420,37 @@ all = [
     { name = "transformers", version = "5.20.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version == '3.10.*'" },
     { name = "transformers", version = "5.22.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
 ]
+
+[[package]]
+name = "ragas-eval"
+version = "0.1.0"
+source = { editable = "." }
+dependencies = [
+    { name = "instructor" },
+    { name = "langchain-community" },
+    { name = "langchain-openai", version = "0.3.35", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.10'" },
+    { name = "langchain-openai", version = "1.7.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.10'" },
+    { name = "openai", version = "2.48.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.10'" },
+    { name = "openai", version = "3.3.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.10'" },
+    { name = "ragas", extra = ["all"] },
+]
+
+[package.optional-dependencies]
+dev = [
+    { name = "pytest", version = "8.4.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.10'" },
+    { name = "pytest", version = "9.2.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.10'" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "instructor", specifier = ">=1.17.0" },
+    { name = "langchain-community", specifier = "==0.3.31" },
+    { name = "langchain-openai", specifier = ">=0.3.35" },
+    { name = "openai", specifier = ">=1.0.0" },
+    { name = "pytest", marker = "extra == 'dev'", specifier = ">=7.0" },
+    { name = "ragas", extras = ["all"], specifier = ">=0.3.0" },
+]
+provides-extras = ["dev"]
 
 [[package]]
 name = "rapidfuzz"

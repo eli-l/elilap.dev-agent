@@ -91,11 +91,17 @@ func runServe(args []string, rtCfg envcfg.Config, stderr io.Writer) int {
 		return 1
 	}
 	searcher := &retrieval.Searcher{Store: st, Embedder: client, Model: rtCfg.EmbedModel}
+	mode, err := agentloop.ParseSearchMode(rtCfg.SearchMode)
+	if err != nil {
+		fmt.Fprintf(stderr, "agent serve: %v\n", err)
+		return 1
+	}
 	loop := &agentloop.Runner{
 		Searcher:   searcher,
 		Chat:       client,
 		Model:      rtCfg.ChatModel,
 		MaxElapsed: askTimeout,
+		Mode:       mode,
 	}
 
 	mux := http.NewServeMux()
