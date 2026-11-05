@@ -8,7 +8,7 @@ Local-first **agentic A2A connector** over that writing.
 Indexes Ghost posts (blog) + Postiz cross-posts (social), answers questions
 from them with its own grounded tool-calling loop — retrieval is the loop's
 internal `search_writing` tool — and exposes that agent to remote peers
-over A2A (Phase 4).
+over A2A v0.3.
 
 This repo is **infrastructure**, not the writing itself. The corpus lives
 upstream on Ghost and Postiz; the index is a derived artifact you can delete
@@ -16,12 +16,13 @@ and rebuild at any time.
 
 ## Status
 
-Phases 1 and 2 are implemented and runnable on a Go host: ingestion,
-resumable embeddings, hybrid retrieval (BM25 + vectors, RRF), the grounded
-tool-calling loop (`agent ask`), and the loopback dev HTTP surface
-(`/v1/retrieve`, `/v1/ask`). Phase 3 operations are next — the container
-path, `ingest --watch`, `backup`, and the first full-size runs of the two
-test suites — then the Phase 4 A2A binding. See
+Phases 1, 2, and the A2A half of Phase 4 are implemented and runnable on a
+Go host: ingestion, resumable embeddings, hybrid retrieval (BM25 + vectors,
+RRF), the grounded tool-calling loop (`agent ask`), the dev JSON paths
+(`/v1/retrieve`, `/v1/ask`), and the A2A surface — agent card discovery,
+`message/send`, bearer tokens, a per-token rate limit, and the audit stream.
+Phase 3 operations are still open (the container path, `ingest --watch`,
+`backup`, and the first full-size runs of the two test suites). See
 [`PLAN.md`](./PLAN.md) for the build plan and
 [`docs/runbook.md`](./docs/runbook.md) for the operator path.
 
@@ -35,13 +36,13 @@ Postiz (social)   ─┘        ▲                                (hybrid RRF)
                      chat + embeddings                            │ tool call
                             │                                     │
                  LocalAI (self-hosted)  ◄── agent loop ──  question
-              (`spark-x2.5-4b`, `embeddinggemma-300m`)   (`ask` today,
-                                                          A2A in Phase 4)
+              (`spark-x2.5-4b`, `embeddinggemma-300m`)   (`ask`, `/v1/ask`,
+                                                          A2A message/send)
 ```
 
-* **One Go binary** with subcommands: `ingest`, `embed`, `query`, `ask`
-  (Phase 2), `stats`, `serve` (Phase 2 dev form: token-less, loopback;
-  token-gated A2A in Phase 4).
+* **One Go binary** with subcommands: `ingest`, `embed`, `query`, `ask`,
+  `stats`, `serve` (A2A card + `message/send` + `/v1/retrieve` +
+  `/v1/ask`), and `tokens` (A2A bearer issuance/revocation).
 * **One SQLite file** (`index.db`) you can `cp` to back up.
 * **Hybrid retrieval**: BM25 (FTS5) + vector (sqlite-vec) with RRF merging.
 * **Model-agnostic**: self-hosted LocalAI by default
@@ -51,9 +52,12 @@ Postiz (social)   ─┘        ▲                                (hybrid RRF)
   Both self-hosted; no API keys, no cloud calls.
 * **Agentic**: the service runs the loop — one internal tool
   (`search_writing`), bounded iterations, citation-or-refusal. `agent ask`
-  is the CLI form; the Phase 2 dev server exposes the same loop and the
-  raw retriever over loopback HTTP (`/v1/retrieve`, `/v1/ask`); A2A
-  `message/send` + agent card land in Phase 4 on the same paths.
+  is the CLI form; `agent serve` exposes the same loop and the raw
+  retriever over HTTP (`/v1/retrieve`, `/v1/ask`) and as an **A2A v0.3
+  agent** (`message/send` at `/a2a`, card at
+  `/.well-known/agent-card.json`). Loopback is token-less for development;
+  a configured bearer token gates every surface, and a public bind requires
+  one.
 
 ## Quick reference
 
@@ -66,8 +70,16 @@ go build -tags sqlite_fts5 -o agent ./cmd/agent
 ./agent embed
 ./agent query "when did I write about burnout"
 ./agent ask "what did I write about harnesses?"
-./agent serve             # 127.0.0.1:8080, loopback only
+./agent serve             # 127.0.0.1:8080, token-less loopback
+./agent tokens add --id alice   # then re-run serve; prints id:token once
+./agent serve --bind-public --addr 0.0.0.0:8080   # requires a token
 ```
+
+An A2A client discovers the agent at
+`http://127.0.0.1:8080/.well-known/agent-card.json` and sends `message/send`
+to `http://127.0.0.1:8080/a2a`. See
+[`docs/a2a.md`](./docs/a2a.md) for the wire contract, token rotation, rate
+limit, and audit record.
 
 `example.env` lists every environment variable the agent reads, with defaults
 for settings and empty values for secrets. The binary loads `.env` at startup
@@ -108,6 +120,7 @@ faithfulness or correctness miss in the Ragas suite. Unit tests stay in Go:
 ## See also
 
 * [`PLAN.md`](./PLAN.md) — full step-by-step build plan with exit criteria.
-* [`docs/runbook.md`](./docs/runbook.md) — build, ingest, query, ask, serve.
+* [`docs/runbook.md`](./docs/runbook.md) — build, ingest, query, ask, serve, the A2A surface.
+* [`docs/a2a.md`](./docs/a2a.md) — A2A v0.3 wire contract: agent card, `message/send`, tokens, rate limit, audit.
 * [`docs/red-team.md`](./docs/red-team.md) — promptfoo red-team suite for `/v1/ask`.
 * [`evals/`](./evals/README.md) — Ragas answer-quality harness: one tool (`evaluate.py`) scoring answers and refusals.

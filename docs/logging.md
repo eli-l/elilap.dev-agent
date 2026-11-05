@@ -1,7 +1,7 @@
 ---
 type: Reference
 title: Logging configuration and module loggers
-description: The zerolog setup behind the agent binary, the five module sub-loggers (main, http, sources, db, agent), the global --log-level/--log-format flags and AGENT_LOG_* environment variables, and what may only reach a log line at debug level.
+description: The zerolog setup behind the agent binary, the six module sub-loggers (main, http, sources, db, agent, audit), the global --log-level/--log-format flags and AGENT_LOG_* environment variables, the always-on A2A audit record, and what may only reach a log line at debug level.
 status: stable
 generated:
   by: deepseek/deepseek-v4.1-flash
@@ -22,7 +22,7 @@ The binary logs through **zerolog** (`github.com/rs/zerolog`, vendored). All
 logging configuration and every logger lives in `internal/logging`; no other
 package imports zerolog directly except through that seam.
 
-## One root, five module loggers
+## One root, six module loggers
 
 `logging.Setup` builds a single root logger and derives one child per module.
 Each child stamps a `module` field, so one level knob and one writer configure
@@ -35,9 +35,16 @@ the whole process while log lines stay attributable:
 | Sources | `sources` | `logging.Sources()` | Upstream fetchers (Ghost, Postiz): pages listed, items fetched, request outcomes. |
 | DB | `db` | `logging.DB()` | Database: open, migrations applied, chunk and ledger writes, and the retrieval read path. |
 | Agent | `agent` | `logging.Agent()` | The grounded loop: the RAG request sent to the chat model, the messages it contains, the tool calls and results, and the reply. |
+| Audit | `audit` | `logging.Audit()` | One record per A2A/`/v1/ask` task: token id, method, question, outcome, iterations, citation count, elapsed. No answer, prompt, or excerpt. |
 
 Before `Setup` runs, every module logger is a no-op, so library packages and
 tests stay silent by default.
+
+**The audit module is pinned to `info`.** It is not a debugging aid, so
+`--log-level warn` (or `error`) does not suppress it; only an explicit
+`disabled` level turns the audit stream off. Its record is the one place a
+peer's question is logged, and it never carries the answer, the prompt, or
+retrieved bodies (see [a2a.md](/a2a.md)).
 
 ## Configuration
 
@@ -141,6 +148,6 @@ and grounding cannot be debugged end to end without seeing what was asked and
 what came back, and it is confined to `debug` so a normal or `info` run still
 carries no bodies. Treat those lines as local-development output: debug logs
 then contain the question (including peer task text on `/v1/ask`) and published
-excerpts, so do not enable them on a shared collector. The Phase 4 A2A audit
-log is a separate, always-on record and still never contains chunk bodies,
-prompts, or user answers (`PLAN.md` security posture).
+excerpts, so do not enable them on a shared collector. The A2A audit stream is
+a separate, always-on record and still never contains chunk bodies, prompts,
+or user answers (`PLAN.md` security posture).

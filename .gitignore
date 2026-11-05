@@ -21,6 +21,9 @@
 /.env
 /.env.*
 /config.local.yaml
+# A2A bearer tokens (agent tokens add writes this 0600 file)
+/a2a-tokens.txt
+/.a2a-tokens-*
 
 # Editor / OS
 .DS_Store

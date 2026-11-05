@@ -7,6 +7,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"math"
 	"net"
 	"net/http"
 	"os"
@@ -16,17 +17,22 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/eli-l/elilap.dev-agent/internal/a2a"
 	"github.com/eli-l/elilap.dev-agent/internal/agentloop"
+	"github.com/eli-l/elilap.dev-agent/internal/audit"
+	"github.com/eli-l/elilap.dev-agent/internal/auth"
 	"github.com/eli-l/elilap.dev-agent/internal/envcfg"
 	"github.com/eli-l/elilap.dev-agent/internal/llm"
 	"github.com/eli-l/elilap.dev-agent/internal/logging"
+	"github.com/eli-l/elilap.dev-agent/internal/ratelimit"
 	"github.com/eli-l/elilap.dev-agent/internal/retrieval"
 	"github.com/eli-l/elilap.dev-agent/internal/sources/shared"
 	"github.com/eli-l/elilap.dev-agent/internal/store"
 )
 
-// The Phase 2 dev server: token-less by design, so it must bind loopback only
-// (PLAN.md Decision 16). Auth and rate limits are Phase 4 work.
+// The read-only HTTP surface: the A2A binding, the two JSON paths the A2A
+// message wraps, and the agent card. It binds loopback only unless
+// --bind-public is given, and a non-loopback bind requires a token.
 const (
 	// defaultServeAddr is the loopback endpoint `agent serve` binds.
 	defaultServeAddr = "127.0.0.1:8080"
@@ -35,6 +41,9 @@ const (
 	retrieveRoute = "/v1/retrieve"
 	// askRoute runs the full grounded loop.
 	askRoute = "/v1/ask"
+	// defaultRateLimit is the per-token task budget per minute (PLAN.md
+	// Phase 4): one peer must not be able to pin the single chat-model host.
+	defaultRateLimit = 30
 	// maxRequestBody caps one request body; a query is a sentence, not a
 	// document.
 	maxRequestBody = 64 << 10
@@ -42,15 +51,23 @@ const (
 	retrieveTimeout = 30 * time.Second
 	// shutdownTimeout bounds the graceful drain on SIGINT/SIGTERM.
 	shutdownTimeout = 5 * time.Second
+	// surfaceRPC and surfaceJSON select the error body shape a transport
+	// middleware writes: JSON-RPC for /a2a, the dev surface's {"error"} for
+	// /v1/*.
+	surfaceRPC  = "rpc"
+	surfaceJSON = "json"
 )
 
-// runServe implements `agent serve`: the read-only dev HTTP surface over the
-// existing index. It binds loopback only and refuses to start otherwise.
+// runServe implements `agent serve`: the read-only HTTP surface over the
+// existing index, including the A2A JSON-RPC endpoint at /a2a and the agent
+// card at /.well-known/agent-card.json.
 func runServe(args []string, rtCfg envcfg.Config, stderr io.Writer) int {
 	fs := flag.NewFlagSet("agent serve", flag.ContinueOnError)
 	fs.SetOutput(stderr)
-	addr := fs.String("addr", defaultServeAddr, "loopback bind address (host:port)")
+	addr := fs.String("addr", defaultServeAddr, "bind address (host:port)")
+	bindPublic := fs.Bool("bind-public", false, "bind a non-loopback address; requires at least one A2A token")
 	dbFlag := fs.String("db", rtCfg.DBPath, "path to the SQLite index")
+	rateLimit := fs.Int("rate-limit", defaultRateLimit, "answer-bearing tasks per minute per token (0 disables)")
 	if err := fs.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return 0
@@ -61,8 +78,27 @@ func runServe(args []string, rtCfg envcfg.Config, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "agent serve: unexpected argument %q\n", fs.Arg(0))
 		return 2
 	}
-	if err := validateLoopbackAddr(*addr); err != nil {
+	if *bindPublic {
+		if err := validatePublicAddr(*addr); err != nil {
+			fmt.Fprintf(stderr, "agent serve: %v\n", err)
+			return 2
+		}
+	} else if err := validateLoopbackAddr(*addr); err != nil {
 		fmt.Fprintf(stderr, "agent serve: %v\n", err)
+		return 2
+	}
+
+	// Tokens are the only auth input. A missing token file and an empty env
+	// list mean the token-less loopback dev deployment; a malformed file is a
+	// startup error, never a silent fallback.
+	tokens, err := auth.NewStore(rtCfg.A2ATokens, rtCfg.A2ATokensFile)
+	if err != nil {
+		fmt.Fprintf(stderr, "agent serve: %v\n", err)
+		return 2
+	}
+	secured := tokens.Len() > 0
+	if *bindPublic && !secured {
+		fmt.Fprintf(stderr, "agent serve: --bind-public requires an A2A token; issue one with `agent tokens add --id <id>` or set %s\n", envcfg.EnvA2ATokens)
 		return 2
 	}
 
@@ -97,10 +133,21 @@ func runServe(args []string, rtCfg envcfg.Config, stderr io.Writer) int {
 		Model:      rtCfg.ChatModel,
 		MaxElapsed: askTimeout,
 	}
+	limiter := ratelimit.New(*rateLimit)
 
+	card := serveAgentCard(secured, rtCfg.A2APublicURL)
 	mux := http.NewServeMux()
-	mux.Handle(retrieveRoute, logging.RequestMiddleware(retrieveRoute, newRetrieveHandler(searcher)))
-	mux.Handle(askRoute, logging.RequestMiddleware(askRoute, newAskHandler(loop)))
+	for _, path := range a2a.CardPaths {
+		mux.Handle("GET "+path, logging.RequestMiddleware(path, card))
+	}
+	mux.Handle(a2a.CardURLPath, logging.RequestMiddleware(a2a.CardURLPath,
+		requireToken(tokens, surfaceRPC,
+			limitTasks(limiter, surfaceRPC, a2a.NewHandler(loop)))))
+	mux.Handle(retrieveRoute, logging.RequestMiddleware(retrieveRoute,
+		requireToken(tokens, surfaceJSON, newRetrieveHandler(searcher))))
+	mux.Handle(askRoute, logging.RequestMiddleware(askRoute,
+		requireToken(tokens, surfaceJSON,
+			limitTasks(limiter, surfaceJSON, newAskHandler(loop)))))
 
 	srv := &http.Server{
 		Addr:              *addr,
@@ -119,8 +166,12 @@ func runServe(args []string, rtCfg envcfg.Config, stderr io.Writer) int {
 	log.Info().
 		Str("addr", *addr).
 		Str("db", *dbFlag).
-		Str("model", rtCfg.EmbedModel).
-		Msg("dev server listening (token-less, loopback-only)")
+		Str("embed_model", rtCfg.EmbedModel).
+		Bool("public_bind", *bindPublic).
+		Bool("auth", secured).
+		Int("tokens", tokens.Len()).
+		Int("rate_limit_per_min", *rateLimit).
+		Msg("server listening")
 
 	errCh := make(chan error, 1)
 	go func() { errCh <- srv.ListenAndServe() }()
@@ -128,13 +179,13 @@ func runServe(args []string, rtCfg envcfg.Config, stderr io.Writer) int {
 	select {
 	case err := <-errCh:
 		if err != nil && !errors.Is(err, http.ErrServerClosed) {
-			log.Error().Err(err).Msg("dev server failed")
+			log.Error().Err(err).Msg("server failed")
 			fmt.Fprintf(stderr, "agent serve: %v\n", err)
 			return 1
 		}
 	case <-ctx.Done():
 		stop()
-		log.Info().Msg("shutting down dev server")
+		log.Info().Msg("shutting down server")
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
 		defer cancel()
 		if err := srv.Shutdown(shutdownCtx); err != nil {
@@ -142,9 +193,9 @@ func runServe(args []string, rtCfg envcfg.Config, stderr io.Writer) int {
 			// window on Ctrl-C. That is an expected forced close, not a
 			// server failure.
 			if errors.Is(err, context.DeadlineExceeded) {
-				log.Warn().Err(err).Msg("dev server shutdown deadline exceeded; closing remaining connections")
+				log.Warn().Err(err).Msg("server shutdown deadline exceeded; closing remaining connections")
 			} else {
-				log.Error().Err(err).Msg("dev server shutdown failed")
+				log.Error().Err(err).Msg("server shutdown failed")
 				fmt.Fprintf(stderr, "agent serve: shutdown: %v\n", err)
 				return 1
 			}
@@ -153,7 +204,39 @@ func runServe(args []string, rtCfg envcfg.Config, stderr io.Writer) int {
 	return 0
 }
 
-// validateLoopbackAddr rejects any address that could expose the token-less
+// serveAgentCard answers the agent card requests. The card is public: a peer
+// must be able to discover which scheme to authenticate with before it has a
+// token. publicURL, when set, is the advertised service root; otherwise it is
+// derived from the request.
+func serveAgentCard(secured bool, publicURL string) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		base := publicURL
+		if base == "" {
+			base = requestBaseURL(r)
+		}
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		if err := json.NewEncoder(w).Encode(a2a.NewCard(base, secured)); err != nil {
+			log := logging.HTTP()
+			log.Error().Err(err).Msg("write agent card failed")
+		}
+	})
+}
+
+// requestBaseURL reconstructs the service root a peer used: scheme from TLS
+// or the proxy header, host from the request. AGENT_A2A_PUBLIC_URL overrides
+// this when the service sits behind a path-prefixing proxy.
+func requestBaseURL(r *http.Request) string {
+	scheme := "http"
+	if r.TLS != nil {
+		scheme = "https"
+	}
+	if proto := strings.ToLower(strings.TrimSpace(r.Header.Get("X-Forwarded-Proto"))); proto == "http" || proto == "https" {
+		scheme = proto
+	}
+	return scheme + "://" + r.Host
+}
+
+// validateLoopbackAddr rejects any address that could expose a token-less
 // server beyond this host. An empty host (":8080") means all interfaces, so it
 // is rejected explicitly rather than left to the listener.
 func validateLoopbackAddr(addr string) error {
@@ -162,19 +245,135 @@ func validateLoopbackAddr(addr string) error {
 		return fmt.Errorf("invalid --addr %q: %w", addr, err)
 	}
 	if host == "" {
-		return fmt.Errorf("--addr %q binds every interface; use a loopback host such as 127.0.0.1", addr)
+		return fmt.Errorf("--addr %q binds every interface; use a loopback host such as 127.0.0.1, or --bind-public with a token", addr)
 	}
-	n, err := strconv.Atoi(port)
-	if err != nil || n < 1 || n > 65535 {
-		return fmt.Errorf("invalid --addr %q: port must be a number between 1 and 65535", addr)
+	if err := validatePort(addr, port); err != nil {
+		return err
 	}
 	if strings.EqualFold(host, "localhost") {
 		return nil
 	}
 	if ip := net.ParseIP(host); ip == nil || !ip.IsLoopback() {
-		return fmt.Errorf("--addr %q is not loopback; the dev server is token-less and must not be exposed", addr)
+		return fmt.Errorf("--addr %q is not loopback; pass --bind-public and configure a token to expose the service", addr)
 	}
 	return nil
+}
+
+// validatePublicAddr accepts any bindable address once --bind-public is set;
+// the token requirement is enforced separately.
+func validatePublicAddr(addr string) error {
+	_, port, err := net.SplitHostPort(addr)
+	if err != nil {
+		return fmt.Errorf("invalid --addr %q: %w", addr, err)
+	}
+	return validatePort(addr, port)
+}
+
+func validatePort(addr, port string) error {
+	n, err := strconv.Atoi(port)
+	if err != nil || n < 1 || n > 65535 {
+		return fmt.Errorf("invalid --addr %q: port must be a number between 1 and 65535", addr)
+	}
+	return nil
+}
+
+// requireToken enforces the bearer token when the store has any configured.
+// With no tokens the loopback dev deployment stays token-less (the caller has
+// already refused a public bind in that case).
+func requireToken(store *auth.Store, surface string, next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if store == nil || store.Len() == 0 {
+			next.ServeHTTP(w, r)
+			return
+		}
+		value, ok := bearerToken(r)
+		if !ok {
+			writeAuthError(w, surface)
+			return
+		}
+		token, ok := store.Lookup(value)
+		if !ok {
+			writeAuthError(w, surface)
+			return
+		}
+		next.ServeHTTP(w, r.WithContext(auth.WithToken(r.Context(), token)))
+	})
+}
+
+// bearerToken extracts the RFC 6750 bearer credential.
+func bearerToken(r *http.Request) (string, bool) {
+	scheme, value, ok := strings.Cut(strings.TrimSpace(r.Header.Get("Authorization")), " ")
+	if !ok || !strings.EqualFold(scheme, "Bearer") {
+		return "", false
+	}
+	value = strings.TrimSpace(value)
+	return value, value != ""
+}
+
+// writeAuthError writes the 401 both surfaces use, including the challenge
+// header A2A clients look for.
+func writeAuthError(w http.ResponseWriter, surface string) {
+	w.Header().Set("WWW-Authenticate", `Bearer realm="elilap.dev-agent"`)
+	if surface == surfaceRPC {
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		w.WriteHeader(http.StatusUnauthorized)
+		_ = json.NewEncoder(w).Encode(a2a.Response{
+			JSONRPC: "2.0",
+			ID:      json.RawMessage("null"),
+			Error:   &a2a.Error{Code: a2a.CodeInvalidRequest, Message: "unauthorized"},
+		})
+		return
+	}
+	writeJSONError(w, http.StatusUnauthorized, "unauthorized")
+}
+
+// limitTasks applies the per-token task budget to the answer-bearing routes.
+// An unauthenticated (dev) request is keyed by peer address so a local caller
+// cannot monopolize the model host either.
+func limitTasks(limiter *ratelimit.Limiter, surface string, next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		key := ""
+		if token, ok := auth.TokenFrom(r.Context()); ok {
+			key = token.ID
+		} else {
+			key = "ip:" + remoteHost(r.RemoteAddr)
+		}
+		if retry, ok := limiter.Allow(key); !ok {
+			seconds := int(math.Ceil(retry.Seconds()))
+			if seconds < 1 {
+				seconds = 1
+			}
+			w.Header().Set("Retry-After", strconv.Itoa(seconds))
+			log := logging.HTTP()
+			log.Warn().Str("key", key).Int("retry_after_s", seconds).Msg("rate limit exceeded")
+			if surface == surfaceRPC {
+				w.Header().Set("Content-Type", "application/json; charset=utf-8")
+				w.WriteHeader(http.StatusTooManyRequests)
+				_ = json.NewEncoder(w).Encode(a2a.Response{
+					JSONRPC: "2.0",
+					ID:      json.RawMessage("null"),
+					Error: &a2a.Error{
+						Code:    a2a.CodeServerError,
+						Message: "rate limit exceeded",
+						Data:    map[string]any{"retry_after_seconds": seconds},
+					},
+				})
+				return
+			}
+			writeJSONError(w, http.StatusTooManyRequests, "rate limit exceeded")
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+// remoteHost strips the port from a RemoteAddr.
+func remoteHost(addr string) string {
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		return addr
+	}
+	return host
 }
 
 // retriever is the slice of retrieval.Searcher the HTTP handler needs, so
@@ -263,7 +462,7 @@ func (h *retrieveHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// writeJSONError writes the one error shape the dev surface uses.
+// writeJSONError writes the one error shape the /v1 surface uses.
 func writeJSONError(w http.ResponseWriter, status int, msg string) {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.WriteHeader(status)
@@ -312,22 +511,58 @@ func (h *askHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, http.StatusBadRequest, "question must not be empty")
 		return
 	}
+	if len(req.Question) > agentloop.MaxQuestionBytes {
+		writeJSONError(w, http.StatusBadRequest,
+			fmt.Sprintf("question must be at most %d bytes", agentloop.MaxQuestionBytes))
+		return
+	}
 
 	ctx, cancel := context.WithTimeout(r.Context(), askTimeout)
 	defer cancel()
+
+	start := time.Now()
 	answer, err := h.loop.Run(ctx, req.Question)
+	tokenID := ""
+	if token, ok := auth.TokenFrom(r.Context()); ok {
+		tokenID = token.ID
+	}
+	entry := audit.Entry{
+		TokenID:  tokenID,
+		Method:   "v1/ask",
+		Question: req.Question,
+		Elapsed:  time.Since(start),
+	}
 	log := logging.HTTP()
 	if err != nil {
 		switch {
+		case errors.Is(err, agentloop.ErrQuestionTooLong):
+			entry.Outcome = audit.OutcomeError
+			audit.Answer(entry)
+			writeJSONError(w, http.StatusBadRequest, err.Error())
 		case errors.Is(err, agentloop.ErrBudget), errors.Is(err, context.DeadlineExceeded):
+			entry.Outcome = audit.OutcomeTimeout
+			audit.Answer(entry)
 			log.Error().Err(err).Msg("ask timed out")
 			writeJSONError(w, http.StatusGatewayTimeout, "answer timed out")
 		default:
+			entry.Outcome = audit.OutcomeError
+			audit.Answer(entry)
 			log.Error().Err(err).Msg("ask failed")
 			writeJSONError(w, http.StatusBadGateway, "answer failed")
 		}
 		return
 	}
+
+	entry.ToolIterations = answer.ToolIterations
+	entry.Citations = len(answer.Citations)
+	entry.Refused = answer.Refused
+	if answer.Refused {
+		entry.Outcome = audit.OutcomeRefused
+	} else {
+		entry.Outcome = audit.OutcomeAnswered
+	}
+	audit.Answer(entry)
+
 	if answer.Citations == nil {
 		answer.Citations = []agentloop.Citation{}
 	}

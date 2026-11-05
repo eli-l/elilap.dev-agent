@@ -34,9 +34,10 @@ measured p50 on the 886-chunk index is 58ms
   and returns the JSON `Hit` shape.
 * `cmd/agent/query.go` — `agent query`: the raw tool, no LLM, text/jsonl
   output.
-* `cmd/agent/serve.go` — `agent serve`: `POST /v1/retrieve`, loopback-only
-  and token-less, read-only index, plus the model-tag startup guard in
-  `cmd/agent/indexcheck.go` (also used by `agent query`).
+* `cmd/agent/serve.go` — `agent serve`: `POST /v1/retrieve` (plus `/v1/ask`
+  and the A2A `/a2a` endpoint), loopback-only by default, token-less only
+  when no A2A token is configured, read-only index, plus the model-tag
+  startup guard in `cmd/agent/indexcheck.go` (also used by `agent query`).
 
 The corpus is embedded with `title`, `section`, and `body` joined by blank
 lines (see [embeddings.md](/embeddings.md)); the query is embedded as the
@@ -144,11 +145,12 @@ duration). Nothing is logged at `info`, and the trace works for `agent query`,
 
 ## Safety posture
 
-The dev server is token-less, so it refuses to start unless `--addr` names a
+A server with no configured token refuses to start unless `--addr` names a
 loopback host: `:8080`, `0.0.0.0`, and LAN addresses are startup errors.
-Default is `127.0.0.1:8080`. Auth, rate limits, and the A2A binding are
-Phase 4 work (see [agent-architecture.md](/agent-architecture.md)); the path
-and JSON stay the same when they land.
+Default is `127.0.0.1:8080`. Since 2026-11-05 a configured bearer token gates
+`/v1/retrieve`, `/v1/ask`, and `/a2a`; exposing the server needs
+`--bind-public` plus a token. The path and JSON are unchanged from Phase 2
+(see [a2a.md](/a2a.md) and [agent-architecture.md](/agent-architecture.md)).
 
 ## How it is tested
 

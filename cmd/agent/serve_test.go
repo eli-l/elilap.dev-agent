@@ -55,9 +55,9 @@ func TestValidateLoopbackAddr(t *testing.T) {
 		want string
 	}{
 		{addr: ":8080", want: "binds every interface"},
-		{addr: "0.0.0.0:8080", want: "not loopback"},
-		{addr: "192.168.1.10:8080", want: "not loopback"},
-		{addr: "example.com:8080", want: "not loopback"},
+		{addr: "0.0.0.0:8080", want: "--bind-public"},
+		{addr: "192.168.1.10:8080", want: "--bind-public"},
+		{addr: "example.com:8080", want: "--bind-public"},
 		{addr: "127.0.0.1:http", want: "port must be a number"},
 		{addr: "127.0.0.1:0", want: "port must be a number"},
 		{addr: "127.0.0.1", want: "invalid --addr"},
@@ -82,7 +82,7 @@ func TestRunServeRejectsNonLoopbackBeforeOpeningIndex(t *testing.T) {
 	if code != 2 {
 		t.Errorf("exit = %d, want 2 for a non-loopback bind", code)
 	}
-	if !strings.Contains(stderr.String(), "must not be exposed") {
+	if !strings.Contains(stderr.String(), "--bind-public") {
 		t.Errorf("stderr = %q, want the exposure warning", stderr.String())
 	}
 }

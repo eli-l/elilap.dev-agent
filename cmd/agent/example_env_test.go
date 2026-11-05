@@ -42,6 +42,9 @@ func TestExampleEnvIsComplete(t *testing.T) {
 		envcfg.EnvLocalAIAPIKey:  "",
 		envcfg.EnvEmbedModel:     envcfg.DefaultEmbedModel,
 		envcfg.EnvChatModel:      envcfg.DefaultChatModel,
+		envcfg.EnvA2ATokens:      "",
+		envcfg.EnvA2ATokensFile:  envcfg.DefaultA2ATokensFile,
+		envcfg.EnvA2APublicURL:   "",
 	}
 
 	// evals/ (Python, uv) reads EVAL_* directly; no Go envconfig struct

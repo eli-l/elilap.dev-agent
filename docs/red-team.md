@@ -26,8 +26,10 @@ checked in; generated results are not.
 
 ## Prerequisites
 
-* The agent dev server running on loopback:
-  `./agent serve --addr 127.0.0.1:8080` (token-less, loopback-only).
+* The agent server running on loopback:
+  `./agent serve --addr 127.0.0.1:8080` (token-less when no A2A token is
+  configured; with a token, add `Authorization: Bearer <token>` to the
+  target headers).
 * A populated, embedded `index.db`; the suite must exercise the real retrieval
   + loop path, not a stub.
 * Promptfoo installed (globally or via `npx`) and its **own** model
@@ -114,9 +116,10 @@ npx promptfoo@latest redteam run -c tests-ai/promptfooconfig.yaml --force
 ## Safety posture
 
 The suite sends deliberately harmful and manipulative prompts. Keep the target
-on `127.0.0.1` (the dev server refuses non-loopback binds), never point it at
-a public deployment, and treat `tests-ai/redteam.yaml` as local evidence -
-generated attacks can contain offensive text and are not committed.
+on `127.0.0.1` (a token-less server refuses non-loopback binds; a public bind
+needs `--bind-public` plus a token), never point it at an exposed deployment,
+and treat `tests-ai/redteam.yaml` as local evidence - generated attacks can
+contain offensive text and are not committed.
 
 Configured 2026-11-03; a full run report has not been captured in `docs/runs/`
 yet.

@@ -1,7 +1,7 @@
 ---
 type: Guide
 title: Runbook - build, ingest, embed, query, ask, serve
-description: The operator path from a clean checkout to grounded answers - building the binary, rebuilding the index, running hybrid queries and the agent loop, the loopback dev server, the two end-to-end test suites (Ragas and promptfoo), and the failures you are likely to hit.
+description: The operator path from a clean checkout to grounded answers - building the binary, rebuilding the index, running hybrid queries and the agent loop, the HTTP server (A2A card + message/send, bearer tokens, /v1/* paths), the two end-to-end test suites (Ragas and promptfoo), and the failures you are likely to hit.
 status: stable
 generated:
   by: deepseek/deepseek-v4.1-flash
@@ -71,24 +71,57 @@ a `chunk_id` the loop never retrieved, is replaced by the refusal string.
 `tool_iterations` counts tool-executing rounds (max 3 by default).
 On this CPU host an answer takes roughly 10-25 seconds.
 
-## Dev server
+## Server (A2A + dev JSON)
 
 ```bash
-./agent serve                          # 127.0.0.1:8080, loopback only
+./agent serve                          # 127.0.0.1:8080, token-less, loopback only
 ./agent serve --addr 127.0.0.1:18080 --db ./index.db
+./agent tokens add --id alice          # issue a token; prints alice:<token> once
+./agent serve --bind-public --addr 0.0.0.0:8080   # requires a token
 ```
 
+Without a configured token the loopback server is the token-less dev surface.
+Once a token exists (env or `./a2a-tokens.txt`) every `/a2a` and `/v1/*`
+request needs `Authorization: Bearer <token>`; `--bind-public` is the only way
+to bind a non-loopback address and it refuses to start without a token.
+
 ```bash
-curl -sS -X POST http://127.0.0.1:8080/v1/retrieve \
+# Agent card (public, no token): the discovery document a peer reads first.
+curl -sS http://127.0.0.1:8080/.well-known/agent-card.json | jq .
+
+# A2A message/send: one grounded answer as an A2A Message with citations.
+curl -sS -X POST http://127.0.0.1:8080/a2a \
+  -H "Authorization: Bearer $A2A_TOKEN" \
   -H 'Content-Type: application/json' \
+  -d '{"jsonrpc":"2.0","id":1,"method":"message/send","params":{"message":{
+        "kind":"message","role":"user","messageId":"m-1",
+        "parts":[{"kind":"text","text":"What does Eli say about harnesses?"}]}}}'
+
+# The plain JSON paths underneath it (same auth).
+curl -sS -X POST http://127.0.0.1:8080/v1/retrieve \
+  -H "Authorization: Bearer $A2A_TOKEN" -H 'Content-Type: application/json' \
   -d '{"query":"harness vendor lock-in","top_n":3,"source":"ghost"}'
 
 curl -sS -X POST http://127.0.0.1:8080/v1/ask \
-  -H 'Content-Type: application/json' \
+  -H "Authorization: Bearer $A2A_TOKEN" -H 'Content-Type: application/json' \
   -d '{"question":"What does Eli say about harnesses?"}'
 ```
 
-The dev server is token-less; a non-loopback `--addr` is a startup error.
+Rate limit: 30 answer-bearing tasks per minute per token (`--rate-limit`, 0
+disables); over-limit is HTTP 429 with `Retry-After`. Each task is bounded by
+the loop budget (3 tool iterations, 4,000 excerpt tokens, 90s wall clock) and
+a question is capped at 8 KiB. Tokens live in a `0600` file that is re-read on
+change, so add/revoke needs no restart:
+
+```bash
+./agent tokens add --id bob     # hand the printed value to the peer
+./agent tokens list             # ids only, never values
+./agent tokens revoke --id bob
+```
+
+The audit stream is one `audit` module line per task: token id, question,
+outcome, iterations, citations, elapsed. It never carries the answer, prompt,
+or excerpts. Full wire contract: [a2a.md](/a2a.md).
 
 ## Testing the agent
 
@@ -142,6 +175,10 @@ npx promptfoo@latest redteam report          # browser report
 
 Promptfoo needs its own model credentials for attack generation/grading
 (`~/.promptfoo`); those are separate from the agent's `LOCALAI_*` variables.
+The loopback server above is token-less; if you configured an A2A token, add
+`Authorization: Bearer <token>` to the target headers in
+`tests-ai/promptfooconfig.yaml` or run a token-less loopback server for the
+suite.
 Generated tests land in `tests-ai/redteam.yaml` (gitignored). The suite covers
 bias, harmful content, PII, excessive agency, hijacking, hallucination, and
 fabricated RAG citations, plus `basic` and `jailbreak:meta` strategies. See
@@ -167,7 +204,11 @@ of the following is Phase 3 work:
 | `no index at ...; run agent ingest and agent embed first` | The index is missing or empty. Run ingest, then embed. |
 | `index has no embeddings` | `./agent embed` has not run or wrote no rows; run it, then check `agent stats`. |
 | `index vectors are stamped X, but EMBED_MODEL=Y expects Z` | The index was embedded by another model/text template. Run `./agent embed` (the tag makes every chunk pending) or point `EMBED_MODEL` at the model that built it. |
-| `--addr ... is not loopback` | The dev server refuses to bind a public interface by design. Use `127.0.0.1:<port>`. |
+| `--addr ... is not loopback` | Use `127.0.0.1:<port>`, or `--bind-public` with a configured token. |
+| `--bind-public requires an A2A token` | Issue one with `./agent tokens add --id <id>`; the server will not expose an unauthenticated endpoint. |
+| `401 unauthorized` from `/a2a` or `/v1/*` | Send `Authorization: Bearer <token>`; confirm the id is listed by `agent tokens list`. |
+| `auth: token file ... must not be group/world-accessible` | `chmod 600` the token file; `agent tokens add` creates it correctly. |
+| `429 rate limit exceeded` | Wait for `Retry-After`; raise `--rate-limit` only if the model host can take it. |
 | `llm: embeddings returned ...` / `chat returned 503` | The model host is down or the model is not loaded. Check `/readyz` and `curl $LOCALAI_BASE_URL/models`. |
 | Answers are refusals for answerable questions | Model non-determinism on a small chat model; retry once, then inspect `./agent query` for the same wording. If retrieval misses, improve the query or the index. |
 | `agent query` says `provider is not enabled`-style config errors | `sources.yaml` scope: run `./agent sources validate`. |

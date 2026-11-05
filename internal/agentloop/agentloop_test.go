@@ -422,3 +422,14 @@ func TestRunAcceptsHashQuotedFromExcerpt(t *testing.T) {
 		t.Errorf("citations = %+v, want only idA", ans.Citations)
 	}
 }
+
+// TestRunRejectsOversizedQuestion pins the prompt guard both HTTP surfaces
+// rely on: the question is handed to the model before any excerpt budget, so
+// an unbounded peer message must never reach the loop.
+func TestRunRejectsOversizedQuestion(t *testing.T) {
+	_, err := newRunner(&scriptedChatter{}, &fakeSearcher{}).
+		Run(context.Background(), strings.Repeat("x", agentloop.MaxQuestionBytes+1))
+	if !errors.Is(err, agentloop.ErrQuestionTooLong) {
+		t.Fatalf("error = %v, want ErrQuestionTooLong", err)
+	}
+}

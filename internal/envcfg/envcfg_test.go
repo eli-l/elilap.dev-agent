@@ -37,7 +37,8 @@ func writeEnvFile(t *testing.T, content string) string {
 }
 
 func TestLoadDefaults(t *testing.T) {
-	unsetFor(t, EnvDBPath, EnvLocalAIBaseURL, EnvLocalAIAPIKey, EnvEmbedModel, EnvChatModel)
+	unsetFor(t, EnvDBPath, EnvLocalAIBaseURL, EnvLocalAIAPIKey, EnvEmbedModel, EnvChatModel,
+		EnvA2ATokens, EnvA2ATokensFile, EnvA2APublicURL)
 
 	cfg, err := Load()
 	if err != nil {
@@ -49,6 +50,7 @@ func TestLoadDefaults(t *testing.T) {
 		LocalAIAPIKey:  "",
 		EmbedModel:     DefaultEmbedModel,
 		ChatModel:      DefaultChatModel,
+		A2ATokensFile:  DefaultA2ATokensFile,
 	}
 	if cfg != want {
 		t.Errorf("Load() = %+v, want %+v", cfg, want)
@@ -61,6 +63,9 @@ func TestLoadReadsEnvironment(t *testing.T) {
 	t.Setenv(EnvLocalAIAPIKey, "token")
 	t.Setenv(EnvEmbedModel, "other-embed")
 	t.Setenv(EnvChatModel, "other-chat")
+	t.Setenv(EnvA2ATokens, "alice:"+strings.Repeat("a", 32))
+	t.Setenv(EnvA2ATokensFile, "./tokens.txt")
+	t.Setenv(EnvA2APublicURL, "https://agent.example/")
 
 	cfg, err := Load()
 	if err != nil {
@@ -72,6 +77,9 @@ func TestLoadReadsEnvironment(t *testing.T) {
 		LocalAIAPIKey:  "token",
 		EmbedModel:     "other-embed",
 		ChatModel:      "other-chat",
+		A2ATokens:      "alice:" + strings.Repeat("a", 32),
+		A2ATokensFile:  "./tokens.txt",
+		A2APublicURL:   "https://agent.example",
 	}
 	if cfg != want {
 		t.Errorf("Load() = %+v, want %+v", cfg, want)
@@ -86,14 +94,21 @@ func TestLoadTreatsEmptyAsUnset(t *testing.T) {
 	t.Setenv(EnvLocalAIAPIKey, "")
 	t.Setenv(EnvEmbedModel, "")
 	t.Setenv(EnvChatModel, "")
+	t.Setenv(EnvA2ATokens, "")
+	t.Setenv(EnvA2ATokensFile, "")
+	t.Setenv(EnvA2APublicURL, "")
 
 	cfg, err := Load()
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
 	}
 	if cfg.DBPath != DefaultDBPath || cfg.LocalAIBaseURL != DefaultLocalAIBaseURL ||
-		cfg.EmbedModel != DefaultEmbedModel || cfg.ChatModel != DefaultChatModel {
+		cfg.EmbedModel != DefaultEmbedModel || cfg.ChatModel != DefaultChatModel ||
+		cfg.A2ATokensFile != DefaultA2ATokensFile {
 		t.Errorf("Load() with empty variables = %+v, want the defaults", cfg)
+	}
+	if cfg.A2ATokens != "" || cfg.A2APublicURL != "" {
+		t.Errorf("A2ATokens/A2APublicURL = %q/%q, want empty", cfg.A2ATokens, cfg.A2APublicURL)
 	}
 	if cfg.LocalAIAPIKey != "" {
 		t.Errorf("LocalAIAPIKey = %q, want empty", cfg.LocalAIAPIKey)
@@ -109,6 +124,9 @@ func TestConfigTagsMatchConstants(t *testing.T) {
 		"LocalAIAPIKey":  EnvLocalAIAPIKey,
 		"EmbedModel":     EnvEmbedModel,
 		"ChatModel":      EnvChatModel,
+		"A2ATokens":      EnvA2ATokens,
+		"A2ATokensFile":  EnvA2ATokensFile,
+		"A2APublicURL":   EnvA2APublicURL,
 	}
 	typ := reflect.TypeOf(Config{})
 	if typ.NumField() != len(want) {
@@ -131,6 +149,9 @@ func TestLoadTrimsValues(t *testing.T) {
 	t.Setenv(EnvLocalAIAPIKey, "  token  ")
 	t.Setenv(EnvEmbedModel, " other-embed ")
 	t.Setenv(EnvChatModel, " other-chat ")
+	t.Setenv(EnvA2ATokens, "  ")
+	t.Setenv(EnvA2ATokensFile, "  ./tokens.txt  ")
+	t.Setenv(EnvA2APublicURL, "  https://agent.example///  ")
 
 	cfg, err := Load()
 	if err != nil {
@@ -142,6 +163,8 @@ func TestLoadTrimsValues(t *testing.T) {
 		LocalAIAPIKey:  "token",
 		EmbedModel:     "other-embed",
 		ChatModel:      "other-chat",
+		A2ATokensFile:  "./tokens.txt",
+		A2APublicURL:   "https://agent.example",
 	}
 	if cfg != want {
 		t.Errorf("Load() = %+v, want %+v", cfg, want)
