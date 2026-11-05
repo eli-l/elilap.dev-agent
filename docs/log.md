@@ -1,5 +1,9 @@
 # Directory Update Log
 
+## 2026-11-05
+
+* **Deprecation**: Removed the query fan-out answer path. `AGENT_SEARCH_MODE`, `agent ask --search-mode`, `internal/agentloop/{mode,fanout}.go`, and the `SearchMode`/`VariantCount`/`FanoutTopN` runner knobs are gone; the tool-calling loop is the only answer path again, with `reasoning_effort` still pinned per call kind (`none` for the key-extraction call, `low` once excerpts are in hand). The strategy lost on the only two things an A/B could measure: grounding (3/4, 3/4, 2/4, 1/5, 1/4 across runs, never better than the loop) and wall clock (16-33s vs 5-12s, because one answer call reading five excerpts at `low` effort spends 400-6,600 reasoning tokens). The full design, the three measurement rounds, the two prompt failures it exposed, the rejected 250-word body cap, and the four lessons worth reusing are kept for reference. [Query fan-out (multi-query retrieval over model-written variants)](/fanout-experiment.md) [The in-service agent loop and the A2A surface](/agent-architecture.md)
+
 ## 2026-11-04
 
 * **Update**: The Python harness moved from `rag_eval/` to `evals/` and collapsed to one tool. `evaluate.py` now reads two configs (`configs/answers.yaml`, `configs/refusals.yaml`), asks the real agent, scores faithfulness, context utilization, correctness, and refusal discipline, and writes to `output/`. The demo keyword RAG and its three-question experiment are gone, so the harness grades the agent rather than a toy corpus. [Ragas answer evaluation (evals)](/ragas-eval.md)

@@ -1,17 +1,15 @@
 ---
 type: Reference
 title: The in-service agent loop and the A2A surface
-description: How the service hosts a grounded tool-calling loop over the local index, why the loop lives here (2026-10-27 scope change), the switchable deterministic fan-out answer path, and what the Phase 2 dev HTTP surface and Phase 4 A2A surface expose.
+description: How the service hosts a grounded tool-calling loop over the local index, why the loop lives here (2026-10-27 scope change), and what the Phase 2 dev HTTP surface and Phase 4 A2A surface expose.
 status: draft
 generated:
   by: deepseek/deepseek-v4.1-flash
-  at: 2026-11-03T21:10:00Z
+  at: 2026-11-05T10:20:00Z
 verified:
   - by: process:localai-probe
     at: 2026-11-03T19:20:00Z
-  - by: process:localai-ab
-    at: 2026-11-03T21:05:00Z
-tags: [agent, a2a, loop, retrieval, tools, citations, fanout]
+tags: [agent, a2a, loop, retrieval, tools, citations]
 sources: ["../PLAN.md"]
 ---
 
@@ -113,82 +111,21 @@ One tool-calling loop in `internal/agentloop` (implemented 2026-11-02), shared b
 * **Scope guard**: no other tools, no cross-request state, no retries
   across requests. New tools are new decisions.
 
-## The answer-path switch (`AGENT_SEARCH_MODE`)
+## What was tried and dropped: query fan-out
 
-Two answer paths share the prompt rules, the budgets, and the
-citation-or-refusal finalizer; they differ in who decides the search
-queries. `AGENT_SEARCH_MODE` (or `agent ask --search-mode`) selects one,
-and an unset value means `loop`, so the shipped behavior is unchanged.
+A second answer path was built behind `AGENT_SEARCH_MODE=fanout`: one chat
+call rewrote the question into labelled variants, the service ran retrieval
+for the original plus every variant, fused the lists by summed reciprocal
+rank, and spent one answer call on the merged excerpts. It was measured
+against the loop over the same four questions and **removed on 2026-11-05**:
+grounding was never better (3/4, 3/4, 2/4, 1/5, 1/4 across runs) and it was
+2-3x slower, because one answer call reading five excerpts at `low` effort
+costs 16-33s where the loop's adaptive rounds cost 5-12s.
 
-* **`loop`** (default) - the model calls `search_writing` itself, described
-  above. Adaptive: it reads a result set and may search again.
-* **`fanout`** (`internal/agentloop/fanout.go`) - one chat call writes
-  rephrasings, the service runs retrieval for the original question plus
-  every variant, fuses the lists, and one answer call composes from the
-  merged excerpts. No tool-call dependency, and the excerpt payload enters
-  the context once instead of once per tool round. The rephrasing call runs
-  at `reasoning_effort: none` (it only emits three short strings, and an
-  unparseable reply falls back to searching the question alone, so the
-  failure mode is "one query" rather than "refusal"). The answer call runs
-  at `low` with a completion floor of 8,192 tokens: with eight excerpts the
-  prompt is ~4,000 tokens, and at 4,096 the answer call spent the whole
-  budget thinking and returned empty content in 2 of 4 probed questions.
-
-Fusion is a sum of the per-query reciprocal-rank scores, so a chunk several
-variants agree on outranks one that a single query happened to rank first;
-ties break on `chunk_id`, so a merge is deterministic. The merged set is
-capped at eight chunks and two per source URL, then trimmed to the excerpt
-budget. On the fan-out path no tool rounds run, so `tool_iterations` is
-`0`, but the debug trace carries `reasoning_effort`, the variants, the
-queries, and the candidate/kept counts, so a run is still auditable.
-
-**Variants are labelled, not just "three rephrasings"**. The rewrite prompt
-asks for three named keys - `exact_terms` (the question's own words,
-identifiers verbatim), `corpus_vocabulary` (the same question in a post
-title's words), `narrower` (one subtopic) - and the parser accepts that
-shape plus the older `{"variants": [...]}` array and a bare array, so a
-model that ignores the labels still works. Two measured lessons are baked
-into the prompt:
-
-* A bare "give me 3 variants" instruction produced near duplicates
-  (`retrieval mechanism` / `retrieval system` / `retrieval technique`).
-* Naming the job in a worded example backfired: the 1.7b model copied the
-  example string verbatim into `corpus_vocabulary` on every question. The
-  prompt therefore describes each key and carries no example variant.
-
-**The answer-call prompt was cut, and it did not help latency.** Three changes
-went in together: the payload carries only `chunk_id`, `source_url`, `title`,
-`section`, and `body` (the old one serialized the whole `retrieval.Hit`, with
-`source_kind`, `source_id`, `author`, `published_at`, and the path-native
-scores); the merged set is five chunks instead of eight; and the system prompt
-states only the rules the finalizer enforces. The answer call's prompt dropped
-from ~3,500-4,100 to ~1,350-2,050 tokens (-55%) with no measurable change in
-grounding or latency.
-
-A fourth idea - capping each excerpt body at 250 words - was measured and
-rejected: the answer-bearing part of a long chunk usually sits past that
-cut, and fan-out fell to 1 of 5 questions grounded. `trimHits`' total word
-budget is the only body limit.
-
-**A/B on 2026-11-03** (`Spark-X2.6-1.7B-Q4_K_M`, one run per cell, final
-code): the loop stays ~3x faster, and fan-out's grounding is no better and
-noticeably less stable across runs (3/4, 3/4, 2/4, 1/5, 1/4 on the same four
-questions):
-
-| question | `loop` | `fanout` |
-|---|---|---|
-| how does retrieval work | 1 citation, 10.2s | refused, 23.1s |
-| why vendored dependencies | 3 citations, 5.3s | refused, 16.4s |
-| what is the harness take | 2 citations, 5.8s | 3 citations, 32.4s |
-| single-file sqlite index | refused, 12.2s | refused, 26.7s |
-
-The wall clock is the answer call's *reasoning*, not its input: with a
-1,350-token prompt it still spent 2,700-5,500 completion tokens, and the
-range across probed questions is 400-6,600 for near-identical prompts. That
-variance - not prompt size - is what a next experiment has to attack:
-`reasoning_effort: none` on the answer call (cheap, but the model then
-writes its plan into `content`), a `finish_reason=length` guard with a
-retry, or a model that does not reason before answering.
+The design, every measurement, the two prompt failures it exposed (copied
+examples, near-duplicate variants), the rejected excerpt-body cap, and what
+a next attempt should do instead are kept in
+[Query fan-out (multi-query retrieval over model-written variants)](/fanout-experiment.md).
 
 ## Debugging one run
 

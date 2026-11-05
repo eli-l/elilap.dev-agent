@@ -66,7 +66,6 @@ constants, not in struct tags, so there is exactly one definition.
 | `LOCALAI_API_KEY` | `internal/envcfg` | empty | Optional bearer token |
 | `EMBED_MODEL` | `internal/envcfg` | `embeddinggemma-300m` | Must produce 768 dims |
 | `CHAT_MODEL` | `internal/envcfg` | `spark-x2.5-4b` | Reasoning model, used by the loop |
-| `AGENT_SEARCH_MODE` | `internal/envcfg` | `loop` | `loop` (model calls `search_writing`) or `fanout` (model rephrases, the service searches); `agent ask --search-mode` wins over it |
 | `EVAL_BASE_URL` | `evals/` (Python) | `http://localhost:8000/v1` | Endpoint for the Ragas harness; independent of `LOCALAI_*` |
 | `EVAL_MODEL` | `evals/` (Python) | `mtplx-qwen36-35b-a3b-optimized-speed` | Model the harness scores |
 | `EVAL_API_KEY` | `evals/` (Python) | empty → `local` | Secret; local servers ignore its value |

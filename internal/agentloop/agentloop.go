@@ -108,15 +108,6 @@ type Runner struct {
 	MaxElapsed time.Duration
 	// MaxTokens is the completion budget for each chat request.
 	MaxTokens int
-	// Mode selects the answer path; empty means ModeLoop.
-	Mode SearchMode
-	// VariantCount is how many rephrasings the fan-out path asks the model for
-	// (DefaultVariantCount when zero). The original question is always searched
-	// in addition to the variants.
-	VariantCount int
-	// FanoutTopN is the per-query result count on the fan-out path
-	// (DefaultFanoutTopN when zero).
-	FanoutTopN int
 	// Now is overridable in tests; nil means time.Now.
 	Now func() time.Time
 }
@@ -213,7 +204,7 @@ func SearchTool() llm.Tool {
 	}
 }
 
-// Run answers one question, on the answer path Runner.Mode selects.
+// Run answers one question through the grounded tool-calling loop.
 func (r *Runner) Run(ctx context.Context, question string) (Answer, error) {
 	if r == nil || r.Searcher == nil {
 		return Answer{}, errors.New("agentloop: searcher is required")
@@ -228,61 +219,27 @@ func (r *Runner) Run(ctx context.Context, question string) (Answer, error) {
 		return Answer{}, errors.New("agentloop: question must not be empty")
 	}
 
-	if r.mode() == ModeFanout {
-		return r.runFanout(ctx, question, r.policy())
-	}
-	return r.runLoop(ctx, question, r.policy())
-}
-
-// policy is one answer's resolved budget surface: every Runner override
-// already defaulted, so both answer paths read the same numbers.
-type policy struct {
-	now           func() time.Time
-	start         time.Time
-	maxIterations int
-	excerptTokens int
-	maxElapsed    time.Duration
-	maxTokens     int
-}
-
-// policy resolves the Runner's overrides against the Default* constants.
-func (r *Runner) policy() policy {
 	now := time.Now
 	if r.Now != nil {
 		now = r.Now
 	}
-	p := policy{
-		now:           now,
-		start:         now(),
-		maxIterations: r.MaxIterations,
-		excerptTokens: r.ExcerptTokens,
-		maxElapsed:    r.MaxElapsed,
-		maxTokens:     r.MaxTokens,
+	start := now()
+	maxIterations := r.MaxIterations
+	if maxIterations <= 0 {
+		maxIterations = DefaultMaxIterations
 	}
-	if p.maxIterations <= 0 {
-		p.maxIterations = DefaultMaxIterations
+	excerptBudget := r.ExcerptTokens
+	if excerptBudget <= 0 {
+		excerptBudget = DefaultExcerptTokens
 	}
-	if p.excerptTokens <= 0 {
-		p.excerptTokens = DefaultExcerptTokens
+	maxElapsed := r.MaxElapsed
+	if maxElapsed <= 0 {
+		maxElapsed = DefaultMaxElapsed
 	}
-	if p.maxElapsed <= 0 {
-		p.maxElapsed = DefaultMaxElapsed
+	maxTokens := r.MaxTokens
+	if maxTokens <= 0 {
+		maxTokens = DefaultMaxTokens
 	}
-	if p.maxTokens <= 0 {
-		p.maxTokens = DefaultMaxTokens
-	}
-	return p
-}
-
-// runLoop is the shipped path: the model calls search_writing itself, with the
-// citation-or-refusal enforcement unchanged.
-func (r *Runner) runLoop(ctx context.Context, question string, p policy) (Answer, error) {
-	maxIterations := p.maxIterations
-	excerptBudget := p.excerptTokens
-	maxElapsed := p.maxElapsed
-	maxTokens := p.maxTokens
-	start := p.start
-	now := p.now
 
 	// The debug stream is the end-to-end RAG trace: the exact request text,
 	// every message the model sees (including tool results with full excerpts),
@@ -290,7 +247,6 @@ func (r *Runner) runLoop(ctx context.Context, question string, p policy) (Answer
 	// debug level, so a default run still logs no bodies (docs/logging.md).
 	log := logging.Agent()
 	log.Debug().
-		Str("mode", string(ModeLoop)).
 		Str("model", r.Model).
 		Str("question", strings.TrimSpace(question)).
 		Int("max_iterations", maxIterations).
