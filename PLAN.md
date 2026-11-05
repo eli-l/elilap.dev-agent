@@ -4,10 +4,17 @@ Build plan for a local-first RAG agent over Eli's published writing.
 This document is the source of truth for scope, sequencing, and exit criteria.
 Update it as we learn.
 
-**Last refined**: 2026-11-04 (Phase 2 retrieval and the grounded loop are
-implemented and verified. Testing is two end-to-end tools: **Ragas**
-(`evals/`) for answer quality and **promptfoo** (`tests-ai/`) for adversarial
-behaviour. The retrieval-only eval and its runner were removed). **Scope change
+**Last refined**: 2026-11-05. Phase 2 code is complete and verified; two exit
+criteria are still open — **Ragas** has only single-row smoke runs against its
+15 answer + 14 refusal cases, and **promptfoo** has no captured report. The
+query-fan-out answer path was built, A/B'd, and **removed on 2026-11-05**, so
+the tool-calling loop is the only answer path (`docs/fanout-experiment.md`),
+and `reasoning_effort` is pinned per call kind. The container path — the last
+unchecked Phase 1 task — moved to Phase 3, because no Phase 2 deliverable needs
+it and Phase 3's operator path does. Testing stays two end-to-end tools:
+**Ragas** (`evals/`) for answer quality and **promptfoo** (`tests-ai/`) for
+adversarial behaviour; the retrieval-only eval and its runner were removed on
+2026-11-04. **Scope change
 (2026-10-27)**: this repo is an **agentic A2A connector** — the agent loop
 lives here. A remote peer sends a conversational task, and *our* service
 runs its own tool-using loop (retrieve → ground → answer with citations)
@@ -95,6 +102,8 @@ original schema.
 | 15 | Agent locus | The agent loop lives **in this service** (decided 2026-10-27): one tool-calling loop over the OpenAI-compatible chat model, one internal tool `search_writing` bound to `internal/retrieval`, bounded iterations, citation-or-refusal | A2A peers ask; we answer grounded from the corpus — "generation is the caller's problem" is rescoped: the caller is remote, the loop is ours |
 | 16 | A2A surface | A2A v0.3 JSON-RPC (`message/send`, agent card at `/.well-known/agent.json`) exposing the **agent**, plus a plain `POST /v1/retrieve` for deterministic search clients; bearer-token, read-only, local-bind default. Dev build (2026-10-27): Phase 2 ships the same two paths token-less on loopback (`agent serve`), before any A2A work | Peers get answers, not bare search results; streaming and task resumability stay out until a peer actually needs them |
 | 17 | Embedding pass | **Separate resumable command after ingest** (decided 2026-11-02): `agent embed` pages over pending chunks, batches `/v1/embeddings`, and stamps `embedded_with = localai:<model>/text-v1`; `--full` re-embeds the corpus. Ingest never calls the model host | Keeps upstream sync independent of model availability, makes an interrupted run resume at the first unembedded chunk, and turns a model/template change into an explicit invalidation instead of a hidden side effect |
+| 18 | Answer path | **The tool-calling loop, only** (2026-11-05): one grounded tool `search_writing`, ≤3 iterations, citation-or-refusal. A second path — rewrite → fan-out retrieval → summed-RRF fuse → one answer call — was built behind `AGENT_SEARCH_MODE=fanout`, measured over three rounds, and removed | It never beat the loop on grounding (3/4, 3/4, 2/4, 1/5, 1/4) and was 2-3x slower (16-33s vs 5-12s), because one answer call over five excerpts at `low` effort spends 400-6,600 reasoning tokens; a switchable second path still had to be maintained, documented, and evaluated |
+| 19 | Reasoning budget | `reasoning_effort` pinned per call kind in the request (2026-11-03): `"none"` for the key-extraction call, `"low"` for every call made with excerpts in hand and for the forced no-tools answer | Unset means the backend's model config, which is unbounded on these templates: a two-sentence question burned all 4,096 completion tokens on `reasoning`, returned empty `content` with `finish_reason=length`, and the finalizer turned that into a refusal |
 
 ### 1.5 Verified environment (audited 2026-10-21; Go floor re-verified 2026-10-23)
 
@@ -496,7 +505,9 @@ intentionally a separate command.
       `spark-x2.5-4b` is a **reasoning** model whose response carries a
       `reasoning` field — `max_tokens` must budget for reasoning or
       `content` comes back empty.
-- [ ] Containerize (§2.5): `Dockerfile`, `.dockerignore`, `compose.yaml`
+- [ ] Containerize (§2.5) — **moved to Phase 3 on 2026-11-05**: no Phase 2
+      deliverable needs it, and Phase 3's operator path does. `Dockerfile`,
+      `.dockerignore`, `compose.yaml`
       with the agent service, `agent-data` volume, `AGENT_DB_PATH` wiring,
       and `LOCALAI_BASE_URL` pointing at `http://192.168.78.243:8080/v1`.
       No LocalAI service and no `/readyz` healthcheck in compose — the
@@ -784,6 +795,17 @@ citation and refusal rules above are unchanged.
   internationalized pen name). It is the only non-excerpt grounding and
   it keeps Postiz cross-posts (authored as Ilja) usable
   (`docs/runs/identity-aliases-2026-11-02.md`).
+* `reasoning_effort` is pinned per call kind (2026-11-03): `"none"` while
+  the loop is still extracting search keys, `"low"` for every call made
+  with excerpts in hand and for the forced no-tools answer. Leaving it
+  unset takes the backend's model config, which is unbounded on these
+  templates and eats the whole completion budget on `reasoning`.
+* **One answer path: the loop.** Query fan-out (model-written variants,
+  service-side retrieval, summed RRF, one answer call) was built behind
+  `AGENT_SEARCH_MODE=fanout`, A/B'd on 2026-11-03/05, and removed on
+  2026-11-05: never better grounding, 2-3x slower. The record and its
+  lessons are in `docs/fanout-experiment.md`; a future attempt should
+  start there, not from scratch.
 * No tool other than `search_writing` exists in Phase 2 — the loop is
   intentionally minimal, and new tools are new decisions.
 
@@ -791,7 +813,9 @@ citation and refusal rules above are unchanged.
 
 - Answer quality reaches the Ragas thresholds on the hand-verified configs in
   `evals/configs/`; the retrieval-only 20-query hit@5 gate is retired.
-  **Last retrieval-only baseline 2026-11-02: 19/20.**
+  **Last retrieval-only baseline 2026-11-02: 19/20. Not yet measured at
+  full size (2026-11-05): the configs hold 15 answer + 14 refusal cases and
+  `evals/output/` holds three single-row smoke runs.**
 - p50 retrieval latency <300ms; end-to-end `ask` p50 <8s on a GPU-capable
   host, ≤60s on the CPU-only Docker setup (small chat model, reasoning
   budget included). **Measured 2026-11-02: retrieval p50 58ms on the
@@ -803,7 +827,9 @@ citation and refusal rules above are unchanged.
   2026-11-02** (cited answer, refusal, HTTP parity).
 - A second human can read `README.md` + `docs/runbook.md` and run `ask`
   without help — including via `docker compose up` on a clean host.
-  **Runbook written 2026-11-02**; compose path still Phase 1 work.
+  **Runbook written 2026-11-02** (CLI path verified end to end); the
+  compose path moved to Phase 3 on 2026-11-05, so this criterion is
+  satisfied for the Go host only.
 - `POST /v1/retrieve` and `agent query --format jsonl` return identical
   results for identical inputs; `POST /v1/ask` returns the same answer
   content as `agent ask` for the same question (model non-determinism
@@ -819,13 +845,26 @@ server).
 
 ### Phase 3 — MVP operations
 
-**Goal**: the system runs unattended and you actually use it.
+**Goal**: the system runs unattended and you actually use it. This phase also
+absorbs the two things Phase 2 left undone: the container path (moved from
+Phase 1 on 2026-11-05) and the two end-to-end suites that have never run at
+full size.
 
 **Tasks**
 
-- [ ] `scripts/ingest-all.sh`: cron/launchd-friendly wrapper (already a
-      stub; make it call the built binary, not `go run`, once Phase 1 ships).
-      Container mode: `docker compose run --rm agent agent ingest`.
+- [ ] Close the Phase 2 exit criteria the code is already waiting on:
+      one full `evals/` run (`answers` + `refusals`, 29 cases) and one
+      `tests-ai/` promptfoo run, each captured as a `docs/runs/` record.
+- [ ] Containerize (§2.5, moved from Phase 1): `Dockerfile`,
+      `.dockerignore`, `compose.yaml`, the `agent-data` volume, and
+      `AGENT_DB_PATH=/data/index.db`. Prove the sqlite-vec KNN round-trips
+      inside the image (the open risk in §4) and that `docker compose run
+      --rm agent agent ingest` indexes on a clean host.
+- [ ] `scripts/ingest-all.sh`: **currently broken** — it still execs
+      `go run ./cmd/ingest`, and `cmd/ingest` was collapsed into
+      `cmd/agent` in Phase 1. Make it call the built binary
+      (`./agent ingest "$@"`), not `go run`. Container mode:
+      `docker compose run --rm agent agent ingest`.
 - [ ] `agent ingest --watch`: poll upstream every N minutes during work
       hours, no-op when nothing changed. In container mode the `agent`
       service runs long-lived with `restart: unless-stopped`.
@@ -846,8 +885,12 @@ server).
   ./agent query "..."` on a Go host, or `docker compose up` then
   `docker compose run --rm agent agent ingest` on any Docker host — in <30 min
   either way.
+- Both end-to-end suites have a captured full run: Ragas at 29 cases with the
+  thresholds met, promptfoo at the configured plugin set with no
+  unaddressed high-severity finding.
 
-**Estimated effort**: 1 day.
+**Estimated effort**: 2 days (embeds the two deferred Phase 2 items:
+container image + full suite runs).
 
 ---
 

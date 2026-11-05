@@ -2,7 +2,7 @@
 type: Reference
 title: The in-service agent loop and the A2A surface
 description: How the service hosts a grounded tool-calling loop over the local index, why the loop lives here (2026-10-27 scope change), and what the Phase 2 dev HTTP surface and Phase 4 A2A surface expose.
-status: draft
+status: stable
 generated:
   by: deepseek/deepseek-v4.1-flash
   at: 2026-11-05T10:20:00Z
@@ -23,6 +23,12 @@ internal tool of the service, not the external product; `agent ask` is
 the loop's CLI shadow. A Phase 2 dev HTTP surface (`agent serve`) exposes
 both the raw tool and the loop over loopback HTTP, so each half is
 curl-testable before A2A exists.
+
+**Status: the Phase 2 half of this document is shipped and exercised live.**
+The loop, the tool, the citation policy, and the loopback dev surface are in
+the binary and verified against the 886-chunk index; the A2A section below is
+the Phase 4 design, not yet built. Query fan-out was A/B'd against the loop
+and removed on 2026-11-05 — the loop is the only answer path.
 
 ## Role
 

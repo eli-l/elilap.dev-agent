@@ -2,7 +2,7 @@
 type: Guide
 title: Runbook - build, ingest, embed, query, ask, serve
 description: The operator path from a clean checkout to grounded answers - building the binary, rebuilding the index, running hybrid queries and the agent loop, the loopback dev server, the two end-to-end test suites (Ragas and promptfoo), and the failures you are likely to hit.
-status: draft
+status: stable
 generated:
   by: deepseek/deepseek-v4.1-flash
   at: 2026-11-03T17:20:00Z
@@ -99,6 +99,11 @@ Two tools, two questions, no third harness:
 | **Ragas** | `evals/` | Do the agent's answers stay faithful to the cited excerpts, state the right facts, and refuse what it cannot know? |
 | **promptfoo** | `tests-ai/` | Does the agent behave under adversarial input (bias, PII, hijacking, hallucination, fabricated citations)? |
 
+**Run status (2026-11-05):** both suites are wired and smoke-tested, but
+neither has a captured full run yet — `evals/output/` holds single-row smoke
+runs, and promptfoo has no report. Capturing both at full size is a Phase 3
+task (`../PLAN.md`).
+
 Retrieval quality is not graded on its own. There is no retrieval-eval runner
 and no query fixture: the Ragas answer metrics grade end-to-end behaviour,
 which is what a caller actually experiences. To inspect ranking by hand:
@@ -142,6 +147,18 @@ bias, harmful content, PII, excessive agency, hijacking, hallucination, and
 fabricated RAG citations, plus `basic` and `jailbreak:meta` strategies. See
 [red-team.md](/red-team.md) for plugin details, the response-transform caveat,
 and why a suspected finding needs a re-run on this non-deterministic model.
+
+## Not yet in this runbook (Phase 3)
+
+This runbook covers the **Go-host path**, which is complete end to end. All
+of the following is Phase 3 work:
+
+* the container path — `Dockerfile`, `compose.yaml`, and
+  `docker compose run --rm agent agent ingest`;
+* `agent ingest --watch` plus the launchd/cron schedule;
+* `agent backup` (`VACUUM INTO`);
+* `scripts/ingest-all.sh` — **currently broken**, it still execs the removed
+  `go run ./cmd/ingest`.
 
 ## Troubleshooting
 

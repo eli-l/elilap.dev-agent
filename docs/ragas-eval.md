@@ -109,6 +109,17 @@ structured-output calls — they return truncated JSON
 (`IncompleteOutputException`) — so rows run one at a time and the judge is
 given an explicit `max_tokens=4096`. Expect roughly a minute per answer row.
 
+## Run status (2026-11-05)
+
+`status: draft` on purpose: the tool is written and smoke-tested, but no full
+run has been captured. `evals/output/experiments/` holds three single-row runs
+covering two cases (`--limit 1`): one answer case twice (faithfulness 1.00 then
+0.57, correctness `pass` both times) and one off-corpus refusal at `pass`. The
+15 answer and 14 refusal cases in `configs/` have therefore never been scored
+in one run, so "the agent meets the Ragas thresholds" is still an open Phase 2
+exit criterion (`../PLAN.md`). Nothing in the harness is missing to close it —
+only the run and its `docs/runs/` capture.
+
 ## Known limits
 
 * `AnswerRelevancy` and the other embedding-based metrics are not wired up:

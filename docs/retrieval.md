@@ -2,7 +2,7 @@
 type: Reference
 title: Hybrid retrieval and the /v1/retrieve + agent query surfaces
 description: The hybrid retrieval engine behind search_writing - FTS5 BM25 plus vec0 KNN merged with RRF k=60, the source/platform/date/recency filters, the JSON hit shape, and the CLI plus loopback HTTP surfaces that expose it.
-status: draft
+status: stable
 generated:
   by: deepseek/deepseek-v4.1-flash
   at: 2026-11-03T15:45:00Z
@@ -18,6 +18,10 @@ rank fusion and the shared filter set. `internal/retrieval.Searcher` is the
 one implementation behind `agent query` and `POST /v1/retrieve`, so the
 CLI and the HTTP surface cannot drift; in Phase 2's loop the same call
 becomes the `search_writing` tool.
+
+**Status: shipped and verified.** CLI/HTTP parity is byte-identical and the
+measured p50 on the 886-chunk index is 58ms
+([retrieval-hybrid-2026-11-02](runs/retrieval-hybrid-2026-11-02.md)).
 
 ## Layers
 

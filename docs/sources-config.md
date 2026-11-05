@@ -2,7 +2,7 @@
 type: Reference
 title: Import configuration and provider contract
 description: The sources.yaml schema, the Provider interface, the incremental and full ingest ledger, and the CLI surface for enabling, disabling, and reconfiguring import providers.
-status: draft
+status: stable
 generated:
   by: dave
   at: 2026-10-23T20:48:00Z
@@ -14,6 +14,10 @@ tags: [config, providers, ingest, yaml, plan]
 How providers are declared, how the ingestor decides what to re-fetch, and
 how a full reindex differs from an incremental one. `PLAN.md` §2.6 is the
 normative version; this file is the readable summary.
+
+**Status: shipped.** Both providers, the strict decoder, credential
+resolution, `agent sources list|validate`, and the incremental/full ingest
+modes are in the binary; `docs/runbook.md` has the operator commands.
 
 ## The config file: `sources.yaml`
 

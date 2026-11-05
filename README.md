@@ -16,10 +16,12 @@ and rebuild at any time.
 
 ## Status
 
-Phases 1 and 2 are implemented: ingestion, resumable embeddings, hybrid
-retrieval (BM25 + vectors, RRF), the grounded tool-calling loop
-(`agent ask`), and the loopback dev HTTP surface (`/v1/retrieve`,
-`/v1/ask`). Phase 3 operations and the Phase 4 A2A binding remain. See
+Phases 1 and 2 are implemented and runnable on a Go host: ingestion,
+resumable embeddings, hybrid retrieval (BM25 + vectors, RRF), the grounded
+tool-calling loop (`agent ask`), and the loopback dev HTTP surface
+(`/v1/retrieve`, `/v1/ask`). Phase 3 operations are next — the container
+path, `ingest --watch`, `backup`, and the first full-size runs of the two
+test suites — then the Phase 4 A2A binding. See
 [`PLAN.md`](./PLAN.md) for the build plan and
 [`docs/runbook.md`](./docs/runbook.md) for the operator path.
 

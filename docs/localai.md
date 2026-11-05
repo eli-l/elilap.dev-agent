@@ -2,7 +2,7 @@
 type: Reference
 title: Self-hosted LocalAI endpoint and model catalog
 description: Verified facts about the LocalAI instance at http://192.168.78.243:8080 - version, model ids, embedding dimensions, chat behaviour, and the reasoning_effort controls - captured from the AI Node on 2026-10-23 and re-probed on 2026-11-03.
-status: draft
+status: stable
 generated:
   by: dave
   at: 2026-11-03T19:30:00Z
