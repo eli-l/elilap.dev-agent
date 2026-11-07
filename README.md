@@ -67,6 +67,8 @@ go build -tags sqlite_fts5 -o agent ./cmd/agent
 ./agent query "when did I write about burnout"
 ./agent ask "what did I write about harnesses?"
 ./agent serve             # 127.0.0.1:8080, loopback only
+./agent serve --port 18080                                  # evaluation suites (docs/runbook.md)
+./agent serve --host 0.0.0.0 --allow-public                 # trusted network only
 ```
 
 `example.env` lists every environment variable the agent reads, with defaults
@@ -82,14 +84,20 @@ json`. See [`docs/logging.md`](./docs/logging.md).
 
 ## Testing
 
-Two end-to-end tools, no third harness:
+Two end-to-end tools, no third harness (ports, configs, and report paths:
+[`docs/testing.md`](./docs/testing.md)):
 
 * **Ragas** — [`evals/`](./evals/README.md) grades answer quality with an LLM
   judge: faithfulness to the cited excerpts, context utilization, correctness
   against recorded facts, and refusal discipline.
-* **promptfoo** — [`tests-ai/`](./tests-ai/) grades adversarial behaviour over
-  `POST /v1/ask`: bias, harmful content, PII, excessive agency, hijacking,
-  hallucination, and fabricated citations.
+* **promptfoo** — [`tests-ai/`](./tests-ai/README.md) grades adversarial
+  behaviour over `POST /v1/ask`: bias, harmful content, PII, excessive agency,
+  hijacking, hallucination, and fabricated citations. It is a pinned npm
+  project: `cd tests-ai && npm ci && npm run redteam`, with reports written to
+  `tests-ai/reports/`.
+
+Both suites target the reserved evaluation port **18080**
+(`./agent serve --port 18080`); 8080 stays free for interactive development.
 
 Retrieval is not scored on its own; a ranking problem surfaces as a
 faithfulness or correctness miss in the Ragas suite. Unit tests stay in Go:

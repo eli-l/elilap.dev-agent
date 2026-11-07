@@ -10,7 +10,8 @@ Two transports, same loop:
   process to manage; ``cmd/agent/ask.go`` and ``POST /v1/ask`` render the same
   ``agentloop.Answer``.
 * ``http`` — ``POST {ask_url}`` with ``{"question": ...}``, the loopback dev
-  surface a peer would actually call.
+  surface a peer would actually call. The default target is port 18080, the
+  port reserved for evaluation runs; 8080 stays free for interactive work.
 
 Retrieved contexts matter for the Ragas metrics: ``/v1/ask`` and ``agent ask``
 return citations (chunk ids + urls) but not the excerpt text. We read the body
@@ -35,6 +36,10 @@ DEFAULT_DB = Path(os.getenv("AGENT_DB_PATH") or REPO / "index.db")
 
 # The loop runs several chat completions; a hung model must not hang the eval.
 ASK_TIMEOUT_SECONDS = 300
+
+# 18080 is the evaluation port (see docs/runbook.md): the suites own it so a
+# long eval run never collides with the interactive dev server on 8080.
+DEFAULT_ASK_URL = "http://127.0.0.1:18080/v1/ask"
 
 
 @dataclass
@@ -92,7 +97,7 @@ class AgentRAG:
     def __init__(
         self,
         transport: str = "cli",
-        ask_url: str = "http://127.0.0.1:8080/v1/ask",
+        ask_url: str = DEFAULT_ASK_URL,
         db_path: Path | None = None,
     ) -> None:
         if transport not in {"cli", "http"}:

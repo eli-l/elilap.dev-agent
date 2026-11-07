@@ -66,13 +66,18 @@ constants, not in struct tags, so there is exactly one definition.
 | `LOCALAI_API_KEY` | `internal/envcfg` | empty | Optional bearer token |
 | `EMBED_MODEL` | `internal/envcfg` | `embeddinggemma-300m` | Must produce 768 dims |
 | `CHAT_MODEL` | `internal/envcfg` | `spark-x2.5-4b` | Reasoning model, used by the loop |
-| `EVAL_BASE_URL` | `evals/` (Python) | `http://localhost:8000/v1` | Endpoint for the Ragas harness; independent of `LOCALAI_*` |
-| `EVAL_MODEL` | `evals/` (Python) | `mtplx-qwen36-35b-a3b-optimized-speed` | Model the harness scores |
-| `EVAL_API_KEY` | `evals/` (Python) | empty → `local` | Secret; local servers ignore its value |
+| `EVAL_BASE_URL` | `evals/` (Python) | `http://localhost:8000/v1` | Ragas judge endpoint; also mirrored by the promptfoo `redteam.provider`; independent of `LOCALAI_*` |
+| `EVAL_MODEL` | `evals/` (Python) | `mtplx-qwen36-35b-a3b-optimized-speed` | Model the harness scores; promptfoo generates and grades with it |
+| `EVAL_API_KEY` | `evals/` (Python) | empty → `local` | Secret; local servers ignore its value; promptfoo's config uses the literal `local` |
 | `GHOST_API_URL` | `sources.yaml` ref | — | Credential reference, value required |
 | `GHOST_API_KEY` | `sources.yaml` ref | — | Secret |
 | `POSTIZ_API_URL` | `sources.yaml` ref | — | Credential reference, value required |
 | `POSTIZ_API_KEY` | `sources.yaml` ref | — | Secret |
+
+The three `EVAL_*` values also drive the promptfoo red-team provider in
+`../tests-ai/promptfooconfig*.yaml`. promptfoo cannot read `EVAL_*` from its
+YAML, so those configs mirror the same defaults literally: change
+`example.env` and the configs together.
 
 Credentials are the one **dynamic** case: `sources.yaml` declares
 `{ env: VAR }` references, so the names are configuration data, not Go

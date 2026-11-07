@@ -184,7 +184,7 @@ elilap.dev-agent/
 │   ├── 0001_init.sql
 │   └── 0002_state.sql                # source_state + source_items ledger
 ├── evals/                            # Ragas: answer/refusal ground truth + evaluate.py
-├── tests-ai/                         # promptfoo red-team suite over POST /v1/ask
+├── tests-ai/                         # promptfoo red-team suite (pinned npm project; reports/)
 ├── scripts/
 │   ├── ask                           # thin wrapper over `agent ask` (Phase 2+)
 │   ├── check-ddl.py                  # schema smoke check (runs under plain python3)
@@ -696,7 +696,12 @@ only auth and hardening get added later.
 - [x] Promptfoo red-team suite (2026-11-03): `tests-ai/promptfooconfig.yaml`
       targets the loopback `POST /v1/ask` with bias, harmful-content, PII,
       excessive-agency, hijacking, hallucination, and RAG-attribution
-      plugins plus `basic` + `jailbreak:meta`. Run path and caveats in
+      plugins plus `basic` + `jailbreak:meta`. Established as a self-contained
+      npm project (2026-11-05): promptfoo pinned in `package.json`, attack
+      generation and grading use the local Ragas judge endpoint (`EVAL_*`),
+      scripts keep its database in `tests-ai/.promptfoo/`, and
+      `npm run redteam` writes `tests-ai/reports/results.{json,html}`.
+      `npm run redteam:smoke` is the fully local wiring check. Run path and caveats in
       `docs/red-team.md`; no full report captured yet.
 - [x] The **in-service agent loop** (Decisions 15/16) —
       `internal/agentloop`, consumed by both `agent ask` and, in Phase 4,
@@ -721,8 +726,9 @@ only auth and hardening get added later.
       `./agent ask` for muscle memory. **Done 2026-11-02**
       (`cmd/agent/ask.go`; `scripts/ask` is now a wrapper).
 - [x] `agent serve` (dev form): plain `net/http`, binds `127.0.0.1:8080`
-      (override with `--addr`), **no auth, loopback-only** — it exists to
-      be curl-tested during development, never exposed:
+      (override with `--host`/`--port`), **no auth, loopback by default** —
+      it exists to be curl-tested during development and run on a trusted
+      network, never exposed:
   - `POST /v1/retrieve` — request body carries the `search_writing`
     params (`query`, `top_n`, `source`, `platform`, `after`, `before`,
     `recency_halflife_days`); the response is exactly the JSON array the
@@ -731,8 +737,9 @@ only auth and hardening get added later.
     path done 2026-11-02**: `query`, `top_n` (default 5, max 50), `source`,
     `platform`, `after`, `before`, `recency_halflife_days`, hybrid BM25 +
     RRF; blank query and bad filters are 400, unknown fields are 400, body
-    ≤64 KiB, request budget 30s. Non-loopback binds and model-tag
-    mismatches are refused at startup. `POST /v1/ask` landed 2026-11-02.
+    ≤64 KiB, request budget 30s. A non-loopback bind (`0.0.0.0`
+    included) is refused at startup unless the explicit `--allow-public`
+    opt-in is passed; model-tag mismatches are always refused. `POST /v1/ask` landed 2026-11-02.
   - `POST /v1/ask` — `{"question": "..."}` in; the full loop out:
     `{"answer", "citations": [{"chunk_id", "source_url"}],
     "tool_iterations", "refused", "elapsed_ms"}` — the same struct
@@ -910,7 +917,7 @@ bind behind an explicit flag, rate limits, and the audit log.
 **Tasks**
 
 - [ ] `agent serve`: HTTP server binding to `127.0.0.1` (default) or
-  `0.0.0.0` (only with `--bind-public`); token auth via
+  `0.0.0.0` (only with `--allow-public`, now token-gated); token auth via
   `Authorization: Bearer <token>`. (Container mode: publish as
   `ports: "127.0.0.1:8081:8080"` — a container's loopback is not the
   host's; public exposure stays opt-in.)

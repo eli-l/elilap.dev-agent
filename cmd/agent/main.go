@@ -144,13 +144,15 @@ Commands:
   query              retrieve chunks for a query (hybrid, no LLM)
   ask                answer a question from the index (grounded loop)
   stats              report index statistics
-  serve              serve the read-only dev HTTP surface (loopback only)
+  serve              serve the read-only dev HTTP surface (loopback by default)
 
 Missing credential variables warn in sources validate; --strict makes them errors.
 
 `+loggingFlagHelp+`
 Run "agent serve --help" for the dev server flags (default 127.0.0.1:8080,
-POST /v1/retrieve). Run "agent sources list --help" or
+POST /v1/retrieve and POST /v1/ask). Use --host/--port to move it, and
+--host 0.0.0.0 --allow-public to reach it from another host on a trusted
+network. Run "agent sources list --help" or
 "agent sources validate --help" for source flags.
 `)
 }

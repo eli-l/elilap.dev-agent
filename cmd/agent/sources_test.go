@@ -251,9 +251,9 @@ func TestRunDispatches(t *testing.T) {
 		},
 		{
 			name:       "serve refuses a non-loopback bind",
-			args:       []string{"serve", "--addr", "0.0.0.0:8080"},
+			args:       []string{"serve", "--host", "0.0.0.0"},
 			wantCode:   2,
-			wantStderr: "must not be exposed",
+			wantStderr: "--allow-public",
 		},
 	}
 

@@ -14,6 +14,10 @@ go run ./cmd/agent sources validate   # strict-parse sources.yaml (no credential
 cd evals && uv sync           # Python 3.12 venv for the Ragas harness
 cd evals && uv run python test_llm.py   # endpoint smoke test, exit 0 = ok
 cd evals && uv run python evaluate.py   # Ragas answer + refusal evaluation
+cd tests-ai && npm ci         # pinned promptfoo dev dependency (Node >= 20)
+cd tests-ai && npm run redteam:smoke   # one-plugin local-model wiring check; reports/smoke/
+cd tests-ai && npm run redteam   # generate + evaluate; reports in tests-ai/reports/
+cd tests-ai && npm run redteam:report   # local report UI on :15500
 ```
 
 Run target: `go build -o agent ./cmd/agent` (the five `cmd/*` stubs collapse into `cmd/agent/` with subcommands `ingest`, `embed`, `query`, `ask`, `stats`, `serve` (`ask` and the dev `serve` land in Phase 2, token-gated A2A `serve` in Phase 4) — do not add new top-level `cmd/` dirs).

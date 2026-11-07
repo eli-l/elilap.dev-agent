@@ -41,8 +41,16 @@ __pycache__/
 # logs are outputs, not inputs. Keep the .gitkeep so output/ exists.
 /evals/output/*
 !/evals/output/.gitkeep
-# Promptfoo red-team artifacts (config lives in tests-ai/)
+# Promptfoo red-team suite (config, package manifest, and README live in
+# tests-ai/). node_modules, the local promptfoo database, generated attacks,
+# and reports are outputs: keep .gitkeep so reports/ exists in a fresh clone.
 /tests-ai/redteam.yaml
-/tests-ai/results.json
+/tests-ai/node_modules/
+/tests-ai/.promptfoo/
+/tests-ai/.env
+/tests-ai/.env.*
+/tests-ai/reports/*
+!/tests-ai/reports/.gitkeep
+# Defensive: a promptfoo run started from the repository root also writes here.
 /redteam.yaml
 /.promptfoo/

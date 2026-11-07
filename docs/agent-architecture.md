@@ -156,8 +156,9 @@ payload policy.
 ## The HTTP dev surface (Phase 2)
 
 Before any A2A work, `agent serve` runs the same internals over plain
-HTTP - token-less and loopback-only - so both halves can be exercised
-with `curl`:
+HTTP - token-less and bound to `127.0.0.1` by default - so both halves can
+be exercised with `curl`. `--host`/`--port` move it; a non-loopback host
+needs `--allow-public` and logs a warning:
 
 * `POST /v1/retrieve`: the request body carries the `search_writing`
   parameters; the response is exactly the JSON array the model's tool

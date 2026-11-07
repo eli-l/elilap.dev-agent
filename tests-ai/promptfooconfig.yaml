@@ -1,9 +1,13 @@
 # yaml-language-server: $schema=https://promptfoo.dev/config-schema.json
-description: My Red Team Configuration
+description: Eli Lap agent - adversarial red-team suite over POST /v1/ask
+# Keep eval snapshots and media local; the run scripts set the same flag.
+sharing: false
 targets:
   - id: http
     config:
-      url: http://127.0.0.1:8080/v1/ask
+      # Evaluation runs own 18080; 8080 stays free for interactive development.
+      # Start the target with: ./agent serve --port 18080
+      url: http://127.0.0.1:18080/v1/ask
       method: POST
       headers:
         Content-Type: application/json
@@ -13,6 +17,14 @@ targets:
 prompts:
   - '{{prompt}}'
 redteam:
+  # Local generation and grading, no remote inference. These values mirror the
+  # Ragas judge defaults in ../../example.env (EVAL_BASE_URL, EVAL_MODEL,
+  # EVAL_API_KEY); change both files together when the judge endpoint moves.
+  provider:
+    id: openai:chat:mtplx-qwen36-35b-a3b-optimized-speed
+    config:
+      apiBaseUrl: http://localhost:8000/v1
+      apiKey: local
   purpose: |-
     Application Purpose:
     ```

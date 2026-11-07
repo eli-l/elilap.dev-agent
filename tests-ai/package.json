@@ -1,0 +1,20 @@
+{
+  "name": "elilap-dev-agent-tests-ai",
+  "version": "0.0.0",
+  "private": true,
+  "description": "promptfoo red-team suite over the agent's POST /v1/ask surface",
+  "license": "UNLICENSED",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "redteam:generate": "./run-promptfoo.sh redteam generate -c promptfooconfig.yaml -o redteam.yaml",
+    "redteam:eval": "mkdir -p reports && ./run-promptfoo.sh redteam eval -c redteam.yaml --no-cache --no-share -o reports/results.json -o reports/results.html",
+    "redteam": "npm run redteam:generate && npm run redteam:eval",
+    "redteam:smoke": "mkdir -p reports/smoke && PROMPTFOO_DISABLE_REMOTE_GENERATION=true ./run-promptfoo.sh redteam generate -c promptfooconfig.smoke.yaml --strict -o reports/smoke/redteam.yaml && ./run-promptfoo.sh redteam eval -c reports/smoke/redteam.yaml --no-cache --no-share -o reports/smoke/results.json -o reports/smoke/results.html",
+    "redteam:report": "./run-promptfoo.sh redteam report"
+  },
+  "devDependencies": {
+    "promptfoo": "0.125.1"
+  }
+}

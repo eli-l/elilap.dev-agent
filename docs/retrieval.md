@@ -117,7 +117,7 @@ Two indexing details matter for filters:
 ```
 
 ```bash
-./agent serve --addr 127.0.0.1:8080
+./agent serve                   # 127.0.0.1:8080
 
 curl -sS -X POST http://127.0.0.1:8080/v1/retrieve \
   -H 'Content-Type: application/json' \
@@ -144,11 +144,14 @@ duration). Nothing is logged at `info`, and the trace works for `agent query`,
 
 ## Safety posture
 
-The dev server is token-less, so it refuses to start unless `--addr` names a
-loopback host: `:8080`, `0.0.0.0`, and LAN addresses are startup errors.
-Default is `127.0.0.1:8080`. Auth, rate limits, and the A2A binding are
-Phase 4 work (see [agent-architecture.md](/agent-architecture.md)); the path
-and JSON stay the same when they land.
+The dev server is token-less, so it binds loopback by default
+(`127.0.0.1:8080`) and refuses any other `--host` - `0.0.0.0`, a LAN
+address, or an empty host - unless `--allow-public` is passed. That flag is
+the deliberate "I know this is reachable" opt-in for a container bridge or a
+trusted network, and startup logs a warning when it is used. Auth, rate
+limits, and the A2A binding are Phase 4 work (see
+[agent-architecture.md](/agent-architecture.md)); the path and JSON stay the
+same when they land.
 
 ## How it is tested
 

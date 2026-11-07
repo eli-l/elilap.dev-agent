@@ -25,11 +25,14 @@ import (
 	"github.com/eli-l/elilap.dev-agent/internal/store"
 )
 
-// The Phase 2 dev server: token-less by design, so it must bind loopback only
+// The Phase 2 dev server: token-less by design, so it binds loopback by
+// default and needs an explicit --allow-public for any other host
 // (PLAN.md Decision 16). Auth and rate limits are Phase 4 work.
 const (
-	// defaultServeAddr is the loopback endpoint `agent serve` binds.
-	defaultServeAddr = "127.0.0.1:8080"
+	// defaultServeHost and defaultServePort are the loopback endpoint
+	// `agent serve` binds when no flags are given.
+	defaultServeHost = "127.0.0.1"
+	defaultServePort = 8080
 	// retrieveRoute is the deterministic retrieval path the future
 	// `search_writing` tool hands back the same JSON.
 	retrieveRoute = "/v1/retrieve"
@@ -45,11 +48,14 @@ const (
 )
 
 // runServe implements `agent serve`: the read-only dev HTTP surface over the
-// existing index. It binds loopback only and refuses to start otherwise.
+// existing index. It binds loopback by default and needs --allow-public for
+// any other host.
 func runServe(args []string, rtCfg envcfg.Config, stderr io.Writer) int {
 	fs := flag.NewFlagSet("agent serve", flag.ContinueOnError)
 	fs.SetOutput(stderr)
-	addr := fs.String("addr", defaultServeAddr, "loopback bind address (host:port)")
+	host := fs.String("host", defaultServeHost, "bind host; 0.0.0.0 binds every interface (requires --allow-public)")
+	port := fs.Int("port", defaultServePort, "bind port (1-65535)")
+	allowPublic := fs.Bool("allow-public", false, "allow a non-loopback --host; the dev server is token-less")
 	dbFlag := fs.String("db", rtCfg.DBPath, "path to the SQLite index")
 	if err := fs.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
@@ -61,7 +67,8 @@ func runServe(args []string, rtCfg envcfg.Config, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "agent serve: unexpected argument %q\n", fs.Arg(0))
 		return 2
 	}
-	if err := validateLoopbackAddr(*addr); err != nil {
+	addr, err := resolveServeAddr(*host, *port, *allowPublic)
+	if err != nil {
 		fmt.Fprintf(stderr, "agent serve: %v\n", err)
 		return 2
 	}
@@ -103,7 +110,7 @@ func runServe(args []string, rtCfg envcfg.Config, stderr io.Writer) int {
 	mux.Handle(askRoute, logging.RequestMiddleware(askRoute, newAskHandler(loop)))
 
 	srv := &http.Server{
-		Addr:              *addr,
+		Addr:              addr,
 		Handler:           mux,
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       15 * time.Second,
@@ -116,11 +123,18 @@ func runServe(args []string, rtCfg envcfg.Config, stderr io.Writer) int {
 	defer stop()
 
 	log := logging.Main()
+	binding := "loopback-only"
+	if !isLoopbackHost(*host) {
+		log.Warn().
+			Str("addr", addr).
+			Msg("dev server is token-less and reachable beyond this host; keep it on a trusted network")
+		binding = "non-loopback"
+	}
 	log.Info().
-		Str("addr", *addr).
+		Str("addr", addr).
 		Str("db", *dbFlag).
 		Str("model", rtCfg.EmbedModel).
-		Msg("dev server listening (token-less, loopback-only)")
+		Msg("dev server listening (token-less, " + binding + ")")
 
 	errCh := make(chan error, 1)
 	go func() { errCh <- srv.ListenAndServe() }()
@@ -153,28 +167,36 @@ func runServe(args []string, rtCfg envcfg.Config, stderr io.Writer) int {
 	return 0
 }
 
-// validateLoopbackAddr rejects any address that could expose the token-less
-// server beyond this host. An empty host (":8080") means all interfaces, so it
-// is rejected explicitly rather than left to the listener.
-func validateLoopbackAddr(addr string) error {
-	host, port, err := net.SplitHostPort(addr)
-	if err != nil {
-		return fmt.Errorf("invalid --addr %q: %w", addr, err)
-	}
+// resolveServeAddr turns the --host/--port flags into a listen address. The
+// server is token-less, so a host that is not loopback is refused unless
+// --allow-public says the caller deliberately wants a reachable dev server
+// (a container bridge, a LAN address, or 0.0.0.0 for every interface).
+func resolveServeAddr(host string, port int, allowPublic bool) (string, error) {
+	host = strings.TrimSpace(host)
 	if host == "" {
-		return fmt.Errorf("--addr %q binds every interface; use a loopback host such as 127.0.0.1", addr)
+		// net.Listen treats an empty host as every interface; make that an
+		// explicit choice rather than a flag-forgetting accident.
+		return "", errors.New("--host must not be empty; use 0.0.0.0 to bind every interface")
 	}
-	n, err := strconv.Atoi(port)
-	if err != nil || n < 1 || n > 65535 {
-		return fmt.Errorf("invalid --addr %q: port must be a number between 1 and 65535", addr)
+	if port < 1 || port > 65535 {
+		return "", fmt.Errorf("invalid --port %d: port must be between 1 and 65535", port)
 	}
+	if !isLoopbackHost(host) && !allowPublic {
+		return "", fmt.Errorf("--host %q is not loopback; the dev server is token-less. "+
+			"Pass --allow-public to bind it on a trusted network", host)
+	}
+	return net.JoinHostPort(host, strconv.Itoa(port)), nil
+}
+
+// isLoopbackHost reports whether host names this machine only: the literal
+// localhost or any loopback IP (127.0.0.0/8, ::1).
+func isLoopbackHost(host string) bool {
+	host = strings.TrimSpace(host)
 	if strings.EqualFold(host, "localhost") {
-		return nil
+		return true
 	}
-	if ip := net.ParseIP(host); ip == nil || !ip.IsLoopback() {
-		return fmt.Errorf("--addr %q is not loopback; the dev server is token-less and must not be exposed", addr)
-	}
-	return nil
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }
 
 // retriever is the slice of retrieval.Searcher the HTTP handler needs, so
