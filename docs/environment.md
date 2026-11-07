@@ -68,7 +68,7 @@ constants, not in struct tags, so there is exactly one definition.
 | `CHAT_MODEL` | `internal/envcfg` | `spark-x2.5-4b` | Reasoning model, used by the loop |
 | `AGENT_A2A_TOKENS` | `internal/envcfg` | empty | Comma-separated `id:token` bearer list for the A2A surface; empty and loopback = token-less dev |
 | `AGENT_A2A_TOKENS_FILE` | `internal/envcfg` | `./a2a-tokens.txt` | `0600` token file, re-read on change (rotation without restart); gitignored, missing = no tokens |
-| `AGENT_A2A_PUBLIC_URL` | `internal/envcfg` | empty | Absolute service root advertised in the agent card; empty derives it from the request |
+| `AGENT_A2A_PUBLIC_URL` | `internal/envcfg` | empty | Absolute service root advertised in the agent card; required with `--bind-public`, otherwise a loopback bind derives `http://<addr>` |
 | `EVAL_BASE_URL` | `evals/` (Python) | `http://localhost:8000/v1` | Endpoint for the Ragas harness; independent of `LOCALAI_*` |
 | `EVAL_MODEL` | `evals/` (Python) | `mtplx-qwen36-35b-a3b-optimized-speed` | Model the harness scores |
 | `EVAL_API_KEY` | `evals/` (Python) | empty → `local` | Secret; local servers ignore its value |
@@ -118,9 +118,12 @@ empty value in `example.env` and is never committed. `AGENT_A2A_TOKENS` is a
 fixed list read at startup; `AGENT_A2A_TOKENS_FILE` is re-read when its mtime
 or size changes, so `agent tokens add|revoke` rotates credentials without a
 restart. The file must be `0600`, and a malformed or loose-permission file is
-a startup error rather than a silent downgrade to token-less serving. With
-no tokens and a loopback bind the server stays token-less for development; a
-non-loopback bind (`--bind-public`) requires at least one token. See
+a startup error rather than a silent downgrade to token-less serving. Once a
+token has been configured the store stays secured: deleting the file or
+revoking the last entry yields `401`, never an unauthenticated server. With no
+tokens and a loopback bind the server stays token-less for development; a
+non-loopback bind (`--bind-public`) requires at least one token and an
+explicit `AGENT_A2A_PUBLIC_URL` (the card never trusts a request `Host`). See
 [a2a.md](a2a.md) for issuance, rotation, and the audit record.
 
 The `EVAL_*` rows belong to the Python harness in `evals/`, not to a Go

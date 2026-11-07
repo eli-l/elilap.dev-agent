@@ -77,13 +77,16 @@ On this CPU host an answer takes roughly 10-25 seconds.
 ./agent serve                          # 127.0.0.1:8080, token-less, loopback only
 ./agent serve --addr 127.0.0.1:18080 --db ./index.db
 ./agent tokens add --id alice          # issue a token; prints alice:<token> once
-./agent serve --bind-public --addr 0.0.0.0:8080   # requires a token
+AGENT_A2A_PUBLIC_URL=https://agent.example \
+  ./agent serve --bind-public --addr 0.0.0.0:8080   # requires a token + URL
 ```
 
 Without a configured token the loopback server is the token-less dev surface.
 Once a token exists (env or `./a2a-tokens.txt`) every `/a2a` and `/v1/*`
-request needs `Authorization: Bearer <token>`; `--bind-public` is the only way
-to bind a non-loopback address and it refuses to start without a token.
+request needs `Authorization: Bearer <token>`. `--bind-public` is the only way
+to bind a non-loopback address and it refuses to start without a token and an
+explicit `AGENT_A2A_PUBLIC_URL` (the card never derives its URL from an
+untrusted request `Host`).
 
 ```bash
 # Agent card (public, no token): the discovery document a peer reads first.
@@ -107,10 +110,13 @@ curl -sS -X POST http://127.0.0.1:8080/v1/ask \
   -d '{"question":"What does Eli say about harnesses?"}'
 ```
 
-Rate limit: 30 answer-bearing tasks per minute per token (`--rate-limit`, 0
-disables); over-limit is HTTP 429 with `Retry-After`. Each task is bounded by
-the loop budget (3 tool iterations, 4,000 excerpt tokens, 90s wall clock) and
-a question is capped at 8 KiB. Tokens live in a `0600` file that is re-read on
+Rate limit: 30 model-touching requests per minute per token (`--rate-limit`,
+0 disables; a negative value is a startup error); this covers `/a2a`,
+`/v1/ask`, and `/v1/retrieve`. Failed bearer-auth attempts have a separate
+`--auth-limit` budget (default 120/min per address, 0 disables). Over-limit is
+HTTP 429 with `Retry-After`.
+Each task is bounded by the loop budget (3 tool iterations, 4,000 excerpt
+tokens, 90s wall clock) and a question is capped at 8 KiB. Tokens live in a `0600` file that is re-read on
 change, so add/revoke needs no restart:
 
 ```bash
@@ -119,9 +125,10 @@ change, so add/revoke needs no restart:
 ./agent tokens revoke --id bob
 ```
 
-The audit stream is one `audit` module line per task: token id, question,
-outcome, iterations, citations, elapsed. It never carries the answer, prompt,
-or excerpts. Full wire contract: [a2a.md](/a2a.md).
+The audit stream is one `audit` module line per task: token id, question
+fingerprint (SHA-256 + byte length), outcome, iterations, citations, elapsed.
+It never carries the question text, the answer, prompt, or excerpts. Full wire
+contract: [a2a.md](/a2a.md).
 
 ## Testing the agent
 
@@ -206,6 +213,8 @@ of the following is Phase 3 work:
 | `index vectors are stamped X, but EMBED_MODEL=Y expects Z` | The index was embedded by another model/text template. Run `./agent embed` (the tag makes every chunk pending) or point `EMBED_MODEL` at the model that built it. |
 | `--addr ... is not loopback` | Use `127.0.0.1:<port>`, or `--bind-public` with a configured token. |
 | `--bind-public requires an A2A token` | Issue one with `./agent tokens add --id <id>`; the server will not expose an unauthenticated endpoint. |
+| `--bind-public requires AGENT_A2A_PUBLIC_URL` | Set the absolute `https://…` URL peers should use; the card will not trust a request `Host` header. |
+| `AGENT_A2A_PUBLIC_URL must be an absolute http(s) URL` | Use a full URL with a host (a path prefix is fine); userinfo and relative values are rejected. |
 | `401 unauthorized` from `/a2a` or `/v1/*` | Send `Authorization: Bearer <token>`; confirm the id is listed by `agent tokens list`. |
 | `auth: token file ... must not be group/world-accessible` | `chmod 600` the token file; `agent tokens add` creates it correctly. |
 | `429 rate limit exceeded` | Wait for `Retry-After`; raise `--rate-limit` only if the model host can take it. |

@@ -13,8 +13,10 @@
 // environment variable names, never credential values or document bodies
 // (AGENTS.md). The one deliberate exception is the agent module at debug
 // level, where the grounded loop logs the exact prompts, excerpts, and model
-// replies it processes so retrieval can be debugged end to end; see
-// docs/logging.md.
+// replies it processes so retrieval can be debugged end to end. The audit
+// module stays on at info but records only a token id, a question fingerprint
+// (SHA-256 + byte length), the outcome, and counts - never question, answer,
+// prompt, or excerpt text. See docs/logging.md.
 package logging
 
 import (
@@ -45,8 +47,9 @@ const (
 	// ModuleAgent logs the grounded agent loop: the chat requests sent to the
 	// model and the replies it returns, at debug level.
 	ModuleAgent = "agent"
-	// ModuleAudit logs the A2A task record: token id, question, outcome,
-	// iterations, citations, and elapsed time - never the answer or excerpts.
+	// ModuleAudit logs the A2A task record: token id, question fingerprint,
+	// outcome, iterations, citations, and elapsed time - never the question
+	// text, answer, prompt, or excerpts.
 	ModuleAudit = "audit"
 )
 

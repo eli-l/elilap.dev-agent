@@ -61,7 +61,7 @@ Workflow for any docs/ change:
 - `internal/a2a` — the A2A v0.3 JSON-RPC binding: wire types, agent card (both well-known paths), `message/send`, and the stateless task-method responses.
 - `internal/auth` — A2A bearer tokens: env list plus a re-read `0600` file (rotation without restart), constant-time lookup, `agent tokens` add/revoke helpers.
 - `internal/ratelimit` — the per-token task bucket (default 30/min) behind the answer-bearing surfaces.
-- `internal/audit` — one task record per A2A/`/v1/ask` request: token id, question, outcome, iterations, citations, elapsed; never the answer, prompt, or excerpts.
+- `internal/audit` — one task record per A2A/`/v1/ask` request: token id, question fingerprint (SHA-256 + byte length), outcome, iterations, citations, elapsed; never the question text, answer, prompt, or excerpts.
 - `evals/` — Python (uv + Ragas) answer-quality harness: `agent.py` (the
   agent-ask client), `evaluate.py` (the only tool), `configs/` (hand-verified
   answer and refusal ground truth), `test_llm.py` (endpoint smoke test), and
@@ -98,7 +98,7 @@ Workflow for any docs/ change:
   through `envcfg.Lookup`. YAML-file config (`sources.yaml`) stays on
   `gopkg.in/yaml.v3` with `KnownFields(true)`.
 - The LLM connector is plain `net/http` against an OpenAI-compatible API — no LLM SDKs. Tool-calling rides on the same connector: chat requests carry the `search_writing` tool definition and the client round-trips the model's tool calls.
-- The A2A surface stays a **thin binding over `internal/agentloop`**: one `message/send`, one synchronous grounded `Message` with citation metadata, no task store, no streaming. Bearer tokens are the only auth; a non-loopback bind requires `--bind-public` plus at least one token. The card is public. Tokens are compared in constant time and never logged; the `audit` module records the question and outcome but not the answer or excerpts, and is pinned to `info` unless logging is disabled (`docs/a2a.md`).
+- The A2A surface stays a **thin binding over `internal/agentloop`**: one `message/send`, one synchronous grounded `Message` with citation metadata, no task store, no streaming. Bearer tokens are the only auth; a non-loopback bind requires `--bind-public`, at least one token, and an explicit `AGENT_A2A_PUBLIC_URL` (the card never trusts a request `Host`). The card is public, and the token store latches secured so emptying the file cannot fail open. Tokens are compared in constant time and never logged; the `audit` module records a question fingerprint and the outcome but not the question text, answer, prompt, or excerpts, and is pinned to `info` unless logging is disabled (`docs/a2a.md`).
 - The DB is derived: deleting `index.db` and re-running ingest/embed must always reproduce it. Never commit it.
 - Timestamps are ISO-8601 UTC; ids are sha256-based hex (`chunk_id = sha256(source_kind|source_id|chunk_seq)`). Here `source_id` is the upstream item id (Ghost uuid / Postiz id), not the config id; `chunk_seq` is the ordinal within that item across all its platform chunks.
 - Dependencies are **vendored locally but never committed**: `vendor/` is gitignored and must exist on disk — run `go mod vendor` after any `go.mod`/`go.sum` change and build with `-mod=vendor` (the sandboxed worker has no network and its module cache is hidden). `go.mod`/`go.sum` are the source of truth for versions.

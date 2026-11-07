@@ -38,11 +38,25 @@ func runTokens(args []string, rtCfg envcfg.Config, stdout, stderr io.Writer) int
 			fmt.Fprintf(stderr, "agent tokens add: unexpected argument %q\n", fs.Arg(0))
 			return 2
 		}
-		if strings.TrimSpace(*id) == "" {
+		idValue := strings.TrimSpace(*id)
+		if idValue == "" {
 			fmt.Fprintln(stderr, "agent tokens add: --id is required")
 			return 2
 		}
-		token, err := auth.AddToken(*path, strings.TrimSpace(*id))
+		// The env list is static and cannot be edited here; reject an id it
+		// already owns instead of writing a file the server will refuse.
+		envOnly, err := auth.NewStore(rtCfg.A2ATokens, "")
+		if err != nil {
+			fmt.Fprintf(stderr, "agent tokens add: %v\n", err)
+			return 1
+		}
+		for _, existing := range envOnly.IDs() {
+			if existing == idValue {
+				fmt.Fprintf(stderr, "agent tokens add: token id %q is already configured in %s; revoke it there instead\n", idValue, envcfg.EnvA2ATokens)
+				return 1
+			}
+		}
+		token, err := auth.AddToken(*path, idValue)
 		if err != nil {
 			fmt.Fprintf(stderr, "agent tokens add: %v\n", err)
 			return 1
@@ -127,6 +141,7 @@ server re-reads when it changes, so add/revoke need no restart.
 
 The file defaults to AGENT_A2A_TOKENS_FILE (`+envcfg.DefaultA2ATokensFile+`);
 --file overrides it. Tokens can also come from AGENT_A2A_TOKENS
-("id:token,id2:token2"), but those are fixed at process start.
+("id:token,id2:token2"), but those are fixed at process start. "list"
+shows ids from both sources; "revoke" edits the file only.
 `)
 }

@@ -363,3 +363,69 @@ func TestMessageTypesRoundTrip(t *testing.T) {
 		}
 	}
 }
+
+func TestSendMessageOutputModes(t *testing.T) {
+	loop := answererFunc(func(context.Context, string) (agentloop.Answer, error) {
+		return agentloop.Answer{Answer: "ok"}, nil
+	})
+	body := func(modes string) string {
+		return `{"jsonrpc":"2.0","id":1,"method":"message/send","params":{"message":{"kind":"message","role":"user","messageId":"m","parts":[{"kind":"text","text":"q"}]},"configuration":{"acceptedOutputModes":[` + modes + `]}}}`
+	}
+	for _, modes := range []string{`"text/plain"`, `"text/plain; charset=utf-8"`, `"text/*"`, `"*/*"`} {
+		env := decode(t, post(t, a2a.NewHandler(loop), body(modes)))
+		if env.Error != nil {
+			t.Errorf("modes %s rejected: %+v", modes, env.Error)
+		}
+	}
+	for _, modes := range []string{`"image/png"`, `"text/markdown"`, `"not a media type"`} {
+		env := decode(t, post(t, a2a.NewHandler(loop), body(modes)))
+		if env.Error == nil || env.Error.Code != a2a.CodeContentType {
+			t.Errorf("modes %s = %+v, want content-type error", modes, env.Error)
+		}
+	}
+}
+
+func TestSendMessageOversizedBodyIs413(t *testing.T) {
+	loop := answererFunc(func(context.Context, string) (agentloop.Answer, error) {
+		t.Error("the loop ran for an oversized body")
+		return agentloop.Answer{}, nil
+	})
+	body := `{"jsonrpc":"2.0","id":1,"method":"message/send","params":{"message":{"kind":"message","role":"user","messageId":"m","parts":[{"kind":"text","text":"` +
+		strings.Repeat("x", a2a.MaxRequestBody+100) + `"}]}}}`
+	rec := post(t, a2a.NewHandler(loop), body)
+	if rec.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("status = %d, want 413: %s", rec.Code, rec.Body.String())
+	}
+	env := decode(t, rec)
+	if env.Error == nil || env.Error.Code != a2a.CodeInvalidRequest {
+		t.Errorf("error = %+v, want invalid request", env.Error)
+	}
+}
+
+func TestRequestWithoutIDIsRejectedAsNotification(t *testing.T) {
+	loop := answererFunc(func(context.Context, string) (agentloop.Answer, error) {
+		t.Error("the loop ran for an id-less notification")
+		return agentloop.Answer{}, nil
+	})
+	rec := post(t, a2a.NewHandler(loop),
+		`{"jsonrpc":"2.0","method":"message/send","params":{"message":{"kind":"message","role":"user","messageId":"m","parts":[{"kind":"text","text":"q"}]}}}`)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400", rec.Code)
+	}
+	env := decode(t, rec)
+	if env.Error == nil || env.Error.Code != a2a.CodeInvalidRequest {
+		t.Errorf("error = %+v, want invalid request", env.Error)
+	}
+}
+
+func TestOversizedTrailingDataIs413(t *testing.T) {
+	loop := answererFunc(func(context.Context, string) (agentloop.Answer, error) {
+		t.Error("the loop ran for an oversized body")
+		return agentloop.Answer{}, nil
+	})
+	body := sendBody("q") + strings.Repeat(" ", a2a.MaxRequestBody)
+	rec := post(t, a2a.NewHandler(loop), body)
+	if rec.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("status = %d, want 413: %s", rec.Code, rec.Body.String())
+	}
+}

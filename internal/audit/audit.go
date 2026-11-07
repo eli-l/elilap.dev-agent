@@ -1,13 +1,17 @@
 // Package audit emits the read-only task record the operator keeps: who asked
-// (token id), what was asked (the peer's question), and how the loop ended
-// (answered/refused/timeout/error, iterations, citation count, elapsed).
+// (token id), a fingerprint of what was asked, and how the loop ended
+// (answered/refused/timeout/canceled/error, iterations, citation count,
+// elapsed).
 //
-// It deliberately excludes the answer text, prompts, and retrieved chunk
-// bodies, so the audit stream can stay on at a level that would not be safe
-// for the debug RAG trace (docs/logging.md, docs/a2a.md).
+// It deliberately excludes the question text, the answer, the prompt, and
+// retrieved chunk bodies. The audit stream therefore stays safe to keep on at
+// a level that would not be safe for the debug RAG trace (docs/logging.md,
+// docs/a2a.md): the question is correlated by SHA-256 and byte length only.
 package audit
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"time"
 
 	"github.com/eli-l/elilap.dev-agent/internal/logging"
@@ -18,17 +22,20 @@ const (
 	OutcomeAnswered = "answered"
 	OutcomeRefused  = "refused"
 	OutcomeTimeout  = "timeout"
+	OutcomeCanceled = "canceled"
 	OutcomeError    = "error"
 )
 
-// Entry is one task record.
+// Entry is one task record. Question is hashed before it reaches the log; it
+// is never serialized.
 type Entry struct {
 	// TokenID is the authenticated token id, or empty for the token-less
 	// loopback dev surface.
 	TokenID string
 	// Method is the surface that handled the task, e.g. "a2a/message/send".
 	Method string
-	// Question is the peer's question. It is the only peer text recorded.
+	// Question is the peer's question. Only its SHA-256 and byte length are
+	// logged.
 	Question string
 	// ToolIterations is how many search_writing rounds the loop ran.
 	ToolIterations int
@@ -46,11 +53,13 @@ type Entry struct {
 // logging is disabled), so lowering --log-level does not quietly drop the
 // audit trail.
 func Answer(e Entry) {
+	sum := sha256.Sum256([]byte(e.Question))
 	log := logging.Audit()
 	log.Info().
 		Str("token_id", e.TokenID).
 		Str("method", e.Method).
-		Str("question", e.Question).
+		Str("question_sha256", hex.EncodeToString(sum[:])).
+		Int("question_bytes", len(e.Question)).
 		Str("outcome", e.Outcome).
 		Int("tool_iterations", e.ToolIterations).
 		Int("citations", e.Citations).

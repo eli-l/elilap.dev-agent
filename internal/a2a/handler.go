@@ -62,10 +62,20 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	dec := json.NewDecoder(r.Body)
 	var req Request
 	if err := dec.Decode(&req); err != nil {
+		var maxErr *http.MaxBytesError
+		if errors.As(err, &maxErr) {
+			writeTransportError(w, http.StatusRequestEntityTooLarge, CodeInvalidRequest, "request body too large")
+			return
+		}
 		writeRPCError(w, http.StatusOK, nil, &Error{Code: CodeParseError, Message: "invalid JSON payload"})
 		return
 	}
 	if err := dec.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		var maxErr *http.MaxBytesError
+		if errors.As(err, &maxErr) {
+			writeTransportError(w, http.StatusRequestEntityTooLarge, CodeInvalidRequest, "request body too large")
+			return
+		}
 		writeRPCError(w, http.StatusOK, req.ID, &Error{Code: CodeInvalidRequest,
 			Message: "body must contain exactly one JSON-RPC request"})
 		return
@@ -78,6 +88,13 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if strings.TrimSpace(req.Method) == "" {
 		writeRPCError(w, http.StatusOK, req.ID, &Error{Code: CodeInvalidRequest,
 			Message: "method is required"})
+		return
+	}
+	// A2A requests require an id; without one this is a JSON-RPC
+	// notification, and the spec forbids replying to those. Reject it at the
+	// transport layer instead of pretending it was a request.
+	if len(req.ID) == 0 {
+		writeTransportError(w, http.StatusBadRequest, CodeInvalidRequest, "id is required")
 		return
 	}
 	if !validID(req.ID) {
@@ -179,6 +196,12 @@ func (h *Handler) sendMessage(r *http.Request, raw json.RawMessage) (*Message, *
 			entry.Outcome = audit.OutcomeTimeout
 			audit.Answer(entry)
 			return nil, &Error{Code: CodeServerError, Message: "answer timed out", Data: map[string]any{"retryable": true}}
+		case errors.Is(err, context.Canceled):
+			// The peer disconnected. The backend did not fail, and nobody
+			// will read the response; record the task without an error log.
+			entry.Outcome = audit.OutcomeCanceled
+			audit.Answer(entry)
+			return nil, &Error{Code: CodeServerError, Message: "request canceled"}
 		default:
 			entry.Outcome = audit.OutcomeError
 			audit.Answer(entry)
@@ -256,9 +279,13 @@ func checkOutputModes(cfg *MessageSendConfig) *Error {
 	if cfg == nil || len(cfg.AcceptedOutputModes) == 0 {
 		return nil
 	}
-	for _, mode := range cfg.AcceptedOutputModes {
-		mode = strings.ToLower(strings.TrimSpace(mode))
-		if mode == textPlain || mode == "text/markdown" || mode == "text/*" {
+	for _, raw := range cfg.AcceptedOutputModes {
+		mediaType, _, err := mime.ParseMediaType(strings.TrimSpace(raw))
+		if err != nil {
+			continue
+		}
+		switch strings.ToLower(mediaType) {
+		case textPlain, "text/*", "*/*":
 			return nil
 		}
 	}

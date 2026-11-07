@@ -1,7 +1,7 @@
 ---
 type: Reference
 title: A2A surface - agent card, message/send, tokens, and audit
-description: "The A2A v0.3 JSON-RPC binding served by `agent serve`: agent-card discovery at the well-known paths, the message/send request and response contract with citation metadata, why the service answers with a Message instead of a Task, bearer-token issuance and rotation, the per-token rate limit, and the audit record that never carries answers or excerpts."
+description: "The A2A v0.3 JSON-RPC binding served by `agent serve`: agent-card discovery at the well-known paths, the message/send request and response contract with citation metadata, why the service answers with a Message instead of a Task, bearer-token issuance and rotation, the per-token rate limit, and the audit record that never carries the question, answer, or excerpts."
 status: stable
 generated:
   by: process:agent-a2a
@@ -59,10 +59,11 @@ The card advertises exactly what the service does and nothing it cannot do:
   configured. The scheme is `{"type":"http","scheme":"bearer"}`.
 
 `url` is `<root>/a2a`, where `<root>` comes from `AGENT_A2A_PUBLIC_URL` when
-set and otherwise from the request (`X-Forwarded-Proto`/TLS + `Host`). Set
-`AGENT_A2A_PUBLIC_URL=https://...` behind TLS or a path-prefixing proxy: A2A
-expects an absolute HTTPS URL in production, and a derived loopback URL is
-`http://` by design.
+set. A loopback bind derives `http://<bind-addr>`; a `--bind-public` bind
+**requires** `AGENT_A2A_PUBLIC_URL`, because an advertised endpoint must never
+be built from an untrusted `Host` or `X-Forwarded-Proto` header. The configured
+value is validated at startup (absolute `http`/`https`, host required, no
+userinfo), and a path prefix such as `https://example.com/agent` is allowed.
 
 **Spec note:** A2A v0.3 uses `url`, `preferredTransport`, and
 `additionalInterfaces` on the card, and recommends
@@ -127,8 +128,9 @@ Contract details enforced by `internal/a2a`:
   must be present, and `parts` must contain at least one non-blank text part.
 * File and data parts are rejected with `-32005 ContentTypeNotSupportedError`
   and `data.supported_input_modes: ["text/plain"]`.
-* `configuration.acceptedOutputModes`, when present, must accept
-  `text/plain`, `text/markdown`, or `text/*`; otherwise `-32005`.
+* `configuration.acceptedOutputModes`, when present, is parsed as media types:
+  `text/plain`, `text/*`, and `*/*` are accepted; parameters are ignored, so
+  `text/plain; charset=utf-8` is accepted too. Anything else is `-32005`.
 * `configuration.pushNotificationConfig` is rejected with `-32003`.
 * A peer `contextId` is echoed; absent, the service generates one. The
   returned `metadata.citations` is always an array and is `[]` on a refusal.
@@ -174,8 +176,14 @@ Tokens come from two sources, both declared in `example.env`:
 
 Ids are the audit label and must match `[A-Za-z0-9._-]{1,64}`; values are at
 least 32 characters and generated with 32 random bytes (43 URL-safe base64
-characters). Tokens are compared in constant time, and values never appear in
-logs or errors.
+characters). Values cannot contain whitespace, control characters, `#`, or
+`,`, so they parse identically in the env list and the file. Tokens are
+compared in constant time, and values never appear in logs or errors.
+
+Once any token has been configured, the store stays **secured**: deleting the
+token file or revoking the last entry makes every request `401`, never
+unauthenticated. Adding a token to a server that started token-less enables
+auth on the next request; disabling it requires a restart with no tokens.
 
 ```bash
 ./agent tokens add --id alice        # prints "alice:<token>" exactly once
@@ -190,9 +198,13 @@ exists in `AGENT_A2A_TOKENS` is an error: edit the environment instead.
 ## Rate limit
 
 `--rate-limit` (default 30, `0` disables) is a per-token bucket refilled
-evenly over a minute, applied to the answer-bearing paths (`message/send` and
-`/v1/ask`). `/v1/retrieve` is not limited. A token-less dev request is keyed
-by peer address so a local caller cannot pin the model host either.
+evenly over a minute, applied to every model-touching path: `message/send`,
+`/v1/ask`, and `/v1/retrieve` (retrieval embeds the query on the same model
+host). A token-less dev request is keyed by peer address so a local caller
+cannot pin the model host either. Failed bearer-auth attempts have a separate
+`--auth-limit` budget (default 120/min per address, `0` disables); a successful
+lookup is not charged. The lookup happens before the charge, so one peer
+cannot lock out valid tokens behind the same NAT.
 
 Over-limit requests get HTTP 429 with `Retry-After`; `/a2a` returns JSON-RPC
 error `-32000` with `data.retry_after_seconds`. `-32000` is the documented
@@ -204,11 +216,13 @@ Every completed task writes one line on the `audit` module (see
 [logging.md](/logging.md)):
 
 ```json
-{"level":"info","module":"audit","token_id":"smoke","method":"a2a/message/send","question":"What has Eli written about vendor lock-in?","outcome":"answered","tool_iterations":1,"citations":1,"refused":false,"elapsed_ms":2987,"message":"task"}
+{"level":"info","module":"audit","token_id":"smoke","method":"a2a/message/send","question_sha256":"<64 hex>","question_bytes":45,"outcome":"answered","tool_iterations":1,"citations":1,"refused":false,"elapsed_ms":2987,"message":"task"}
 ```
 
-`outcome` is `answered`, `refused`, `timeout`, or `error`. The record
-deliberately excludes the answer text, the prompt, and excerpts. The audit
+`outcome` is `answered`, `refused`, `timeout`, `canceled`, or `error`. The
+question is identified by its SHA-256 and byte length, so repeated questions
+can be correlated without storing peer text. The record deliberately excludes
+the question, the answer, the prompt, and excerpts. The audit
 logger is pinned to `info` unless logging is explicitly `disabled`, so a
 quieter `--log-level` cannot silently drop the trail. `/v1/ask` writes the
 same record with `method: "v1/ask"`.
@@ -222,8 +236,8 @@ same record with `method: "v1/ask"`.
 * Loopback bind by default; public exposure requires `--bind-public` **and**
   a token.
 * Tokens are high-entropy, rotatable without restart, and never logged.
-* The question (≤8 KiB) and the whole body (≤64 KiB) are bounded; the audit
-  stream records the question but no answer.
+* The question (≤8 KiB) and the whole body (≤64 KiB, `413` when exceeded) are
+  bounded; the audit stream records only the question fingerprint.
 
 ## Verification
 

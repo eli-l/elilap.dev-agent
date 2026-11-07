@@ -10,10 +10,12 @@ import (
 	"math"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -44,6 +46,10 @@ const (
 	// defaultRateLimit is the per-token task budget per minute (PLAN.md
 	// Phase 4): one peer must not be able to pin the single chat-model host.
 	defaultRateLimit = 30
+	// defaultAuthAttemptLimit caps failed bearer-auth attempts per address
+	// per minute. A successful lookup is not charged; failures are charged
+	// only after the lookup, so a valid token is never throttled behind NAT.
+	defaultAuthAttemptLimit = 120
 	// maxRequestBody caps one request body; a query is a sentence, not a
 	// document.
 	maxRequestBody = 64 << 10
@@ -51,6 +57,10 @@ const (
 	retrieveTimeout = 30 * time.Second
 	// shutdownTimeout bounds the graceful drain on SIGINT/SIGTERM.
 	shutdownTimeout = 5 * time.Second
+	// statusClientClosedRequest is the non-standard status (nginx 499) used
+	// when the peer cancels a long request; the connection is already gone,
+	// but access logs and metrics should not call it a gateway failure.
+	statusClientClosedRequest = 499
 	// surfaceRPC and surfaceJSON select the error body shape a transport
 	// middleware writes: JSON-RPC for /a2a, the dev surface's {"error"} for
 	// /v1/*.
@@ -67,7 +77,8 @@ func runServe(args []string, rtCfg envcfg.Config, stderr io.Writer) int {
 	addr := fs.String("addr", defaultServeAddr, "bind address (host:port)")
 	bindPublic := fs.Bool("bind-public", false, "bind a non-loopback address; requires at least one A2A token")
 	dbFlag := fs.String("db", rtCfg.DBPath, "path to the SQLite index")
-	rateLimit := fs.Int("rate-limit", defaultRateLimit, "answer-bearing tasks per minute per token (0 disables)")
+	rateLimit := fs.Int("rate-limit", defaultRateLimit, "model-touching requests per minute per token (0 disables)")
+	authLimit := fs.Int("auth-limit", defaultAuthAttemptLimit, "failed bearer-auth attempts per minute per address (0 disables)")
 	if err := fs.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return 0
@@ -87,7 +98,14 @@ func runServe(args []string, rtCfg envcfg.Config, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "agent serve: %v\n", err)
 		return 2
 	}
-
+	if *rateLimit < 0 {
+		fmt.Fprintf(stderr, "agent serve: --rate-limit must be >= 0 (0 disables)\n")
+		return 2
+	}
+	if *authLimit < 0 {
+		fmt.Fprintf(stderr, "agent serve: --auth-limit must be >= 0 (0 disables)\n")
+		return 2
+	}
 	// Tokens are the only auth input. A missing token file and an empty env
 	// list mean the token-less loopback dev deployment; a malformed file is a
 	// startup error, never a silent fallback.
@@ -96,9 +114,18 @@ func runServe(args []string, rtCfg envcfg.Config, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "agent serve: %v\n", err)
 		return 2
 	}
-	secured := tokens.Len() > 0
+	secured := tokens.Secured()
 	if *bindPublic && !secured {
 		fmt.Fprintf(stderr, "agent serve: --bind-public requires an A2A token; issue one with `agent tokens add --id <id>` or set %s\n", envcfg.EnvA2ATokens)
+		return 2
+	}
+
+	// The card must never advertise an endpoint derived from an untrusted
+	// Host header. Public exposure therefore requires an explicit root;
+	// loopback derives one from the bind address.
+	cardBase, err := cardBaseURL(*addr, *bindPublic, rtCfg.A2APublicURL)
+	if err != nil {
+		fmt.Fprintf(stderr, "agent serve: %v\n", err)
 		return 2
 	}
 
@@ -134,19 +161,21 @@ func runServe(args []string, rtCfg envcfg.Config, stderr io.Writer) int {
 		MaxElapsed: askTimeout,
 	}
 	limiter := ratelimit.New(*rateLimit)
+	authAttempts := ratelimit.New(*authLimit)
 
-	card := serveAgentCard(secured, rtCfg.A2APublicURL)
+	card := serveAgentCard(tokens.Secured, cardBase)
 	mux := http.NewServeMux()
 	for _, path := range a2a.CardPaths {
 		mux.Handle("GET "+path, logging.RequestMiddleware(path, card))
 	}
 	mux.Handle(a2a.CardURLPath, logging.RequestMiddleware(a2a.CardURLPath,
-		requireToken(tokens, surfaceRPC,
+		requireToken(tokens, surfaceRPC, authAttempts,
 			limitTasks(limiter, surfaceRPC, a2a.NewHandler(loop)))))
 	mux.Handle(retrieveRoute, logging.RequestMiddleware(retrieveRoute,
-		requireToken(tokens, surfaceJSON, newRetrieveHandler(searcher))))
+		requireToken(tokens, surfaceJSON, authAttempts,
+			limitTasks(limiter, surfaceJSON, newRetrieveHandler(searcher)))))
 	mux.Handle(askRoute, logging.RequestMiddleware(askRoute,
-		requireToken(tokens, surfaceJSON,
+		requireToken(tokens, surfaceJSON, authAttempts,
 			limitTasks(limiter, surfaceJSON, newAskHandler(loop)))))
 
 	srv := &http.Server{
@@ -171,6 +200,7 @@ func runServe(args []string, rtCfg envcfg.Config, stderr io.Writer) int {
 		Bool("auth", secured).
 		Int("tokens", tokens.Len()).
 		Int("rate_limit_per_min", *rateLimit).
+		Int("auth_limit_per_min", *authLimit).
 		Msg("server listening")
 
 	errCh := make(chan error, 1)
@@ -206,34 +236,44 @@ func runServe(args []string, rtCfg envcfg.Config, stderr io.Writer) int {
 
 // serveAgentCard answers the agent card requests. The card is public: a peer
 // must be able to discover which scheme to authenticate with before it has a
-// token. publicURL, when set, is the advertised service root; otherwise it is
-// derived from the request.
-func serveAgentCard(secured bool, publicURL string) http.Handler {
+// token. secured is evaluated per request so a live token-store change is
+// reflected; baseURL is fixed at startup and never derived from a request.
+func serveAgentCard(secured func() bool, baseURL string) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		base := publicURL
-		if base == "" {
-			base = requestBaseURL(r)
-		}
 		w.Header().Set("Content-Type", "application/json; charset=utf-8")
-		if err := json.NewEncoder(w).Encode(a2a.NewCard(base, secured)); err != nil {
+		if err := json.NewEncoder(w).Encode(a2a.NewCard(baseURL, secured())); err != nil {
 			log := logging.HTTP()
 			log.Error().Err(err).Msg("write agent card failed")
 		}
 	})
 }
 
-// requestBaseURL reconstructs the service root a peer used: scheme from TLS
-// or the proxy header, host from the request. AGENT_A2A_PUBLIC_URL overrides
-// this when the service sits behind a path-prefixing proxy.
-func requestBaseURL(r *http.Request) string {
-	scheme := "http"
-	if r.TLS != nil {
-		scheme = "https"
+// cardBaseURL resolves the service root the agent card advertises. Public
+// binds require an explicit AGENT_A2A_PUBLIC_URL; loopback derives one from
+// the bind address. Neither path trusts the request Host or forwarded headers.
+func cardBaseURL(addr string, public bool, configured string) (string, error) {
+	configured = strings.TrimRight(strings.TrimSpace(configured), "/")
+	if configured != "" {
+		u, err := url.Parse(configured)
+		if err != nil {
+			return "", fmt.Errorf("AGENT_A2A_PUBLIC_URL must be an absolute http(s) URL with a host")
+		}
+		scheme := strings.ToLower(u.Scheme)
+		port := u.Port()
+		portNum, portErr := strconv.Atoi(port)
+		if scheme == "" || u.Hostname() == "" || (scheme != "http" && scheme != "https") ||
+			u.User != nil || u.RawQuery != "" || u.Fragment != "" ||
+			(port != "" && (portErr != nil || portNum < 1 || portNum > 65535)) {
+			// Never echo the value: a rejected URL may hold proxy userinfo
+			// or a signed query, and config errors must not leak secrets.
+			return "", fmt.Errorf("AGENT_A2A_PUBLIC_URL must be an absolute http(s) URL with a host")
+		}
+		return configured, nil
 	}
-	if proto := strings.ToLower(strings.TrimSpace(r.Header.Get("X-Forwarded-Proto"))); proto == "http" || proto == "https" {
-		scheme = proto
+	if public {
+		return "", fmt.Errorf("--bind-public requires %s (the absolute http(s) URL peers should use)", envcfg.EnvA2APublicURL)
 	}
-	return scheme + "://" + r.Host
+	return "http://" + addr, nil
 }
 
 // validateLoopbackAddr rejects any address that could expose a token-less
@@ -277,27 +317,42 @@ func validatePort(addr, port string) error {
 	return nil
 }
 
-// requireToken enforces the bearer token when the store has any configured.
-// With no tokens the loopback dev deployment stays token-less (the caller has
-// already refused a public bind in that case).
-func requireToken(store *auth.Store, surface string, next http.Handler) http.Handler {
+// requireToken enforces the bearer token once the store has ever held one.
+// Emptying the token file at runtime does not disable auth: the store latches
+// secured, so requests fail with 401 until a token is configured again. A
+// store that started without tokens stays token-less for the loopback dev
+// deployment (the caller has already refused a public bind in that case).
+func requireToken(store *auth.Store, surface string, attempts *ratelimit.Limiter, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if store == nil || store.Len() == 0 {
+		if store == nil || !store.Secured() {
 			next.ServeHTTP(w, r)
 			return
 		}
-		value, ok := bearerToken(r)
+		key := "ip:" + remoteHost(r.RemoteAddr)
+		token, ok := tokenFromRequest(store, r)
 		if !ok {
-			writeAuthError(w, surface)
-			return
-		}
-		token, ok := store.Lookup(value)
-		if !ok {
+			// Charge only failures, so a valid token is never throttled by an
+			// attacker sharing its address. The lookup happens first: blocking
+			// a tripped address before validation would let one peer lock out
+			// every valid token behind the same NAT.
+			if retry, allowed := allowKey(attempts, key); !allowed {
+				writeRateLimitError(w, surface, key, retry)
+				return
+			}
 			writeAuthError(w, surface)
 			return
 		}
 		next.ServeHTTP(w, r.WithContext(auth.WithToken(r.Context(), token)))
 	})
+}
+
+// tokenFromRequest extracts and validates the bearer credential.
+func tokenFromRequest(store *auth.Store, r *http.Request) (auth.Token, bool) {
+	value, ok := bearerToken(r)
+	if !ok {
+		return auth.Token{}, false
+	}
+	return store.Lookup(value)
 }
 
 // bearerToken extracts the RFC 6750 bearer credential.
@@ -338,34 +393,86 @@ func limitTasks(limiter *ratelimit.Limiter, surface string, next http.Handler) h
 		} else {
 			key = "ip:" + remoteHost(r.RemoteAddr)
 		}
-		if retry, ok := limiter.Allow(key); !ok {
-			seconds := int(math.Ceil(retry.Seconds()))
-			if seconds < 1 {
-				seconds = 1
-			}
-			w.Header().Set("Retry-After", strconv.Itoa(seconds))
-			log := logging.HTTP()
-			log.Warn().Str("key", key).Int("retry_after_s", seconds).Msg("rate limit exceeded")
-			if surface == surfaceRPC {
-				w.Header().Set("Content-Type", "application/json; charset=utf-8")
-				w.WriteHeader(http.StatusTooManyRequests)
-				_ = json.NewEncoder(w).Encode(a2a.Response{
-					JSONRPC: "2.0",
-					ID:      json.RawMessage("null"),
-					Error: &a2a.Error{
-						Code:    a2a.CodeServerError,
-						Message: "rate limit exceeded",
-						Data:    map[string]any{"retry_after_seconds": seconds},
-					},
-				})
-				return
-			}
-			writeJSONError(w, http.StatusTooManyRequests, "rate limit exceeded")
+		if retry, ok := allowKey(limiter, key); !ok {
+			writeRateLimitError(w, surface, key, retry)
 			return
 		}
 		next.ServeHTTP(w, r)
 	})
 }
+
+// allowKey is Allow with a nil-safe wrapper, so auth-failure limiting can be
+// omitted in tests and in configurations that do not need it.
+func allowKey(limiter *ratelimit.Limiter, key string) (time.Duration, bool) {
+	if limiter == nil {
+		return 0, true
+	}
+	return limiter.Allow(key)
+}
+
+// writeRateLimitError writes the 429 both surfaces use, with Retry-After and a
+// JSON-RPC -32000 body on /a2a.
+func writeRateLimitError(w http.ResponseWriter, surface, key string, retry time.Duration) {
+	seconds := int(math.Ceil(retry.Seconds()))
+	if seconds < 1 {
+		seconds = 1
+	}
+	w.Header().Set("Retry-After", strconv.Itoa(seconds))
+	// Log at most once per key per minute: this path is reachable without
+	// credentials, and an unbounded warning stream is its own DoS.
+	if rateLimitLog.allow(surface + "|" + key) {
+		log := logging.HTTP()
+		log.Warn().Str("key", key).Int("retry_after_s", seconds).Msg("rate limit exceeded")
+	}
+	if surface == surfaceRPC {
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		w.WriteHeader(http.StatusTooManyRequests)
+		_ = json.NewEncoder(w).Encode(a2a.Response{
+			JSONRPC: "2.0",
+			ID:      json.RawMessage("null"),
+			Error: &a2a.Error{
+				Code:    a2a.CodeServerError,
+				Message: "rate limit exceeded",
+				Data:    map[string]any{"retry_after_seconds": seconds},
+			},
+		})
+		return
+	}
+	writeJSONError(w, http.StatusTooManyRequests, "rate limit exceeded")
+}
+
+// keyedThrottle allows one log line per key per window.
+type keyedThrottle struct {
+	mu     sync.Mutex
+	window time.Duration
+	last   map[string]time.Time
+}
+
+func newKeyedThrottle(window time.Duration) *keyedThrottle {
+	return &keyedThrottle{window: window, last: make(map[string]time.Time)}
+}
+
+// allow reports whether key may log now, and records the attempt.
+func (t *keyedThrottle) allow(key string) bool {
+	now := time.Now()
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if last, ok := t.last[key]; ok && now.Sub(last) < t.window {
+		return false
+	}
+	t.last[key] = now
+	if len(t.last) > 4096 {
+		for k, seen := range t.last {
+			if now.Sub(seen) >= t.window {
+				delete(t.last, k)
+			}
+		}
+	}
+	return true
+}
+
+// rateLimitLog bounds rate-limit warning lines per key.
+var rateLimitLog = newKeyedThrottle(time.Minute)
 
 // remoteHost strips the port from a RemoteAddr.
 func remoteHost(addr string) string {
@@ -442,6 +549,8 @@ func (h *retrieveHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case errors.Is(err, retrieval.ErrInvalidQuery):
 			writeJSONError(w, http.StatusBadRequest, err.Error())
+		case errors.Is(err, context.Canceled):
+			writeJSONError(w, statusClientClosedRequest, "request canceled")
 		case errors.Is(err, context.DeadlineExceeded):
 			log.Error().Err(err).Msg("retrieve timed out")
 			writeJSONError(w, http.StatusGatewayTimeout, "retrieval timed out")
@@ -539,6 +648,10 @@ func (h *askHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			entry.Outcome = audit.OutcomeError
 			audit.Answer(entry)
 			writeJSONError(w, http.StatusBadRequest, err.Error())
+		case errors.Is(err, context.Canceled):
+			entry.Outcome = audit.OutcomeCanceled
+			audit.Answer(entry)
+			writeJSONError(w, statusClientClosedRequest, "request canceled")
 		case errors.Is(err, agentloop.ErrBudget), errors.Is(err, context.DeadlineExceeded):
 			entry.Outcome = audit.OutcomeTimeout
 			audit.Answer(entry)

@@ -4,8 +4,8 @@ Build plan for a local-first RAG agent over Eli's published writing.
 This document is the source of truth for scope, sequencing, and exit criteria.
 Update it as we learn.
 
-**Last refined**: 2026-11-05 (A2A shipped). Phase 2 code is complete and
-verified; two exit criteria are still open — **Ragas** has only single-row
+**Last refined**: 2026-11-06 (A2A review hardening). Phase 2 code is complete
+and verified; two exit criteria are still open — **Ragas** has only single-row
 smoke runs against its 15 answer + 14 refusal cases, and **promptfoo** has no
 captured report. **Phase 4's A2A surface shipped on 2026-11-05, ahead of
 Phase 3**, because it was the next product surface: `agent serve` now serves
@@ -19,7 +19,11 @@ unchecked Phase 1 task — moved to Phase 3, because no Phase 2 deliverable need
 it and Phase 3's operator path does. Testing stays two end-to-end tools:
 **Ragas** (`evals/`) for answer quality and **promptfoo** (`tests-ai/`) for
 adversarial behaviour; the retrieval-only eval and its runner were removed on
-2026-11-04. **Scope change
+2026-11-04. A 2026-11-06 review pass closed the first A2A findings: the token
+store latches secured (an emptied file cannot fail open), the card URL never
+comes from a request header, the audit record carries a question fingerprint
+instead of the question text, and the rate limit covers `/v1/retrieve`.
+**Scope change
 (2026-10-27)**: this repo is an **agentic A2A connector** — the agent loop
 lives here. A remote peer sends a conversational task, and *our* service
 runs its own tool-using loop (retrieve → ground → answer with citations)
@@ -110,7 +114,7 @@ original schema.
 | 18 | Answer path | **The tool-calling loop, only** (2026-11-05): one grounded tool `search_writing`, ≤3 iterations, citation-or-refusal. A second path — rewrite → fan-out retrieval → summed-RRF fuse → one answer call — was built behind `AGENT_SEARCH_MODE=fanout`, measured over three rounds, and removed | It never beat the loop on grounding (3/4, 3/4, 2/4, 1/5, 1/4) and was 2-3x slower (16-33s vs 5-12s), because one answer call over five excerpts at `low` effort spends 400-6,600 reasoning tokens; a switchable second path still had to be maintained, documented, and evaluated |
 | 19 | Reasoning budget | `reasoning_effort` pinned per call kind in the request (2026-11-03): `"none"` for the key-extraction call, `"low"` for every call made with excerpts in hand and for the forced no-tools answer | Unset means the backend's model config, which is unbounded on these templates: a two-sentence question burned all 4,096 completion tokens on `reasoning`, returned empty `content` with `finish_reason=length`, and the finalizer turned that into a refusal |
 | 20 | A2A statelessness | One synchronous agent `Message` per `message/send` (2026-11-05): no task store, no streaming, no resumption. `tasks/get`/`tasks/cancel` return `-32001 TaskNotFound`; `message/stream` is `-32004` | A peer gets a grounded answer in one round trip, and the service does not invent task state it cannot resume; the card advertises `streaming: false` so the contract is honest |
-| 21 | A2A credentials | Bearer tokens from `AGENT_A2A_TOKENS` (process-start pairs) plus a re-read `0600` `AGENT_A2A_TOKENS_FILE`; `agent tokens add`, `revoke`, and `list`; 30 tasks/min per token via `--rate-limit` (2026-11-05) | Rotation without restart, a token id in the audit record, and a bucket that protects the single model host; a file-based store beats an env-only list for revocation |
+| 21 | A2A credentials | Bearer tokens from `AGENT_A2A_TOKENS` (process-start pairs) plus a re-read `0600` `AGENT_A2A_TOKENS_FILE`; `agent tokens add`, `revoke`, and `list`; 30 model-touching requests/min per token via `--rate-limit`, failed auth capped via `--auth-limit`; the store latches secured once any token existed (2026-11-05) | Rotation without restart, a token id in the audit record, and a bucket that protects the single model host; a file-based store beats an env-only list for revocation |
 
 ### 1.5 Verified environment (audited 2026-10-21; Go floor re-verified 2026-10-23; A2A path verified 2026-11-05)
 
@@ -996,22 +1000,28 @@ flag, rate limits, and the audit log.
   published technical knowledge, engineering experience, experiments, and
   opinions. It answers questions using published sources and provides
   verifiable citations."
-- [x] Audit log: per task, `token_id` (not the token), method, the peer's
-  question, outcome (`answered`/`refused`/`timeout`/`error`), tool
-  iteration count, citation count, and elapsed time. The answer, prompt,
-  and retrieved bodies are never logged. The `audit` module is pinned to
-  `info` unless logging is explicitly disabled.
+- [x] Audit log: per task, `token_id` (not the token), method, a question
+  fingerprint (`SHA-256` + byte length), outcome
+  (`answered`/`refused`/`timeout`/`canceled`/`error`), tool iteration
+  count, citation count, and elapsed time. The question text, answer,
+  prompt, and retrieved bodies are never logged. The `audit` module is
+  pinned to `info` unless logging is explicitly disabled.
 - [x] Token store: `AGENT_A2A_TOKENS` (`id:token` pairs, process-start)
   plus `AGENT_A2A_TOKENS_FILE` (a `0600` `id:token` file re-read when it
   changes). `agent tokens add|revoke|list` issues, revokes, and lists ids;
   values are printed once on issue and never logged. File-based rotation
-  needs no restart; env tokens are fixed at process start.
-- [x] Rate limit: 30 answer-bearing tasks per minute per token, set with
-  `--rate-limit` (0 disables). A token-less dev request is keyed by peer
-  address. Over-limit is HTTP 429 with `Retry-After`; `/a2a` returns
-  JSON-RPC `-32000` with `data.retry_after_seconds`. The loop's own
-  per-task budget (3 iterations, 4,000 excerpt tokens, 90s wall clock)
-  still applies underneath.
+  needs no restart; env tokens are fixed at process start. The store
+  latches secured: emptying or deleting the file after startup yields
+  `401`, never an unauthenticated public bind.
+- [x] Rate limit: 30 model-touching requests per minute per token, set
+  with `--rate-limit` (0 disables; negative is a startup error). It covers
+  `message/send`, `/v1/ask`, and `/v1/retrieve` (retrieval embeds on the
+  same host). A token-less dev request is keyed by peer address. Over-limit
+  is HTTP 429 with `Retry-After`; `/a2a` returns JSON-RPC `-32000` with
+  `data.retry_after_seconds`. Failed bearer-auth attempts have a separate
+  `--auth-limit` budget (default 120/min per address, charged only on a
+  failed lookup). The loop's own per-task budget (3 iterations, 4,000 excerpt
+  tokens, 90s wall clock) still applies underneath.
 - [x] Operational documentation: `docs/a2a.md` (wire contract, card,
   tokens, rotation, rate limit, audit, security), `docs/runbook.md`
   (serve modes, curl examples, rotation, troubleshooting), and
@@ -1025,10 +1035,11 @@ flag, rate limits, and the audit log.
   text is data, never instructions — the grounded prompt says so and the
   citation check is the backstop. Questions are capped at 8 KiB and
   bodies at 64 KiB.
-- Local bind by default; public bind requires an explicit flag AND a
-  token.
-- Audit log never contains chunk bodies, prompts, or user answers (it
-  does record the peer's question).
+- Local bind by default; public bind requires an explicit flag, a token,
+  and an explicit `AGENT_A2A_PUBLIC_URL`.
+- Audit log never contains the question text, chunk bodies, prompts, or
+  user answers; it records a SHA-256 fingerprint and byte length of the
+  question for correlation.
 - Tokens are high-entropy random ≥32 bytes; the token file is `0600`,
   re-read on change, and rejected at startup if group/world-readable.
   Tokens are compared in constant time.
@@ -1048,8 +1059,8 @@ flag, rate limits, and the audit log.
 - [x] `POST /v1/retrieve` returns results identical to `agent query` CLI
   output and to the Phase 2 dev endpoint for the same inputs (Phase 2
   parity retained; auth was added around the same handler).
-- [x] Audit log shows the task with token id, question, iterations, and
-  citation count.
+- [x] Audit log shows the task with token id, question fingerprint,
+  iterations, and citation count.
 - [x] Token issuance/revocation is file-config only; no service restart
   needed. Env tokens are the documented process-start exception.
 - [x] `docs/runbook.md` documents the rotation story and the per-task

@@ -182,9 +182,6 @@ func TestAddAndRevokeToken(t *testing.T) {
 	if store.Len() != 0 {
 		t.Errorf("Len = %d after revoke, want 0", store.Len())
 	}
-	if ids, err := auth.FileIDs(path); err != nil || len(ids) != 0 {
-		t.Errorf("FileIDs = %v, %v", ids, err)
-	}
 }
 
 func TestNewTokenValueIsHighEntropy(t *testing.T) {
@@ -213,5 +210,131 @@ func TestTokenContext(t *testing.T) {
 	}
 	if _, ok := auth.TokenFrom(t.Context()); ok {
 		t.Error("TokenFrom reported a token on a bare context")
+	}
+}
+
+func TestStoreSecuredLatchesAfterFileRemoval(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "tokens")
+	writeTokenFile(t, path, "alice:"+tokenA+"\n", 0o600)
+	store, err := auth.NewStore("", path)
+	if err != nil {
+		t.Fatalf("NewStore: %v", err)
+	}
+	if !store.Secured() {
+		t.Fatal("Secured = false with a configured token")
+	}
+	if err := os.Remove(path); err != nil {
+		t.Fatalf("remove: %v", err)
+	}
+	if got := store.Len(); got != 0 {
+		t.Fatalf("Len = %d after removal, want 0", got)
+	}
+	if !store.Secured() {
+		t.Error("Secured flipped to false after the token file disappeared")
+	}
+}
+
+func TestStoreEmptyStartsUnsecuredAndEnablesOnAdd(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "tokens")
+	store, err := auth.NewStore("", path)
+	if err != nil {
+		t.Fatalf("NewStore: %v", err)
+	}
+	if store.Secured() {
+		t.Fatal("Secured = true on an empty store")
+	}
+	writeTokenFile(t, path, "alice:"+tokenA+"\n", 0o600)
+	future := time.Now().Add(2 * time.Second)
+	if err := os.Chtimes(path, future, future); err != nil {
+		t.Fatalf("chtimes: %v", err)
+	}
+	if !store.Secured() {
+		t.Error("Secured stayed false after a token appeared")
+	}
+}
+
+func TestStoreRejectsCommentAndCommaInValues(t *testing.T) {
+	for _, value := range []string{
+		tokenA[:20] + "#" + tokenA[20:],
+		tokenA[:20] + "," + tokenA[20:],
+	} {
+		if _, err := auth.NewStore("alice:"+value, ""); err == nil {
+			t.Errorf("NewStore accepted a token value containing %q", value[20:21])
+		}
+	}
+}
+
+func TestStoreEnvListIsNotSniffedAsFile(t *testing.T) {
+	// A newline in the env list must not switch parsing to file mode and
+	// swallow the comma-separated entries into one value.
+	env := "alice:" + tokenA + "\nbob:" + tokenB
+	if _, err := auth.NewStore(env, ""); err == nil {
+		t.Fatal("NewStore accepted a multiline env list")
+	}
+}
+
+func TestStoreReloadRejectsDuplicateValue(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "tokens")
+	writeTokenFile(t, path, "bob:"+tokenB+"\n", 0o600)
+	store, err := auth.NewStore("alice:"+tokenA, path)
+	if err != nil {
+		t.Fatalf("NewStore: %v", err)
+	}
+	// A runtime edit that reuses the env token value under another id must be
+	// rejected, keeping the last good file set.
+	writeTokenFile(t, path, "bob:"+tokenA+"\n", 0o600)
+	future := time.Now().Add(2 * time.Second)
+	if err := os.Chtimes(path, future, future); err != nil {
+		t.Fatalf("chtimes: %v", err)
+	}
+	if _, ok := store.Lookup(tokenB); !ok {
+		t.Error("the last good file token stopped working after a rejected reload")
+	}
+	if tok, ok := store.Lookup(tokenA); !ok || tok.ID != "alice" {
+		t.Errorf("Lookup(tokenA) = %+v, %v; want the env token", tok, ok)
+	}
+}
+
+func TestFileCommentIsOnlyAWholeLine(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "tokens")
+	// The '#' is part of the value (not a comment), so validation rejects the
+	// entry rather than silently truncating it to the 32-char prefix.
+	value := tokenA[:31] + "#" + tokenA[31:]
+	writeTokenFile(t, path, "alice:"+value+"\n", 0o600)
+	if _, err := auth.NewStore("", path); err == nil {
+		t.Fatal("NewStore accepted an inline '#' token value")
+	}
+	// A whole-line comment is still ignored.
+	writeTokenFile(t, path, "# a comment\n\nbob:"+tokenB+"\n", 0o600)
+	store, err := auth.NewStore("", path)
+	if err != nil {
+		t.Fatalf("NewStore with a comment: %v", err)
+	}
+	if _, ok := store.Lookup(tokenB); !ok {
+		t.Fatal("token after a comment was not loaded")
+	}
+}
+
+func TestFileTrailingComments(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "tokens")
+	writeTokenFile(t, path, "# header\nalice:"+tokenA+"  # laptop\n\n", 0o600)
+	store, err := auth.NewStore("", path)
+	if err != nil {
+		t.Fatalf("NewStore: %v", err)
+	}
+	if _, ok := store.Lookup(tokenA); !ok {
+		t.Fatal("a whitespace-separated trailing comment broke the token")
+	}
+}
+
+func TestParseErrorNamesTheFileLine(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "tokens")
+	writeTokenFile(t, path, "# header\nalice:"+tokenA+"\n\nbroken\n", 0o600)
+	_, err := auth.NewStore("", path)
+	if err == nil {
+		t.Fatal("NewStore accepted a malformed entry")
+	}
+	if !strings.Contains(err.Error(), "entry 4") {
+		t.Errorf("error = %q, want it to name file line 4", err)
 	}
 }

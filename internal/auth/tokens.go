@@ -4,7 +4,8 @@
 //
 // Token values never leave this package except through Add (which prints a
 // newly issued token once) and Lookup (which compares in constant time). Logs
-// and errors name token ids and file paths only.
+// and errors name file paths and entry positions only; an id is named only
+// where the operator supplied it (add/revoke).
 package auth
 
 import (
@@ -21,6 +22,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/eli-l/elilap.dev-agent/internal/logging"
 )
@@ -71,36 +73,42 @@ type Store struct {
 	env      []Token
 	filePath string
 
-	mu      sync.Mutex
-	file    []Token
-	modTime int64
-	size    int64
-	loaded  bool
-	lastErr string
+	mu        sync.Mutex
+	file      []Token
+	modTime   int64
+	size      int64
+	loaded    bool
+	lastErr   string
+	lastErrAt time.Time
+	// secured latches once any token was ever configured. It keeps a public
+	// bind authenticated after the token file is emptied or deleted: an
+	// empty runtime set must never turn auth off.
+	secured bool
 }
 
 // NewStore loads the env list and the current contents of the file. A missing
 // file is not an error: that is the token-less dev deployment. An unreadable,
 // malformed, or group/world-readable file is a startup error.
 func NewStore(envList, filePath string) (*Store, error) {
-	env, err := parseList(envList, "environment token list")
+	env, err := parseList(envList, "environment token list", false)
 	if err != nil {
 		return nil, err
 	}
 	s := &Store{env: env, filePath: strings.TrimSpace(filePath)}
 	if s.filePath != "" {
-		if err := s.reloadLocked(true); err != nil {
+		if err := s.reloadLocked(); err != nil {
 			return nil, err
 		}
 	}
 	if err := checkUnique(env, s.file); err != nil {
 		return nil, err
 	}
+	s.secured = len(s.env)+len(s.file) > 0
 	return s, nil
 }
 
-// Len reports how many distinct tokens are configured. Zero means auth is
-// disabled (the loopback dev deployment).
+// Len reports how many distinct tokens are configured right now. It is a
+// count, not the auth-enabled signal: use Secured for that.
 func (s *Store) Len() int {
 	if s == nil {
 		return 0
@@ -109,6 +117,24 @@ func (s *Store) Len() int {
 	defer s.mu.Unlock()
 	s.refreshLocked()
 	return len(s.env) + len(s.file)
+}
+
+// Secured reports whether this store ever held a token. Once true it stays
+// true, so deleting the token file (or revoking the last entry) makes requests
+// fail with 401 instead of silently turning authentication off. Adding tokens
+// to a store that started empty enables auth on the next request; removing
+// them all does not disable it until the process restarts without tokens.
+func (s *Store) Secured() bool {
+	if s == nil {
+		return false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.refreshLocked()
+	if len(s.env)+len(s.file) > 0 {
+		s.secured = true
+	}
+	return s.secured
 }
 
 // IDs returns the configured token ids in sorted order, never their values.
@@ -164,12 +190,23 @@ func (s *Store) refreshLocked() {
 	if s.filePath == "" {
 		return
 	}
-	err := s.reloadLocked(false)
+	// A broken file must not be re-read and re-parsed on every request: a
+	// failed reload is retried at most once a second, which still picks up a
+	// chmod or a corrected file quickly.
+	if s.lastErr != "" && time.Since(s.lastErrAt) < time.Second {
+		return
+	}
+	err := s.reloadLocked()
 	if err == nil {
 		s.lastErr = ""
+		s.lastErrAt = time.Time{}
+		if len(s.file) > 0 {
+			s.secured = true
+		}
 		return
 	}
 	msg := err.Error()
+	s.lastErrAt = time.Now()
 	if msg == s.lastErr {
 		return
 	}
@@ -178,14 +215,11 @@ func (s *Store) refreshLocked() {
 	log.Warn().Err(err).Str("file", s.filePath).Msg("token file reload failed; keeping the last good set")
 }
 
-// reloadLocked re-reads the file when it exists and changed. require, used at
-// startup, makes a missing file an error too.
-func (s *Store) reloadLocked(require bool) error {
+// reloadLocked re-reads the file when it exists and changed. A missing file
+// is the token-less deployment, not an error.
+func (s *Store) reloadLocked() error {
 	info, err := os.Stat(s.filePath)
 	if errors.Is(err, os.ErrNotExist) {
-		if require && s.loaded {
-			return nil
-		}
 		s.file = nil
 		s.modTime, s.size, s.loaded = 0, 0, true
 		return nil
@@ -203,37 +237,43 @@ func (s *Store) reloadLocked(require bool) error {
 	if err != nil {
 		return fmt.Errorf("auth: read token file: %w", err)
 	}
-	tokens, err := parseList(string(data), "token file "+s.filePath)
+	tokens, err := parseList(string(data), "token file "+s.filePath, true)
 	if err != nil {
 		return err
 	}
-	// A reload must not introduce an id that already exists in the
+	// A reload must not introduce an id or value that already exists in the
 	// environment: the audit record has to name exactly one credential.
-	for _, t := range tokens {
-		for _, e := range s.env {
-			if t.ID == e.ID {
-				return fmt.Errorf("auth: token file %s: a token id is configured twice; ids must be unique across the environment and the token file", s.filePath)
-			}
-		}
+	if err := checkUnique(s.env, tokens); err != nil {
+		return fmt.Errorf("auth: token file %s: %w", s.filePath, err)
 	}
 	s.file = tokens
 	s.modTime, s.size, s.loaded = info.ModTime().UnixNano(), info.Size(), true
 	return nil
 }
 
-// parseList parses `id:token` entries separated by commas (env) or newlines
-// (file). '#' starts a comment in file content; blank entries are ignored.
-func parseList(raw, source string) ([]Token, error) {
+// parseList parses `id:token` entries. The environment form is one
+// comma-separated line; the file form is one entry per line, with a leading
+// '#' starting a whole-line comment and a whitespace-separated '#' starting a
+// trailing comment. The mode is explicit, never sniffed from the content, so
+// a newline in an env value cannot silently change how it is parsed.
+func parseList(raw, source string, fileMode bool) ([]Token, error) {
 	raw = strings.ReplaceAll(raw, "\r\n", "\n")
-	parts := strings.Split(raw, ",")
-	if strings.Contains(raw, "\n") {
-		parts = parts[:0]
+	var parts []string
+	if fileMode {
 		for _, line := range strings.Split(raw, "\n") {
-			if i := strings.Index(line, "#"); i >= 0 {
-				line = line[:i]
+			// A whole-line comment is skipped but keeps its slot, so
+			// "entry N" still matches the file line. A '#' preceded by
+			// whitespace starts a trailing comment; any other '#' stays in
+			// the value and is rejected by validateToken, so a token is
+			// never silently truncated.
+			if strings.HasPrefix(strings.TrimSpace(line), "#") {
+				parts = append(parts, "")
+				continue
 			}
-			parts = append(parts, line)
+			parts = append(parts, stripTrailingComment(line))
 		}
+	} else {
+		parts = strings.Split(raw, ",")
 	}
 	tokens := make([]Token, 0, len(parts))
 	for i, part := range parts {
@@ -258,6 +298,21 @@ func parseList(raw, source string) ([]Token, error) {
 	return tokens, nil
 }
 
+// stripTrailingComment removes a `# ...` suffix that is separated from the
+// value by whitespace. A '#' glued to the value is left in place and rejected
+// by validateToken.
+func stripTrailingComment(line string) string {
+	for i := 0; i < len(line); i++ {
+		if line[i] != '#' {
+			continue
+		}
+		if i == 0 || line[i-1] == ' ' || line[i-1] == '\t' {
+			return line[:i]
+		}
+	}
+	return line
+}
+
 // validateToken enforces the id shape and the entropy floor. Errors name the
 // entry, never the configured id or value: a misplaced secret in either field
 // must not reach a log or a terminal.
@@ -272,8 +327,10 @@ func validateToken(id, value, where string) (Token, error) {
 		return Token{}, fmt.Errorf("auth: %s: token value is shorter than %d characters; generate one with `agent tokens add`", where, MinTokenLength)
 	}
 	for _, r := range value {
-		if r <= 0x20 || r == 0x7f {
-			return Token{}, fmt.Errorf("auth: %s: token value must not contain whitespace or control characters", where)
+		// '#' and ',' are syntax in the file/env formats; rejecting them
+		// avoids a value that parses differently in the two sources.
+		if r <= 0x20 || r == 0x7f || r == '#' || r == ',' {
+			return Token{}, fmt.Errorf("auth: %s: token value must not contain whitespace, control characters, '#' or ','", where)
 		}
 	}
 	return Token{ID: id, Value: value}, nil
@@ -377,24 +434,6 @@ func RevokeToken(path, id string) error {
 	return writeFileTokens(path, kept)
 }
 
-// FileIDs lists the ids in the token file, sorted. It is used by
-// `agent tokens list`; values are never returned.
-func FileIDs(path string) ([]string, error) {
-	if strings.TrimSpace(path) == "" {
-		return nil, ErrNoTokenFile
-	}
-	tokens, err := readFileTokens(strings.TrimSpace(path))
-	if err != nil {
-		return nil, err
-	}
-	ids := make([]string, 0, len(tokens))
-	for _, t := range tokens {
-		ids = append(ids, t.ID)
-	}
-	sort.Strings(ids)
-	return ids, nil
-}
-
 // readFileTokens reads and parses the file; a missing file is empty.
 func readFileTokens(path string) ([]Token, error) {
 	info, err := os.Stat(path)
@@ -411,7 +450,7 @@ func readFileTokens(path string) ([]Token, error) {
 	if err != nil {
 		return nil, fmt.Errorf("auth: read token file: %w", err)
 	}
-	return parseList(string(data), "token file "+path)
+	return parseList(string(data), "token file "+path, true)
 }
 
 // ensureFileMode rejects an existing file with loose permissions before it is
