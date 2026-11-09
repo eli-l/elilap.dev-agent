@@ -22,6 +22,8 @@ okf_version: "0.2"
 
 # Runs
 
+* [SQLite schema smoke check in Go](runs/ddl-check-2026-11-08.md) - The schema check now runs as `TestSchemaDDL` on the real driver: migrations applied through `store.Open`, FTS5 stored-column read-back and `chunk_id` join-back, and a 768-dimension vec0 KNN round-trip that rejects a short vector.
+* [SQLite schema DDL check (deprecated)](runs/0001-init-ddl-check.md) - Historical bootstrap capture whose `scripts/check-ddl.py` command was never committed, so it is not reproducible; superseded by the Go check above.
 * [Author bylines - Eli Lap = Ilja Lapkovsky = Ilja Lapkovskis](runs/identity-aliases-2026-11-02.md) - Teaching the grounded prompt the alias mapping fixed the model discarding Postiz cross-posts as someone else's writing; verified live with an Ilja byline question, the identity question, and mixed-source citations.
 * [Hybrid retrieval eval (20 queries)](runs/eval-hybrid-2026-11-02.md) - Deprecated historical record: the retired 20-query retrieval eval scored 19/20. Its runner and the `eval/queries.yaml` fixture were removed on 2026-11-04 in favour of the Ragas answer suite; retrieval quality is now graded end to end.
 * [A2A surface - card, auth, and the first message/send](runs/a2a-surface-2026-11-05.md) - First live pass over `agent serve` as an A2A v0.3 agent: card at both well-known paths, 401 challenge, `tasks/get` -> TaskNotFound, and a real `message/send` that returned a cited Ghost chunk in ~3s with a matching audit line.
@@ -33,7 +35,6 @@ okf_version: "0.2"
 * [Ghost full-corpus ingest (clean rebuild)](runs/ingest-ghost-full-2026-11-02.md) - A deleted index was rebuilt from the Content API: 126 posts, 588 chunks and FTS rows, and a near-no-op incremental rerun.
 * [Ghost windowed ingest (last week)](runs/ingest-ghost-2026-11-02.md) - First live Ghost Content API ingest; two posts, 17 chunks and FTS rows, idempotent rerun.
 * [Source config review verification](runs/source-config-review-2026-10-25.md) - Offline build, vet, tests, credential probes, and schema/documentation checks.
-* [SQLite schema DDL check](runs/0001-init-ddl-check.md) - The migrations/0001_init.sql smoke check passed with the contentless-FTS5 join-back fix verified.
 
 # Subdirectories
 

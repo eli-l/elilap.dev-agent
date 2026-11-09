@@ -35,7 +35,7 @@ verified:                      # only when a human confirmed the output
   - by: human:eli
     at: <iso8601 UTC>
 run:
-  type: <go-test|go-build|check-ddl|...>
+  type: <go-test|go-build|link-check|...>
   cmd: <exact command line>
 output: |
   <trimmed stdout/stderr; exit code noted>

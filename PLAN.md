@@ -554,8 +554,12 @@ intentionally a separate command.
       matches the `vec0` schema).
 - [x] Store layer: migration runner that loads the sqlite-vec extension
       *before* applying `0001_init.sql` (the `vec0` DDL fails without it).
-      `scripts/check-ddl.py` is not in the repo yet (AGENTS.md); the
-      migration and store tests are the current coverage.
+      The schema smoke check is `TestSchemaDDL` in
+      `internal/store/ddl_test.go` (2026-11-08, replacing the never-committed
+      `scripts/check-ddl.py`): it applies the real migrations through
+      `store.Open`, then asserts the required tables, FTS5 stored-column
+      read-back plus `chunk_id` join-back, and a vec0 KNN round-trip that
+      rejects a vector of the wrong width.
 - [x] Source clients (`internal/sources/ghost`, `postiz`) + shared chunker;
       unit tests against captured fixture JSON from Phase 0, so chunker
       logic is testable without live credentials.

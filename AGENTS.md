@@ -9,7 +9,7 @@ go build ./...                  # compile everything
 go vet ./...                    # static checks
 go test -tags sqlite_fts5 ./...  # tests (use fixtures, not live APIs; FTS5 needs the build tag)
 gofmt -l cmd internal migrations   # must print nothing (vendor/ is upstream code, not ours)
-python3 scripts/check-ddl.py    # schema smoke check; Phase 1 deliverable, not in the repo yet
+go test -tags sqlite_fts5 ./internal/store -run TestSchemaDDL  # schema smoke check: tables, FTS5 join-back, vec0 width + KNN
 go run ./cmd/agent sources validate   # strict-parse sources.yaml (no credentials needed)
 go run ./cmd/agent tokens list        # A2A token ids only (never values)
 cd evals && uv sync           # Python 3.12 venv for the Ragas harness
