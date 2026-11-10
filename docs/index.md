@@ -24,6 +24,7 @@ okf_version: "0.2"
 
 # Runs
 
+* [Full validator sweep on the eval-harness branch](runs/validator-sweep-2026-11-10.md) - The merge of main into PR #6 is green end to end: build, vet, gofmt, 19 test packages, the CLI checks, and live hybrid retrieval on the 855-chunk index, plus the first full-size Ragas run (29/29 rows scored, answer metrics flagged as stand-ins) and the first passing promptfoo smoke scan, run entirely locally through `tests-ai/run-promptfoo.sh`.
 * [First live website ingest and strategy inspection](runs/web-source-2026-11-09.md) - The `web` provider's first live pass: `sources inspect` on a case study, 12 discovered pages filtered out of 61 sitemap URLs, 56 `web_page` chunks written, the empty `/cases` route skipped with one warning, and an idempotent incremental rerun.
 * [SQLite schema smoke check in Go](runs/ddl-check-2026-11-08.md) - The schema check now runs as `TestSchemaDDL` on the real driver: migrations applied through `store.Open`, FTS5 stored-column read-back and `chunk_id` join-back, and a 768-dimension vec0 KNN round-trip that rejects a short vector.
 * [SQLite schema DDL check (deprecated)](runs/0001-init-ddl-check.md) - Historical bootstrap capture whose `scripts/check-ddl.py` command was never committed, so it is not reproducible; superseded by the Go check above.
