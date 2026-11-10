@@ -91,13 +91,24 @@ Options:
 | `--kind answers\|refusals\|both` | Which dataset to run (default `both`). |
 | `--limit N` | Score only the first N rows. |
 | `--transport cli\|http` | `cli` shells out to `./agent ask`; `http` POSTs to `--ask-url`. |
-| `--ask-url URL` | Target for `--transport http` (default `http://127.0.0.1:8080/v1/ask`). |
+| `--ask-url URL` | Target for `--transport http` (default `http://127.0.0.1:18080/v1/ask`, the eval port). |
 
 Build the binary first if you use the `cli` transport:
 
 ```bash
 go build -mod=vendor -tags sqlite_fts5 -o agent ./cmd/agent
 ```
+
+The evaluation suites own **port 18080**; the interactive dev server keeps
+**8080**. Start the target in its own terminal so a long run never collides
+with your own work:
+
+```bash
+./agent serve --addr 127.0.0.1:18080                # terminal 1, eval target
+(cd evals && uv run python evaluate.py --transport http)  # terminal 2
+```
+
+`EVAL_*` below is the *judge* endpoint and is unrelated to the agent port.
 
 ## Configuration
 

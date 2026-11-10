@@ -89,11 +89,15 @@ On this CPU host an answer takes roughly 10-25 seconds.
 
 ```bash
 ./agent serve                          # 127.0.0.1:8080, token-less, loopback only
-./agent serve --addr 127.0.0.1:18080 --db ./index.db
+./agent serve --addr 127.0.0.1:18080 --db ./index.db   # the evaluation port
 ./agent tokens add --id alice          # issue a token; prints alice:<token> once
 AGENT_A2A_PUBLIC_URL=https://agent.example \
   ./agent serve --bind-public --addr 0.0.0.0:8080   # requires a token + URL
 ```
+
+The ports are split on purpose: **8080** is yours for interactive work, and
+**18080** is reserved for the evaluation suites (`evals/` and `tests-ai/`),
+which target it by default.
 
 Without a configured token the loopback server is the token-less dev surface.
 Once a token exists (env or `./a2a-tokens.txt`) every `/a2a` and `/v1/*`
@@ -185,17 +189,27 @@ Generated files are gitignored. See [ragas-eval.md](/ragas-eval.md).
 
 ### promptfoo (adversarial behaviour)
 
-The red-team suite targets `POST /v1/ask` over loopback:
+The red-team suite targets `POST /v1/ask` over loopback. promptfoo is pinned
+(`0.125.1`) as a local npm dependency, so setup is `npm ci` and every run goes
+through `tests-ai/run-promptfoo.sh` (database and cache in
+`tests-ai/.promptfoo/`, sharing and telemetry off, non-interactive):
 
 ```bash
-./agent serve --addr 127.0.0.1:8080          # terminal 1
-npx promptfoo@latest redteam run \
-  -c tests-ai/promptfooconfig.yaml           # terminal 2
-npx promptfoo@latest redteam report          # browser report
+./agent serve --addr 127.0.0.1:18080         # terminal 1, eval target
+(cd tests-ai && npm ci)                      # once
+(cd tests-ai && npm run redteam:smoke)       # one plugin, fully local
+(cd tests-ai && npm run redteam)             # generate + evaluate the full scan
+(cd tests-ai && npm run redteam:report)      # browser report from the local db
 ```
 
-Promptfoo needs its own model credentials for attack generation/grading
-(`~/.promptfoo`); those are separate from the agent's `LOCALAI_*` variables.
+Generation and grading use the local judge: `redteam.provider` in the config
+mirrors `EVAL_BASE_URL` / `EVAL_MODEL` / `EVAL_API_KEY`, so no OpenAI key is
+needed. promptfoo still marks some plugins and strategies (`harmful:*`, bias,
+`hijacking`, `politics`, `bola`/`bfla`/`rbac`, `jailbreak:meta`) as
+remote-only; the full scan sends those to promptfoo-hosted inference, while the
+smoke run disables remote generation. Reports land in `tests-ai/reports/` and
+are gitignored.
+
 The loopback server above is token-less; if you configured an A2A token, add
 `Authorization: Bearer <token>` to the target headers in
 `tests-ai/promptfooconfig.yaml` or run a token-less loopback server for the
@@ -203,8 +217,9 @@ suite.
 Generated tests land in `tests-ai/redteam.yaml` (gitignored). The suite covers
 bias, harmful content, PII, excessive agency, hijacking, hallucination, and
 fabricated RAG citations, plus `basic` and `jailbreak:meta` strategies. See
-[red-team.md](/red-team.md) for plugin details, the response-transform caveat,
-and why a suspected finding needs a re-run on this non-deterministic model.
+[red-team.md](/red-team.md) and [`tests-ai/README.md`](../tests-ai/README.md)
+for plugin details, the response-transform caveat, and why a suspected finding
+needs a re-run on this non-deterministic model.
 
 ## Not yet in this runbook (Phase 3)
 

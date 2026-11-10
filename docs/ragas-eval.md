@@ -95,7 +95,10 @@ uv run python evaluate.py                            # both datasets
 
 Options: `--kind answers|refusals|both`, `--limit N`, `--transport cli|http`,
 and `--ask-url` for the HTTP target. The `cli` transport needs the binary
-(`go build -mod=vendor -tags sqlite_fts5 -o agent ./cmd/agent`).
+(`go build -mod=vendor -tags sqlite_fts5 -o agent ./cmd/agent`); the `http`
+transport defaults to `http://127.0.0.1:18080/v1/ask`, the port reserved for
+evaluation runs (the interactive dev server stays on 8080). Start the target
+with `./agent serve --addr 127.0.0.1:18080` in its own terminal.
 
 Outputs land under `evals/output/`: `datasets/*.csv` (the rows),
 `experiments/*.csv` (one row per question with every metric), and any trace

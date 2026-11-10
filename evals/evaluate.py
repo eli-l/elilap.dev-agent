@@ -32,7 +32,7 @@ from pathlib import Path
 import yaml
 from openai import AsyncOpenAI
 
-from agent import AgentRAG
+from agent import DEFAULT_ASK_URL, AgentRAG
 from ragas import Dataset, experiment
 from ragas.backends import LocalCSVBackend
 from ragas.llms import llm_factory
@@ -302,8 +302,8 @@ async def main() -> int:
     parser.add_argument("--transport", choices=["cli", "http"], default="cli")
     parser.add_argument(
         "--ask-url",
-        default="http://127.0.0.1:8080/v1/ask",
-        help="POST target when --transport http",
+        default=DEFAULT_ASK_URL,
+        help="POST target when --transport http (default: the eval port, 18080)",
     )
     args = parser.parse_args()
 

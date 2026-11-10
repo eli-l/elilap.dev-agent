@@ -69,9 +69,9 @@ constants, not in struct tags, so there is exactly one definition.
 | `AGENT_A2A_TOKENS` | `internal/envcfg` | empty | Comma-separated `id:token` bearer list for the A2A surface; empty and loopback = token-less dev |
 | `AGENT_A2A_TOKENS_FILE` | `internal/envcfg` | `./a2a-tokens.txt` | `0600` token file, re-read on change (rotation without restart); gitignored, missing = no tokens |
 | `AGENT_A2A_PUBLIC_URL` | `internal/envcfg` | empty | Absolute service root advertised in the agent card; required with `--bind-public`, otherwise a loopback bind derives `http://<addr>` |
-| `EVAL_BASE_URL` | `evals/` (Python) | `http://localhost:8000/v1` | Endpoint for the Ragas harness; independent of `LOCALAI_*` |
-| `EVAL_MODEL` | `evals/` (Python) | `mtplx-qwen36-35b-a3b-optimized-speed` | Model the harness scores |
-| `EVAL_API_KEY` | `evals/` (Python) | empty → `local` | Secret; local servers ignore its value |
+| `EVAL_BASE_URL` | `evals/` (Python) | `http://localhost:8000/v1` | Judge endpoint for the Ragas harness; the promptfoo `redteam.provider` mirrors it. Independent of `LOCALAI_*` |
+| `EVAL_MODEL` | `evals/` (Python) | `mtplx-qwen36-35b-a3b-optimized-speed` | Model the harness scores; promptfoo generates (local-capable plugins) and grades with it |
+| `EVAL_API_KEY` | `evals/` (Python) | empty → `local` | Secret; local servers ignore its value. promptfoo's config uses the literal `local` |
 | `GHOST_API_URL` | `sources.yaml` ref | — | Credential reference, value required |
 | `GHOST_API_KEY` | `sources.yaml` ref | — | Secret |
 | `POSTIZ_API_URL` | `sources.yaml` ref | — | Credential reference, value required |
@@ -130,8 +130,12 @@ The `EVAL_*` rows belong to the Python harness in `evals/`, not to a Go
 `envconfig` struct. `TestExampleEnvIsComplete` pins them with an explicit
 allowlist (`evalVars`), so they are checked for presence and default value but
 not derived from Go code. The harness does not load `.env`; run it with
-`uv run --env-file ../.env …` or export the variables. See
-[RAG evaluation with Ragas](ragas-eval.md).
+`uv run --env-file ../.env …` or export the variables. The promptfoo red-team
+suite in `tests-ai/` has no variables of its own: its
+`redteam.provider` block repeats the same endpoint, model, and `local` key, so
+the two files move together. See
+[RAG evaluation with Ragas](ragas-eval.md) and
+[Red-team evaluation with promptfoo](red-team.md).
 
 ## Adding a variable
 

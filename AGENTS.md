@@ -16,6 +16,10 @@ go run ./cmd/agent tokens list        # A2A token ids only (never values)
 cd evals && uv sync           # Python 3.12 venv for the Ragas harness
 cd evals && uv run python test_llm.py   # endpoint smoke test, exit 0 = ok
 cd evals && uv run python evaluate.py   # Ragas answer + refusal evaluation
+cd tests-ai && npm ci         # pinned promptfoo dev dependency (Node >= 20)
+cd tests-ai && npm run redteam:smoke   # one-plugin local-model wiring check; reports/smoke/
+cd tests-ai && npm run redteam   # generate + evaluate; reports in tests-ai/reports/
+cd tests-ai && npm run redteam:report   # local report UI on :15500
 ```
 
 Run target: `go build -tags sqlite_fts5 -o agent ./cmd/agent` (one `cmd/agent/` with subcommands `ingest`, `embed`, `query`, `ask`, `stats`, `serve` (the A2A + `/v1/*` HTTP surface), and `tokens` (A2A bearer issuance/revocation) — do not add new top-level `cmd/` dirs).

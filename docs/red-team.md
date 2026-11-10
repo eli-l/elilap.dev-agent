@@ -26,31 +26,44 @@ checked in; generated results are not.
 
 ## Prerequisites
 
-* The agent server running on loopback:
-  `./agent serve --addr 127.0.0.1:8080` (token-less when no A2A token is
-  configured; with a token, add `Authorization: Bearer <token>` to the
-  target headers).
+* Node.js ≥ 20 and `npm ci` in `tests-ai/`. promptfoo is pinned exactly
+  (`0.125.1`) in `package.json`/`package-lock.json`, and `run-promptfoo.sh`
+  keeps its database, cache, and logs in `tests-ai/.promptfoo/` while
+  disabling sharing, telemetry, and the interactive work-email prompt. A run
+  is reproducible and never chases `@latest`.
+* The agent server on the **evaluation port**:
+  `./agent serve --addr 127.0.0.1:18080` (token-less when no A2A token is
+  configured; with a token, add `Authorization: Bearer <token>` to the target
+  headers). The suites own 18080, so a long run never collides with the
+  interactive server on 8080.
 * A populated, embedded `index.db`; the suite must exercise the real retrieval
   + loop path, not a stub.
-* Promptfoo installed (globally or via `npx`) and its **own** model
-  credentials configured for attack generation and grading. Promptfoo's
-  provider config lives in `~/.promptfoo` and is separate from the agent's
-  `LOCALAI_*` variables. Never put those keys in this repo, `example.env`, or
-  `tests-ai/`.
-
-```bash
-npx promptfoo@latest --version     # 0.125.1 used for this config
-```
+* The local judge reachable at `http://localhost:8000/v1` — no cloud key
+  needed. `redteam.provider` in the config mirrors `EVAL_BASE_URL` /
+  `EVAL_MODEL` / `EVAL_API_KEY` from `example.env`, so **all** grading and
+  local-capable generation stay on this host. promptfoo still marks some
+  plugins and strategies (`harmful:*`, bias, `hijacking`, `politics`,
+  `bola`/`bfla`/`rbac`, `jailbreak:meta`) as remote-only; the full scan sends
+  those to promptfoo-hosted inference, while the smoke script disables remote
+  generation and stays fully local. Optional promptfoo credentials go in a
+  gitignored `tests-ai/.env`, never in `example.env` or the config.
 
 ## Run it
 
 ```bash
-# terminal 1
-./agent serve --addr 127.0.0.1:8080
+cd tests-ai && npm ci          # once: installs the pinned promptfoo
 
-# terminal 2
-npx promptfoo@latest redteam run -c tests-ai/promptfooconfig.yaml
+# terminal 1 - the eval target
+./agent serve --addr 127.0.0.1:18080
+
+# terminal 2 - smoke first, then the full scan
+cd tests-ai && npm run redteam:smoke   # one plugin, one probe, fully local
+cd tests-ai && npm run redteam         # generate redteam.yaml, then evaluate it
 ```
+
+The smoke run proves the harness, the local judge, the target, and report
+writing work end to end in about a minute; it is a wiring check, not a
+security verdict.
 
 `redteam run` is a two-step process: it generates dynamic attack probes
 tailored to the described purpose, then evaluates them against the target. The
@@ -66,18 +79,18 @@ npx promptfoo@latest view
 Useful overrides:
 
 ```bash
-# lower concurrency if the promptfoo provider rate-limits
-npx promptfoo@latest redteam run -c tests-ai/promptfooconfig.yaml --max-concurrency 2
+# lower concurrency if the local judge rate-limits
+cd tests-ai && npm run redteam -- --max-concurrency 2
 
 # force regeneration after changing the config or purpose
-npx promptfoo@latest redteam run -c tests-ai/promptfooconfig.yaml --force
+cd tests-ai && npm run redteam:generate -- --force
 
 # the config already sets numTests/maxConcurrency; CLI flags win
 ```
 
 ## What the config does
 
-* **Target**: `POST http://127.0.0.1:8080/v1/ask` with
+* **Target**: `POST http://127.0.0.1:18080/v1/ask` with
   `{"question":"{{prompt}}"}`. `transformResponse: json.answer` means the
   grader sees the answer text only.
 * **Purpose**: the red-team harness is told the agent answers from Eli's
@@ -117,9 +130,11 @@ npx promptfoo@latest redteam run -c tests-ai/promptfooconfig.yaml --force
 
 The suite sends deliberately harmful and manipulative prompts. Keep the target
 on `127.0.0.1` (a token-less server refuses non-loopback binds; a public bind
-needs `--bind-public` plus a token), never point it at an exposed deployment,
-and treat `tests-ai/redteam.yaml` as local evidence - generated attacks can
-contain offensive text and are not committed.
+needs `--bind-public` plus a token), and never point it at an exposed
+deployment. Generated probes (`tests-ai/redteam.yaml`), `tests-ai/reports/*`,
+and `tests-ai/.promptfoo/` are local evidence only - generated attacks can
+contain offensive text - so they are gitignored; only the configs, the
+lockfile, the run script, and the README are committed.
 
 Configured 2026-11-03; a full run report has not been captured in `docs/runs/`
 yet.
