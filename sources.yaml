@@ -28,3 +28,36 @@ sources:
       api_url: { env: POSTIZ_API_URL }
       api_key: { env: POSTIZ_API_KEY }
     options: { platforms: [linkedin], include_scheduled: false }
+
+  # The public site (Astro) - the pages that are not Ghost posts: services,
+  # case studies, project and AI pages. No credentials: it is a public site,
+  # so its URL is configuration, not a secret. The Ghost source above owns
+  # read.elilap.dev posts, so /blog (a listing page that links there) and
+  # /tag/* are excluded rather than indexed twice.
+  #
+  # strategy: elilap selects the host adapter in internal/sources/web. Use
+  # `agent sources inspect --source website --url <page>` to re-derive the
+  # extraction whenever the layout changes.
+  - id: website
+    type: web
+    enabled: true
+    options:
+      site_url: https://elilap.dev
+      sitemap: true
+      feeds: false
+      strategy: elilap
+      author: "Eli Lap"
+      max_pages: 100
+      include_paths:
+        - "^/$"
+        - "^/ai(/|$)"
+        - "^/case-study/"
+        - "^/cases$"
+        - "^/connect$"
+        - "^/contact$"
+        - "^/projects$"
+        - "^/services$"
+      exclude_paths:
+        - "^/blog$"
+        - "^/tag/"
+        - "^/privacy$"

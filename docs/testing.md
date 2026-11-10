@@ -41,7 +41,7 @@ live upstream APIs.
 | Port | Used by | Notes |
 |---|---|---|
 | `8080` | interactive development | Default `agent serve`; never used by the suites. |
-| `18080` | both test suites | `./agent serve --port 18080`; both harnesses target `127.0.0.1:18080/v1/ask`. |
+| `18080` | both test suites | `./agent serve --addr 127.0.0.1:18080`; both harnesses target `127.0.0.1:18080/v1/ask`. |
 | `8000` | the local judge model | `EVAL_BASE_URL=http://localhost:8000/v1`, model `mtplx-qwen36-35b-a3b-optimized-speed`. Used by Ragas and by promptfoo. |
 | `15500` | promptfoo report UI | `npm run redteam:report`, reads the local database. |
 
@@ -55,7 +55,7 @@ Start the target once, in its own terminal:
 ```bash
 # from the repository root
 go build -mod=vendor -tags sqlite_fts5 -o agent ./cmd/agent
-./agent serve --port 18080
+./agent serve --addr 127.0.0.1:18080
 ```
 
 ## Ragas — answer quality

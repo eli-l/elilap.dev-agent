@@ -13,8 +13,10 @@
 // environment variable names, never credential values or document bodies
 // (AGENTS.md). The one deliberate exception is the agent module at debug
 // level, where the grounded loop logs the exact prompts, excerpts, and model
-// replies it processes so retrieval can be debugged end to end; see
-// docs/logging.md.
+// replies it processes so retrieval can be debugged end to end. The audit
+// module stays on at info but records only a token id, a question fingerprint
+// (SHA-256 + byte length), the outcome, and counts - never question, answer,
+// prompt, or excerpt text. See docs/logging.md.
 package logging
 
 import (
@@ -45,10 +47,14 @@ const (
 	// ModuleAgent logs the grounded agent loop: the chat requests sent to the
 	// model and the replies it returns, at debug level.
 	ModuleAgent = "agent"
+	// ModuleAudit logs the A2A task record: token id, question fingerprint,
+	// outcome, iterations, citations, and elapsed time - never the question
+	// text, answer, prompt, or excerpts.
+	ModuleAudit = "audit"
 )
 
 // modules is the fixed set of module loggers Setup builds.
-var modules = []string{ModuleMain, ModuleHTTP, ModuleSources, ModuleDB, ModuleAgent}
+var modules = []string{ModuleMain, ModuleHTTP, ModuleSources, ModuleDB, ModuleAgent, ModuleAudit}
 
 // EnvPrefix is the prefix envconfig reads; Config's fields therefore map to
 // AGENT_LOG_LEVEL and AGENT_LOG_FORMAT. Runtime values live in the
@@ -136,6 +142,14 @@ func Setup(cfg Config, out io.Writer) error {
 	for _, name := range modules {
 		next[name] = root.With().Str("module", name).Logger()
 	}
+	// The audit stream is not a debugging aid: it is pinned to info so a
+	// quieter --log-level cannot silently drop the task record. Only an
+	// explicit "disabled" turns it off.
+	auditLevel := lvl
+	if auditLevel != zerolog.Disabled && auditLevel > zerolog.InfoLevel {
+		auditLevel = zerolog.InfoLevel
+	}
+	next[ModuleAudit] = root.With().Str("module", ModuleAudit).Logger().Level(auditLevel)
 
 	mu.Lock()
 	child = next
@@ -198,6 +212,10 @@ func DB() zerolog.Logger { return Logger(ModuleDB) }
 // Agent returns the grounded-loop logger. Its debug lines carry the prompts,
 // tool results, and model replies the loop processes.
 func Agent() zerolog.Logger { return Logger(ModuleAgent) }
+
+// Audit returns the A2A task-record logger. It is pinned to info unless
+// logging is disabled, and it never carries answers, prompts, or excerpts.
+func Audit() zerolog.Logger { return Logger(ModuleAudit) }
 
 // ParseLevel maps a level name to its zerolog level. An empty name is info.
 func ParseLevel(name string) (zerolog.Level, error) {

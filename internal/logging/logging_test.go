@@ -52,16 +52,17 @@ func TestSetupTagsEachModule(t *testing.T) {
 		{"sources", logging.Sources()},
 		{"db", logging.DB()},
 		{"agent", logging.Agent()},
+		{"audit", logging.Audit()},
 	} {
 		log := m.log
 		log.Info().Msg("from " + m.name)
 	}
 
 	recs := lines(t, buf)
-	if len(recs) != 5 {
-		t.Fatalf("got %d log lines, want 5:\n%s", len(recs), buf.String())
+	if len(recs) != 6 {
+		t.Fatalf("got %d log lines, want 6:\n%s", len(recs), buf.String())
 	}
-	want := []string{"main", "http", "sources", "db", "agent"}
+	want := []string{"main", "http", "sources", "db", "agent", "audit"}
 	for i, rec := range recs {
 		if got := rec["module"]; got != want[i] {
 			t.Errorf("line %d module = %v, want %q", i, got, want[i])
@@ -90,10 +91,28 @@ func TestLevelFiltersModules(t *testing.T) {
 	}
 }
 
+func TestAuditSurvivesAQuietLevel(t *testing.T) {
+	buf := setup(t, logging.Config{Level: "error", Format: "json"})
+	httpLog := logging.HTTP()
+	httpLog.Info().Msg("http info drops")
+	auditLog := logging.Audit()
+	auditLog.Info().Str("token_id", "alice").Msg("task")
+
+	recs := lines(t, buf)
+	if len(recs) != 1 {
+		t.Fatalf("got %d lines, want only the audit line:\n%s", len(recs), buf.String())
+	}
+	if recs[0]["module"] != "audit" || recs[0]["token_id"] != "alice" {
+		t.Errorf("audit line = %v", recs[0])
+	}
+}
+
 func TestDisabledLevelSilencesEverything(t *testing.T) {
 	buf := setup(t, logging.Config{Level: "disabled", Format: "json"})
 	log := logging.Main()
 	log.Error().Str("secret", "value").Msg("dropped")
+	auditLog := logging.Audit()
+	auditLog.Info().Msg("also dropped")
 	if buf.Len() != 0 {
 		t.Errorf("disabled level wrote %q, want nothing", buf.String())
 	}

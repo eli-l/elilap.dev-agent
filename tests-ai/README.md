@@ -65,7 +65,7 @@ plugin and disables remote generation, so it is a fully local run.
   server on 8080 is untouched):
 
   ```bash
-  ./agent serve --port 18080      # from the repository root
+  ./agent serve --addr 127.0.0.1:18080      # from the repository root
   ```
 
 * The local judge model from [`../example.env`](../example.env) reachable at
@@ -142,8 +142,9 @@ npm run redteam:eval -- -j 2 --filter-sample 10  # smaller, slower/faster run
 The suite sends deliberately harmful and manipulative prompts, and
 `redteam.yaml` / the reports contain generated attack text. They are
 gitignored on purpose and must stay local. Keep the target on loopback: the
-dev server only leaves `127.0.0.1` with the explicit `--allow-public` opt-in,
-and this suite should never point at a public deployment.
+a token-less server refuses any non-loopback bind, a public bind needs
+`--bind-public` plus a token, and this suite should never point at a public
+deployment.
 
 ## Updating promptfoo
 

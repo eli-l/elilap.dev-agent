@@ -2,7 +2,6 @@ package ingest_test
 
 import (
 	"context"
-	"net/http"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -51,7 +50,7 @@ func newRunner(t *testing.T, fp *fakeProvider) (*ingest.Runner, *config.Config) 
 	if err := r.Register("ghost", func(config.Source) (any, error) { return nil, nil }); err != nil {
 		t.Fatalf("register parser: %v", err)
 	}
-	if err := r.RegisterConstructor("ghost", func(config.Source, any, *http.Client) (shared.Provider, error) {
+	if err := r.RegisterConstructor("ghost", func(config.Source, any, shared.BuildContext) (shared.Provider, error) {
 		return fp, nil
 	}); err != nil {
 		t.Fatalf("register constructor: %v", err)

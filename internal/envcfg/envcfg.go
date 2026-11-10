@@ -47,6 +47,15 @@ const (
 	EnvEmbedModel = "EMBED_MODEL"
 	// EnvChatModel is the chat model id used by the agent loop.
 	EnvChatModel = "CHAT_MODEL"
+	// EnvA2ATokens is the optional comma-separated `id:token` bearer list for
+	// the A2A surface. Empty means the loopback dev server is token-less.
+	EnvA2ATokens = EnvPrefix + "_A2A_TOKENS"
+	// EnvA2ATokensFile is the optional 0600 token file, re-read when it
+	// changes so `agent tokens add|revoke` needs no restart.
+	EnvA2ATokensFile = EnvPrefix + "_A2A_TOKENS_FILE"
+	// EnvA2APublicURL is the absolute service root the agent card advertises.
+	// Empty derives it from each request (Host plus scheme).
+	EnvA2APublicURL = EnvPrefix + "_A2A_PUBLIC_URL"
 )
 
 // Defaults for the settings above. They are exported so callers, docs, and
@@ -61,6 +70,9 @@ const (
 	DefaultEmbedModel = "embeddinggemma-300m"
 	// DefaultChatModel is the reasoning model the agent loop calls.
 	DefaultChatModel = "spark-x2.5-4b"
+	// DefaultA2ATokensFile is the local token file `agent tokens` edits. It is
+	// gitignored; a missing file simply means no tokens are configured.
+	DefaultA2ATokensFile = "./a2a-tokens.txt"
 )
 
 // Config is every static runtime setting, decoded by envconfig from the
@@ -80,6 +92,13 @@ type Config struct {
 	EmbedModel string `envconfig:"EMBED_MODEL"`
 	// ChatModel is the model id behind /v1/chat/completions.
 	ChatModel string `envconfig:"CHAT_MODEL"`
+	// A2ATokens is the comma-separated `id:token` list for the A2A surface.
+	A2ATokens string `envconfig:"AGENT_A2A_TOKENS"`
+	// A2ATokensFile is the 0600 token file the store re-reads on change.
+	A2ATokensFile string `envconfig:"AGENT_A2A_TOKENS_FILE"`
+	// A2APublicURL is the card's advertised service root; empty derives it
+	// from the request.
+	A2APublicURL string `envconfig:"AGENT_A2A_PUBLIC_URL"`
 }
 
 // Load decodes Config from the environment, applying defaults for unset *and
@@ -98,6 +117,11 @@ func Load() (Config, error) {
 	cfg.LocalAIBaseURL = DefaultOr(cfg.LocalAIBaseURL, DefaultLocalAIBaseURL)
 	cfg.EmbedModel = DefaultOr(cfg.EmbedModel, DefaultEmbedModel)
 	cfg.ChatModel = DefaultOr(cfg.ChatModel, DefaultChatModel)
+	cfg.A2ATokensFile = DefaultOr(cfg.A2ATokensFile, DefaultA2ATokensFile)
+	// The token list and public URL are legitimately empty; trimming keeps a
+	// stray space out of the pair syntax and the advertised URL.
+	cfg.A2ATokens = strings.TrimSpace(cfg.A2ATokens)
+	cfg.A2APublicURL = strings.TrimRight(strings.TrimSpace(cfg.A2APublicURL), "/")
 	// An empty token is a legitimate value, not a missing one.
 	cfg.LocalAIAPIKey = strings.TrimSpace(cfg.LocalAIAPIKey)
 	return cfg, nil

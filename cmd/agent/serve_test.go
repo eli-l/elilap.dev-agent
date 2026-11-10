@@ -43,105 +43,33 @@ func postRetrieve(t *testing.T, h http.Handler, body string) *httptest.ResponseR
 	return rec
 }
 
-func TestResolveServeAddrDefaultsToLoopback(t *testing.T) {
-	addr, err := resolveServeAddr(defaultServeHost, defaultServePort, false)
-	if err != nil {
-		t.Fatalf("resolveServeAddr(default) = %v", err)
+func TestValidateLoopbackAddr(t *testing.T) {
+	valid := []string{"127.0.0.1:8080", "localhost:8080", "[::1]:8080", "127.0.0.2:1"}
+	for _, addr := range valid {
+		if err := validateLoopbackAddr(addr); err != nil {
+			t.Errorf("validateLoopbackAddr(%q) = %v, want nil", addr, err)
+		}
 	}
-	if addr != "127.0.0.1:8080" {
-		t.Errorf("addr = %q, want 127.0.0.1:8080", addr)
-	}
-}
-
-func TestResolveServeAddrAllowsLoopbackHosts(t *testing.T) {
-	tests := []struct {
-		host string
-		port int
+	invalid := []struct {
+		addr string
 		want string
 	}{
-		{host: "127.0.0.1", port: 8080, want: "127.0.0.1:8080"},
-		{host: "localhost", port: 9000, want: "localhost:9000"},
-		{host: "::1", port: 1, want: "[::1]:1"},
-		{host: "127.0.0.2", port: 65535, want: "127.0.0.2:65535"},
-		{host: " localhost ", port: 8080, want: "localhost:8080"},
+		{addr: ":8080", want: "binds every interface"},
+		{addr: "0.0.0.0:8080", want: "--bind-public"},
+		{addr: "192.168.1.10:8080", want: "--bind-public"},
+		{addr: "example.com:8080", want: "--bind-public"},
+		{addr: "127.0.0.1:http", want: "port must be a number"},
+		{addr: "127.0.0.1:0", want: "port must be a number"},
+		{addr: "127.0.0.1", want: "invalid --addr"},
 	}
-	for _, tc := range tests {
-		got, err := resolveServeAddr(tc.host, tc.port, false)
-		if err != nil {
-			t.Errorf("resolveServeAddr(%q, %d) = %v, want nil", tc.host, tc.port, err)
-			continue
-		}
-		if got != tc.want {
-			t.Errorf("resolveServeAddr(%q, %d) = %q, want %q", tc.host, tc.port, got, tc.want)
-		}
-	}
-}
-
-// TestIsLoopbackHostTrimsWhitespace pins the same normalization the bind gate
-// applies, so the startup log never calls a trimmed loopback host public.
-func TestIsLoopbackHostTrimsWhitespace(t *testing.T) {
-	for _, host := range []string{"localhost", " localhost ", "127.0.0.1", " 127.0.0.1 "} {
-		if !isLoopbackHost(host) {
-			t.Errorf("isLoopbackHost(%q) = false, want true", host)
-		}
-	}
-	for _, host := range []string{"0.0.0.0", " 0.0.0.0 "} {
-		if isLoopbackHost(host) {
-			t.Errorf("isLoopbackHost(%q) = true, want false", host)
-		}
-	}
-}
-
-func TestResolveServeAddrRequiresAllowPublic(t *testing.T) {
-	tests := []struct {
-		host string
-		want string
-	}{
-		{host: "0.0.0.0", want: "not loopback"},
-		{host: "192.168.1.10", want: "not loopback"},
-		{host: "example.com", want: "--allow-public"},
-		{host: "::", want: "not loopback"},
-	}
-	for _, tc := range tests {
-		if _, err := resolveServeAddr(tc.host, 8080, false); err == nil {
-			t.Errorf("resolveServeAddr(%q) = nil, want an error without --allow-public", tc.host)
-		} else if !strings.Contains(err.Error(), tc.want) {
-			t.Errorf("resolveServeAddr(%q) = %v, want it to contain %q", tc.host, err, tc.want)
-		}
-	}
-
-	addr, err := resolveServeAddr("0.0.0.0", 8080, true)
-	if err != nil {
-		t.Fatalf("resolveServeAddr(0.0.0.0, 8080, true) = %v", err)
-	}
-	if addr != "0.0.0.0:8080" {
-		t.Errorf("addr = %q, want 0.0.0.0:8080", addr)
-	}
-	if addr, err := resolveServeAddr("::", 9000, true); err != nil || addr != "[::]:9000" {
-		t.Errorf("resolveServeAddr(::, 9000, true) = %q, %v", addr, err)
-	}
-}
-
-func TestResolveServeAddrRejectsBadPortAndEmptyHost(t *testing.T) {
-	tests := []struct {
-		host string
-		port int
-		want string
-	}{
-		{host: "127.0.0.1", port: 0, want: "port must be between 1 and 65535"},
-		{host: "127.0.0.1", port: 65536, want: "port must be between 1 and 65535"},
-		{host: "127.0.0.1", port: -1, want: "port must be between 1 and 65535"},
-		{host: "", port: 8080, want: "--host must not be empty"},
-		{host: "   ", port: 8080, want: "--host must not be empty"},
-	}
-	for _, tc := range tests {
-		_, err := resolveServeAddr(tc.host, tc.port, false)
+	for _, tc := range invalid {
+		err := validateLoopbackAddr(tc.addr)
 		if err == nil {
-			t.Errorf("resolveServeAddr(%q, %d) = nil, want an error", tc.host, tc.port)
+			t.Errorf("validateLoopbackAddr(%q) = nil, want an error", tc.addr)
 			continue
 		}
 		if !strings.Contains(err.Error(), tc.want) {
-			t.Errorf("resolveServeAddr(%q, %d) = %v, want it to contain %q", tc.host, tc.port, err, tc.want)
+			t.Errorf("validateLoopbackAddr(%q) = %v, want it to contain %q", tc.addr, err, tc.want)
 		}
 	}
 }
@@ -149,41 +77,13 @@ func TestResolveServeAddrRejectsBadPortAndEmptyHost(t *testing.T) {
 func TestRunServeRejectsNonLoopbackBeforeOpeningIndex(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "missing.db")
 	var stderr bytes.Buffer
-	code := runServe([]string{"--host", "0.0.0.0", "--db", dbPath},
+	code := runServe([]string{"--addr", "0.0.0.0:8080", "--db", dbPath},
 		envcfg.Config{DBPath: dbPath, EmbedModel: envcfg.DefaultEmbedModel}, &stderr)
 	if code != 2 {
 		t.Errorf("exit = %d, want 2 for a non-loopback bind", code)
 	}
-	if !strings.Contains(stderr.String(), "--allow-public") {
-		t.Errorf("stderr = %q, want the --allow-public hint", stderr.String())
-	}
-}
-
-// TestRunServeAllowPublicPassesTheBindGate proves --allow-public lets a public
-// host through address validation; the missing index is what stops it next.
-func TestRunServeAllowPublicPassesTheBindGate(t *testing.T) {
-	dbPath := filepath.Join(t.TempDir(), "missing.db")
-	var stderr bytes.Buffer
-	code := runServe([]string{"--host", "0.0.0.0", "--port", "18080", "--allow-public", "--db", dbPath},
-		envcfg.Config{DBPath: dbPath, EmbedModel: envcfg.DefaultEmbedModel}, &stderr)
-	if code != 1 {
-		t.Errorf("exit = %d, want 1 for a missing index", code)
-	}
-	if !strings.Contains(stderr.String(), "run `agent ingest`") {
-		t.Errorf("stderr = %q, want the ingest hint", stderr.String())
-	}
-}
-
-func TestRunServeRejectsBadPort(t *testing.T) {
-	dbPath := filepath.Join(t.TempDir(), "missing.db")
-	var stderr bytes.Buffer
-	code := runServe([]string{"--port", "0", "--db", dbPath},
-		envcfg.Config{DBPath: dbPath, EmbedModel: envcfg.DefaultEmbedModel}, &stderr)
-	if code != 2 {
-		t.Errorf("exit = %d, want 2 for a bad port", code)
-	}
-	if !strings.Contains(stderr.String(), "port must be between") {
-		t.Errorf("stderr = %q, want the port range error", stderr.String())
+	if !strings.Contains(stderr.String(), "--bind-public") {
+		t.Errorf("stderr = %q, want the exposure warning", stderr.String())
 	}
 }
 

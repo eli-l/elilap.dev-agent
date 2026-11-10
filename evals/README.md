@@ -104,7 +104,7 @@ The evaluation suites own **port 18080**; the interactive dev server keeps
 with your own work:
 
 ```bash
-./agent serve --port 18080                          # terminal 1, eval target
+./agent serve --addr 127.0.0.1:18080                # terminal 1, eval target
 (cd evals && uv run python evaluate.py --transport http)  # terminal 2
 ```
 

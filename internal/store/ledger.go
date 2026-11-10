@@ -162,7 +162,12 @@ FROM source_items WHERE source_id = ?`, sourceID)
 	for _, it := range items {
 		seen[it.ItemID] = true
 		prev, ok := known[it.ItemID]
-		if !ok || prev.ETag != it.ETag || prev.LastModified != it.LastModified {
+		// An item with no upstream fingerprint at all (a web page with no
+		// lastmod and no feed date) must be fetched every run: its content is
+		// the only change signal, and treating "" == "" as unchanged would
+		// freeze that page forever.
+		unfingerprinted := it.ETag == "" && it.LastModified == ""
+		if !ok || unfingerprinted || prev.ETag != it.ETag || prev.LastModified != it.LastModified {
 			diff.ToFetch = append(diff.ToFetch, it)
 		}
 	}
@@ -193,7 +198,7 @@ func (s *Store) RemoveItem(sourceID string, it LedgerItem) error {
 	defer tx.Rollback()
 
 	var ids []string
-	for _, kind := range []string{"ghost_post", "postiz_post"} {
+	for _, kind := range allKinds {
 		kindIDs, err := selectItemChunkIDs(tx, kind, it.ItemID)
 		if err != nil {
 			return err
@@ -208,7 +213,7 @@ func (s *Store) RemoveItem(sourceID string, it LedgerItem) error {
 	if err := clearItemVectors(tx, ids); err != nil {
 		return err
 	}
-	for _, kind := range []string{"ghost_post", "postiz_post"} {
+	for _, kind := range allKinds {
 		if _, err := tx.Exec(`DELETE FROM chunks WHERE source_kind = ? AND source_id = ?`,
 			kind, it.ItemID); err != nil {
 			return fmt.Errorf("delete %s chunks for %s: %w", kind, it.ItemID, err)

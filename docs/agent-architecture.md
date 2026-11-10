@@ -1,7 +1,7 @@
 ---
 type: Reference
 title: The in-service agent loop and the A2A surface
-description: How the service hosts a grounded tool-calling loop over the local index, why the loop lives here (2026-10-27 scope change), and what the Phase 2 dev HTTP surface and Phase 4 A2A surface expose.
+description: How the service hosts a grounded tool-calling loop over the local index, why the loop lives here (2026-10-27 scope change), and what the dev HTTP surface and the A2A v0.3 surface expose.
 status: stable
 generated:
   by: deepseek/deepseek-v4.1-flash
@@ -24,11 +24,12 @@ the loop's CLI shadow. A Phase 2 dev HTTP surface (`agent serve`) exposes
 both the raw tool and the loop over loopback HTTP, so each half is
 curl-testable before A2A exists.
 
-**Status: the Phase 2 half of this document is shipped and exercised live.**
-The loop, the tool, the citation policy, and the loopback dev surface are in
-the binary and verified against the 886-chunk index; the A2A section below is
-the Phase 4 design, not yet built. Query fan-out was A/B'd against the loop
-and removed on 2026-11-05 — the loop is the only answer path.
+**Status 2026-11-05: both halves are shipped and exercised live.** The loop,
+the tool, the citation policy, the dev HTTP surface, and the A2A v0.3 binding
+(card, `message/send`, bearer tokens, rate limit, audit) are in the binary and
+verified against the 886-chunk index. The wire contract lives in
+[a2a.md](/a2a.md). Query fan-out was A/B'd against the loop and removed on
+2026-11-05 — the loop is the only answer path.
 
 ## Role
 
@@ -37,13 +38,13 @@ experience, experiments, and opinions. It answers questions using published
 sources and provides verifiable citations.
 
 That is the canonical description (`agentloop.Description`), used verbatim by
-the planned A2A `AgentCard`; the loop enforces the citation half, and the
-identity fact below keeps both bylines usable.
+the A2A `AgentCard`; the loop enforces the citation half, and the identity
+fact below keeps both bylines usable.
 
 ## The loop
 
 One tool-calling loop in `internal/agentloop` (implemented 2026-11-02), shared by
-`agent ask` and the Phase 4 A2A server:
+`agent ask` and the A2A server:
 
 * **Tool**: `search_writing`, wrapping `internal/retrieval` (hybrid BM25
   + vectors, RRF merge). Parameters: `query`, `top_n`, `source`
@@ -153,12 +154,12 @@ generated FTS5 query), one `retrieval: hit` per ranked chunk with its
 contains prompts and published excerpts; see [logging.md](/logging.md) for the
 payload policy.
 
-## The HTTP dev surface (Phase 2)
+## The HTTP surface (`/v1/retrieve`, `/v1/ask`)
 
-Before any A2A work, `agent serve` runs the same internals over plain
-HTTP - token-less and bound to `127.0.0.1` by default - so both halves can
-be exercised with `curl`. `--host`/`--port` move it; a non-loopback host
-needs `--allow-public` and logs a warning:
+The Phase 2 dev surface graduated in Phase 4 (2026-11-05): `agent serve` runs
+the same internals over plain HTTP, token-less only when no A2A token is
+configured and loopback-only in that mode, so both halves can be exercised
+with `curl`:
 
 * `POST /v1/retrieve`: the request body carries the `search_writing`
   parameters; the response is exactly the JSON array the model's tool
@@ -172,37 +173,47 @@ needs `--allow-public` and logs a warning:
   "citations", "tool_iterations", "refused", "elapsed_ms"}` out, with a
   90s request budget and 502/504 on backend failure/timeout.
 
-Phase 4 keeps the paths and the JSON and adds auth, rate limits, and the
-audit log - nothing on this surface is thrown away.
+The A2A hardening landed 2026-11-05: both paths and the JSON are unchanged,
+and bearer auth, the per-token rate limit, and the audit log now wrap them.
+With a configured token the same two paths require
+`Authorization: Bearer <token>`, and the audit stream records each
+`/v1/ask` task. See [a2a.md](/a2a.md) for the wire contract and
+[runbook.md](/runbook.md) for the operator commands.
 
-## The A2A surface (Phase 4)
+## The A2A surface
 
 A2A v0.3 JSON-RPC binding, exposing the *agent*:
 
-* `message/send` at `/a2a`: one request, one grounded answer as an A2A
-  `Message` with citation metadata. Stateless per task - no persisted
-  task store, no `message/stream` in v1 (`capabilities.streaming` is
-  `false`) until a peer actually needs it.
-* `GET /.well-known/agent.json`: A2A `AgentCard` - `name`,
-  `description`, `version`, `supportedInterfaces` (JSONRPC + protocol
-  version), `capabilities`, `securitySchemes` (bearer), one skill
+* `message/send` at `POST /a2a`: one request, one grounded answer as an A2A
+  `Message` whose `metadata.citations` carries the resolved `chunk_id` +
+  `source_url` pairs. Stateless per task - no persisted task store, so the
+  service answers with a Message and `tasks/get` reports `TaskNotFound`;
+  `message/stream` is not offered (`capabilities.streaming` is `false`).
+* `GET /.well-known/agent-card.json` (plus the v0.2 `/.well-known/agent.json`
+  alias): A2A `AgentCard` - `name`, `description` verbatim from
+  `agentloop.Description`, `version`, `protocolVersion: "0.3.0"`, `url` +
+  `preferredTransport` + `additionalInterfaces`, `capabilities`,
+  `securitySchemes` (bearer, only when tokens are configured), and one skill
   describing grounded Q&A over Eli's published writing.
-* `POST /v1/retrieve` graduates from the Phase 2 dev surface - same
-  path, same JSON, now token-gated - as the deterministic escape hatch
-  for callers that want ranked chunks instead of conversation.
-* Security: bearer token, `127.0.0.1` bind by default, 30 tasks/min per
-  token plus a per-task wall-clock budget, audit log without bodies or
-  prompts. Peer task text is data, never instructions - the grounded
-  prompt and citation enforcement are the prompt-injection backstops.
+* `POST /v1/retrieve` is the deterministic escape hatch for callers that want
+  ranked chunks instead of conversation, on the same auth.
+* Security: bearer token from env or a re-read `0600` file, `127.0.0.1` bind
+  by default, `--bind-public` only with a token, 30 tasks/min per token plus
+  the loop's per-task wall-clock budget, an 8 KiB question cap, and an audit
+  log that records the question and outcome but never the answer or excerpts.
+  Peer task text is data, never instructions - the grounded prompt and
+  citation enforcement are the prompt-injection backstops.
 
 ## What moved, and what did not
 
 * Moved: the answer loop (which used to be "the caller's problem") now
   lives here; the peer-facing product is the agent, not bare retrieval.
-* Unchanged: ingest stays strictly read-only against Ghost and Postiz;
+* Unchanged: ingest stays strictly read-only against Ghost, Postiz, and the
+  website it reads as HTML;
   the index stays a derived, rebuildable SQLite file; the API exposes no
   writes; generation beyond the grounded loop stays a non-goal, as does
   multi-agent orchestration inside this service.
 
-Implementation sequencing lives in `../PLAN.md` (Phase 2 tasks, Phase 4
-tasks); this file records the architecture and its rationale.
+Implementation sequencing lives in `../PLAN.md`; this file records the
+architecture and its rationale, and [a2a.md](/a2a.md) records the wire
+contract.

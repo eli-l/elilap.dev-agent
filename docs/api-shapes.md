@@ -23,10 +23,17 @@ Sections:
 - [Postiz API shape (live capture)](/postiz.md) — the required date-range
   listing, no pagination and no read-by-id, one record per platform copy,
   and the post states that decide what gets indexed.
+- [HTML website provider and per-site extraction strategies](/web.md) — the
+  observed `elilap.dev` page shapes (Astro, no JSON-LD, `<article>` on case
+  studies and `<main>` elsewhere, a JS-date `<time datetime>`), the trimmed
+  fixtures the tests replay, and the strategy/adapter seam.
 
 Fixtures replayed by the provider tests:
 
 - Ghost: inline capture-shaped JSON in `internal/sources/ghost/provider_test.go`
   (no testdata directory).
+- Web: trimmed HTML/XML captures in `internal/sources/web/testdata/`
+  (`case-study.html`, `services.html`, `article-jsonld.html`, `noindex.html`,
+  `sitemap-index.xml`, `sitemap-pages.xml`, `sitemap-posts.xml`, `rss.xml`).
 - Postiz: `internal/sources/postiz/testdata/posts.json` — a trimmed Postiz
   capture covering published, scheduled, draft, and failed records.

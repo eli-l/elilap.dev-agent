@@ -39,7 +39,7 @@ func runQuery(args []string, rtCfg envcfg.Config, stdout, stderr io.Writer) int 
 	fs.SetOutput(stderr)
 	top := fs.Int("top", retrieval.DefaultTopN, "maximum number of chunks to return")
 	hybrid := fs.Bool("hybrid", true, "merge BM25 and vector results (false = vector only)")
-	source := fs.String("source", "all", "restrict to ghost, postiz, or all")
+	source := fs.String("source", "all", "restrict to ghost, postiz, web, or all")
 	var platforms platformList
 	fs.Var(&platforms, "platform", "restrict to a Postiz platform (repeatable)")
 	after := fs.String("after", "", "only chunks published on or after this date (YYYY-MM-DD or RFC3339)")

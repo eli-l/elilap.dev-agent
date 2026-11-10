@@ -41,7 +41,7 @@ codebase reads variables with ad-hoc `os.Getenv` chains.
 
 | Struct | Package | Prefix | Variables |
 |---|---|---|---|
-| `envcfg.Config` | `internal/envcfg` | mixed by design | `AGENT_DB_PATH`, `LOCALAI_*`, `EMBED_MODEL`, `CHAT_MODEL` |
+| `envcfg.Config` | `internal/envcfg` | mixed by design | `AGENT_DB_PATH`, `LOCALAI_*`, `EMBED_MODEL`, `CHAT_MODEL`, `AGENT_A2A_*` |
 | `logging.Config` | `internal/logging` | `AGENT_LOG` | `AGENT_LOG_LEVEL`, `AGENT_LOG_FORMAT` |
 
 The `envconfig` struct tag is always the **full variable name**, because the
@@ -66,18 +66,16 @@ constants, not in struct tags, so there is exactly one definition.
 | `LOCALAI_API_KEY` | `internal/envcfg` | empty | Optional bearer token |
 | `EMBED_MODEL` | `internal/envcfg` | `embeddinggemma-300m` | Must produce 768 dims |
 | `CHAT_MODEL` | `internal/envcfg` | `spark-x2.5-4b` | Reasoning model, used by the loop |
-| `EVAL_BASE_URL` | `evals/` (Python) | `http://localhost:8000/v1` | Ragas judge endpoint; also mirrored by the promptfoo `redteam.provider`; independent of `LOCALAI_*` |
-| `EVAL_MODEL` | `evals/` (Python) | `mtplx-qwen36-35b-a3b-optimized-speed` | Model the harness scores; promptfoo generates and grades with it |
-| `EVAL_API_KEY` | `evals/` (Python) | empty → `local` | Secret; local servers ignore its value; promptfoo's config uses the literal `local` |
+| `AGENT_A2A_TOKENS` | `internal/envcfg` | empty | Comma-separated `id:token` bearer list for the A2A surface; empty and loopback = token-less dev |
+| `AGENT_A2A_TOKENS_FILE` | `internal/envcfg` | `./a2a-tokens.txt` | `0600` token file, re-read on change (rotation without restart); gitignored, missing = no tokens |
+| `AGENT_A2A_PUBLIC_URL` | `internal/envcfg` | empty | Absolute service root advertised in the agent card; required with `--bind-public`, otherwise a loopback bind derives `http://<addr>` |
+| `EVAL_BASE_URL` | `evals/` (Python) | `http://localhost:8000/v1` | Judge endpoint for the Ragas harness; the promptfoo `redteam.provider` mirrors it. Independent of `LOCALAI_*` |
+| `EVAL_MODEL` | `evals/` (Python) | `mtplx-qwen36-35b-a3b-optimized-speed` | Model the harness scores; promptfoo generates (local-capable plugins) and grades with it |
+| `EVAL_API_KEY` | `evals/` (Python) | empty → `local` | Secret; local servers ignore its value. promptfoo's config uses the literal `local` |
 | `GHOST_API_URL` | `sources.yaml` ref | — | Credential reference, value required |
 | `GHOST_API_KEY` | `sources.yaml` ref | — | Secret |
 | `POSTIZ_API_URL` | `sources.yaml` ref | — | Credential reference, value required |
 | `POSTIZ_API_KEY` | `sources.yaml` ref | — | Secret |
-
-The three `EVAL_*` values also drive the promptfoo red-team provider in
-`../tests-ai/promptfooconfig*.yaml`. promptfoo cannot read `EVAL_*` from its
-YAML, so those configs mirror the same defaults literally: change
-`example.env` and the configs together.
 
 Credentials are the one **dynamic** case: `sources.yaml` declares
 `{ env: VAR }` references, so the names are configuration data, not Go
@@ -115,12 +113,29 @@ the credentials, blank is treated as missing: `agent sources validate` warns
 and `--strict` exits 1 until they are filled, matching the runtime credential
 resolver.
 
+**The A2A variables are the token store.** A token is a secret: it has an
+empty value in `example.env` and is never committed. `AGENT_A2A_TOKENS` is a
+fixed list read at startup; `AGENT_A2A_TOKENS_FILE` is re-read when its mtime
+or size changes, so `agent tokens add|revoke` rotates credentials without a
+restart. The file must be `0600`, and a malformed or loose-permission file is
+a startup error rather than a silent downgrade to token-less serving. Once a
+token has been configured the store stays secured: deleting the file or
+revoking the last entry yields `401`, never an unauthenticated server. With no
+tokens and a loopback bind the server stays token-less for development; a
+non-loopback bind (`--bind-public`) requires at least one token and an
+explicit `AGENT_A2A_PUBLIC_URL` (the card never trusts a request `Host`). See
+[a2a.md](a2a.md) for issuance, rotation, and the audit record.
+
 The `EVAL_*` rows belong to the Python harness in `evals/`, not to a Go
 `envconfig` struct. `TestExampleEnvIsComplete` pins them with an explicit
 allowlist (`evalVars`), so they are checked for presence and default value but
 not derived from Go code. The harness does not load `.env`; run it with
-`uv run --env-file ../.env …` or export the variables. See
-[RAG evaluation with Ragas](ragas-eval.md).
+`uv run --env-file ../.env …` or export the variables. The promptfoo red-team
+suite in `tests-ai/` has no variables of its own: its
+`redteam.provider` block repeats the same endpoint, model, and `local` key, so
+the two files move together. See
+[RAG evaluation with Ragas](ragas-eval.md) and
+[Red-team evaluation with promptfoo](red-team.md).
 
 ## Adding a variable
 

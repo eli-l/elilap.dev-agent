@@ -263,17 +263,21 @@ func TestNewFromSourceResolvesCredentialEnvNames(t *testing.T) {
 			APIKey:     config.EnvRef{Env: "AGENT_TEST_POSTIZ_KEY"},
 		},
 	}
-	p, err := postiz.NewFromSource(src, &postiz.Options{Platforms: []string{"linkedin"}}, http.DefaultClient)
+	p, err := postiz.NewFromSource(src, &postiz.Options{Platforms: []string{"linkedin"}}, shared.BuildContext{HTTPClient: http.DefaultClient})
 	if err != nil {
 		t.Fatalf("NewFromSource() error = %v", err)
 	}
 	if p.Type() != "postiz" {
 		t.Errorf("Type() = %q, want postiz", p.Type())
 	}
+	// A zero BuildContext must still yield a provider with a usable client.
+	if _, err := postiz.NewFromSource(src, &postiz.Options{Platforms: []string{"linkedin"}}, shared.BuildContext{}); err != nil {
+		t.Fatalf("NewFromSource(zero BuildContext) error = %v", err)
+	}
 
 	missing := src
 	missing.Credentials.APIKey = config.EnvRef{Env: "AGENT_TEST_POSTIZ_ABSENT"}
-	_, err = postiz.NewFromSource(missing, &postiz.Options{Platforms: []string{"linkedin"}}, http.DefaultClient)
+	_, err = postiz.NewFromSource(missing, &postiz.Options{Platforms: []string{"linkedin"}}, shared.BuildContext{HTTPClient: http.DefaultClient})
 	if err == nil || !strings.Contains(err.Error(), "AGENT_TEST_POSTIZ_ABSENT") {
 		t.Errorf("NewFromSource(missing env) error = %v, want it to name the variable", err)
 	}
@@ -284,7 +288,7 @@ func TestNewFromSourceResolvesCredentialEnvNames(t *testing.T) {
 
 func TestNewFromSourceRejectsWrongOptionsType(t *testing.T) {
 	src := config.Source{ID: "postiz", Type: "postiz"}
-	if _, err := postiz.NewFromSource(src, struct{}{}, http.DefaultClient); err == nil {
+	if _, err := postiz.NewFromSource(src, struct{}{}, shared.BuildContext{HTTPClient: http.DefaultClient}); err == nil {
 		t.Fatal("NewFromSource(wrong options type) = nil error, want an error")
 	}
 }

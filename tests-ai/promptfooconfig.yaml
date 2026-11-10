@@ -6,7 +6,7 @@ targets:
   - id: http
     config:
       # Evaluation runs own 18080; 8080 stays free for interactive development.
-      # Start the target with: ./agent serve --port 18080
+      # Start the target with: ./agent serve --addr 127.0.0.1:18080
       url: http://127.0.0.1:18080/v1/ask
       method: POST
       headers:

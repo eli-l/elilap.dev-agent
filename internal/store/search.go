@@ -40,7 +40,8 @@ type SearchHit struct {
 // restriction"; times are RFC3339 UTC strings compared lexicographically
 // against chunks.published_at, which ingest always writes in that form.
 type Filter struct {
-	// SourceKinds restricts chunks.source_kind (ghost_post, postiz_post).
+	// SourceKinds restricts chunks.source_kind (ghost_post, postiz_post,
+	// web_page).
 	SourceKinds []string
 	// Platforms restricts chunks.platform (lowercased, Postiz only).
 	Platforms []string

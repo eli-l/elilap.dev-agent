@@ -87,6 +87,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 		code = runAsk(args[1:], rtCfg, stdout, stderr)
 	case "serve":
 		code = runServe(args[1:], rtCfg, stderr)
+	case "tokens":
+		code = runTokens(args[1:], rtCfg, stdout, stderr)
 	default:
 		log.Error().Str("command", args[0]).Msg("unknown subcommand")
 		fmt.Fprintf(stderr, "agent: unknown subcommand %q\n\n", args[0])
@@ -139,20 +141,22 @@ func usage(w io.Writer) {
 Commands:
   sources list       list configured providers and their resolved options
   sources validate   strictly validate sources.yaml and provider options
+  sources inspect    report how a web page would be extracted (strategy authoring)
   ingest             import configured sources into the index
   embed              embed indexed chunks
   query              retrieve chunks for a query (hybrid, no LLM)
   ask                answer a question from the index (grounded loop)
   stats              report index statistics
-  serve              serve the read-only dev HTTP surface (loopback by default)
+  serve              serve the read-only HTTP surface (A2A, card, /v1/*)
+  tokens             issue, revoke, and list A2A bearer tokens
 
 Missing credential variables warn in sources validate; --strict makes them errors.
 
 `+loggingFlagHelp+`
-Run "agent serve --help" for the dev server flags (default 127.0.0.1:8080,
-POST /v1/retrieve and POST /v1/ask). Use --host/--port to move it, and
---host 0.0.0.0 --allow-public to reach it from another host on a trusted
-network. Run "agent sources list --help" or
-"agent sources validate --help" for source flags.
+Run "agent serve --help" for the server flags (default 127.0.0.1:8080; loopback
+is token-less, a public bind needs a token from "agent tokens add").
+Run "agent tokens add --help" for token issuance, and "agent sources list
+--help", "agent sources validate --help", or "agent sources inspect --help"
+for source flags.
 `)
 }

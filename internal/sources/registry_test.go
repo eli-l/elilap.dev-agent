@@ -12,6 +12,7 @@ import (
 	"github.com/eli-l/elilap.dev-agent/internal/sources"
 	"github.com/eli-l/elilap.dev-agent/internal/sources/ghost"
 	"github.com/eli-l/elilap.dev-agent/internal/sources/postiz"
+	"github.com/eli-l/elilap.dev-agent/internal/sources/shared"
 )
 
 // source parses an inline source YAML fragment into a config.Source.
@@ -33,7 +34,7 @@ func TestRegistryKnownTypes(t *testing.T) {
 	}
 
 	got := strings.Join(r.KnownTypes(), ",")
-	if want := "ghost,postiz"; got != want {
+	if want := "ghost,postiz,web"; got != want {
 		t.Errorf("KnownTypes() = %q, want %q", got, want)
 	}
 }
@@ -140,7 +141,7 @@ options: { platforms: [x], mystery: true }
 		{
 			name:    "unknown type lists known types",
 			doc:     "id: site\ntype: website\n",
-			wantErr: "known types: [ghost postiz]",
+			wantErr: "known types: [ghost postiz web]",
 		},
 	}
 
@@ -225,7 +226,7 @@ func TestBuildRequiresConstructor(t *testing.T) {
 	if err := r.Register("stub", func(config.Source) (any, error) { return nil, nil }); err != nil {
 		t.Fatalf("Register() error = %v", err)
 	}
-	_, err := r.Build(source(t, "id: stub\ntype: stub\n"), nil, nil)
+	_, err := r.Build(source(t, "id: stub\ntype: stub\n"), nil, shared.BuildContext{})
 	if err == nil {
 		t.Fatal("Build(stub) = nil error, want a not-implemented error")
 	}
@@ -261,7 +262,7 @@ options: { platforms: [LinkedIn, x] }
 		t.Errorf("platforms = %q, want %q (normalized)", got, want)
 	}
 
-	p, err := r.Build(src, parsed, http.DefaultClient)
+	p, err := r.Build(src, parsed, shared.BuildContext{HTTPClient: http.DefaultClient})
 	if err != nil {
 		t.Fatalf("Build(postiz) error = %v", err)
 	}
