@@ -15,11 +15,17 @@ import (
 // is nothing to diff or delete.
 var ErrUnknownItem = errors.New("item not in ledger")
 
+// allKinds lists every chunks.source_kind value the migrations allow. Item
+// deletion and drift removal use it to find an item's chunks regardless of
+// the provider that wrote them, so a new provider kind updates this list and
+// the chunks CHECK constraint together (migrations/0003_web_kind.sql).
+var allKinds = []string{"ghost_post", "postiz_post", "web_page"}
+
 // Chunk is one normalized, hash-addressed piece of an item, ready to be
 // written into chunks + chunks_fts (and later embedded into chunks_vec).
 type Chunk struct {
 	ChunkID     string
-	SourceKind  string // 'ghost_post' or 'postiz_post'
+	SourceKind  string // 'ghost_post', 'postiz_post', or 'web_page'
 	SourceID    string // upstream item id (Ghost uuid / Postiz id)
 	SourceURL   string
 	Platform    string // empty for ghost

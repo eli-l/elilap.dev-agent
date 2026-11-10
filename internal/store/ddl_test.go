@@ -53,6 +53,20 @@ func TestSchemaDDL(t *testing.T) {
 		t.Fatalf("seed chunk: %v", err)
 	}
 
+	// Every source kind the schema allows must be writable: ghost_post and
+	// postiz_post from 0001_init.sql, web_page added by 0003_web_kind.sql.
+	// This is what proves the migration's table rebuild widened the CHECK
+	// instead of leaving the constraint behind.
+	webChunk := testChunk("ddl-web-chunk-1")
+	webChunk.SourceKind = "web_page"
+	webChunk.SourceID = "elilap.dev/services"
+	webChunk.Title = "Services page"
+	webChunk.Body = "web provider chunk"
+	if _, _, err := s.ReplaceItemChunks(store.ItemKey{Kind: "web_page", ID: "elilap.dev/services"},
+		[]store.Chunk{webChunk}); err != nil {
+		t.Fatalf("seed web_page chunk (0003 migration not applied?): %v", err)
+	}
+
 	// A second connection to the same file inspects the schema; the store's
 	// pool stays private. It is writable so the dimension check can attempt a
 	// bad insert at the vec0 layer rather than relying on the Go guard.

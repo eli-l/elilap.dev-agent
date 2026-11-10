@@ -74,7 +74,7 @@ Each hit also reports the path-native numbers that produced it:
 |---|---|---|
 | `query` | positional text | required free text |
 | `top_n` | `--top` | result count, default 5, max 50 |
-| `source` | `--source` | `ghost`, `postiz`, or `all` (default) |
+| `source` | `--source` | `ghost`, `postiz`, `web`, or `all` (default) |
 | `platform` | `--platform` (repeatable) | Postiz platform, e.g. `linkedin`; case-insensitive |
 | `after` | `--after` | inclusive lower bound, `YYYY-MM-DD` or RFC3339 |
 | `before` | `--before` | exclusive upper bound; a date-only value covers that day |

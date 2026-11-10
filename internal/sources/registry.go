@@ -3,7 +3,6 @@ package sources
 import (
 	"errors"
 	"fmt"
-	"net/http"
 	"sort"
 
 	"github.com/eli-l/elilap.dev-agent/internal/config"
@@ -16,10 +15,10 @@ import (
 type OptionsParser func(cfg config.Source) (any, error)
 
 // Constructor builds a live provider from one configured source, its parsed
-// options, and the HTTP client ingest uses. Credentials are resolved inside
-// the provider from the source's { env: VAR } references, so no secret ever
-// passes through this package.
-type Constructor func(src config.Source, opts any, hc *http.Client) (shared.Provider, error)
+// options, and the run-wide build context (HTTP client, User-Agent).
+// Credentials are resolved inside the provider from the source's { env: VAR }
+// references, so no secret ever passes through this package.
+type Constructor func(src config.Source, opts any, bc shared.BuildContext) (shared.Provider, error)
 
 // Registry maps a config `type` name to the parser for that provider's
 // options and to its constructor. It is the single place that decides
@@ -78,12 +77,12 @@ func (r *Registry) RegisterConstructor(typeName string, c Constructor) error {
 // Build constructs the live provider for one configured source. An unknown
 // type or a type without a constructor (a declared provider whose client has
 // not landed yet) is an error naming the source.
-func (r *Registry) Build(src config.Source, opts any, hc *http.Client) (shared.Provider, error) {
+func (r *Registry) Build(src config.Source, opts any, bc shared.BuildContext) (shared.Provider, error) {
 	c, ok := r.constructors[src.Type]
 	if !ok {
 		return nil, fmt.Errorf("source %q: provider type %q has no constructor (not implemented)", src.ID, src.Type)
 	}
-	p, err := c(src, opts, hc)
+	p, err := c(src, opts, bc)
 	if err != nil {
 		return nil, fmt.Errorf("source %q: %w", src.ID, err)
 	}

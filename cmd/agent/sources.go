@@ -20,7 +20,7 @@ const defaultConfigPath = "sources.yaml"
 // runSources dispatches the `agent sources` subcommands.
 func runSources(args []string, stdout, stderr io.Writer) int {
 	if len(args) == 0 {
-		fmt.Fprint(stderr, "agent sources: expected a subcommand: list, validate\n")
+		fmt.Fprint(stderr, "agent sources: expected a subcommand: list, validate, inspect\n")
 		return 2
 	}
 	switch args[0] {
@@ -28,8 +28,10 @@ func runSources(args []string, stdout, stderr io.Writer) int {
 		return runSourcesList(args[1:], stdout, stderr)
 	case "validate":
 		return runSourcesValidate(args[1:], stdout, stderr)
+	case "inspect":
+		return runSourcesInspect(args[1:], stdout, stderr)
 	default:
-		fmt.Fprintf(stderr, "agent sources: unknown subcommand %q (expected list or validate)\n", args[0])
+		fmt.Fprintf(stderr, "agent sources: unknown subcommand %q (expected list, validate, or inspect)\n", args[0])
 		return 2
 	}
 }

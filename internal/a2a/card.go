@@ -11,7 +11,7 @@ const SkillID = "grounded-writing-qa"
 
 // SkillDescription is the card's skill copy: it must describe what the loop
 // actually does, including the refusal string and the citation contract.
-const SkillDescription = "Answers questions about Eli Lap's published technical knowledge, engineering experience, experiments, and opinions using only indexed Ghost posts and Postiz cross-posts. Every claim carries a verifiable citation (chunk_id and source_url); when the corpus does not contain the answer the reply is exactly \"" + agentloop.Refusal + "\"."
+const SkillDescription = "Answers questions about Eli Lap's published technical knowledge, engineering experience, experiments, and opinions using only the indexed corpus: Ghost posts, Postiz cross-posts, and the pages of Eli's website. Every claim carries a verifiable citation (chunk_id and source_url); when the corpus does not contain the answer the reply is exactly \"" + agentloop.Refusal + "\"."
 
 // CardURLPath is the endpoint the card's url points at.
 const CardURLPath = "/a2a"

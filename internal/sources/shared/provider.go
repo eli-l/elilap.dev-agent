@@ -2,6 +2,7 @@ package shared
 
 import (
 	"context"
+	"net/http"
 	"time"
 )
 
@@ -24,6 +25,28 @@ type Provider interface {
 	// Fetch returns the full content of one item previously returned by
 	// List.
 	Fetch(ctx context.Context, it Item) (Document, error)
+}
+
+// BuildContext carries the run-wide settings every provider constructor
+// receives. It exists so a constructor can use the shared HTTP client and the
+// configured User-Agent without growing its argument list per feature.
+type BuildContext struct {
+	// HTTPClient is the provider HTTP client for this run; nil means
+	// http.DefaultClient.
+	HTTPClient *http.Client
+	// UserAgent is defaults.user_agent from sources.yaml, empty when the
+	// config declares none.
+	UserAgent string
+}
+
+// Client returns the run's HTTP client. A nil HTTPClient means
+// http.DefaultClient, so a constructor can honour the documented default
+// without every caller remembering to normalize it.
+func (bc BuildContext) Client() *http.Client {
+	if bc.HTTPClient == nil {
+		return http.DefaultClient
+	}
+	return bc.HTTPClient
 }
 
 // Item is a cheap list-level candidate: just enough to decide whether the

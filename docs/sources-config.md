@@ -15,9 +15,10 @@ How providers are declared, how the ingestor decides what to re-fetch, and
 how a full reindex differs from an incremental one. `PLAN.md` §2.6 is the
 normative version; this file is the readable summary.
 
-**Status: shipped.** Both providers, the strict decoder, credential
-resolution, `agent sources list|validate`, and the incremental/full ingest
-modes are in the binary; `docs/runbook.md` has the operator commands.
+**Status: shipped.** Three providers (`ghost`, `postiz`, `web`), the strict
+decoder, credential resolution, `agent sources list|validate|inspect`, and the
+incremental/full ingest modes are in the binary; `docs/runbook.md` has the
+operator commands.
 
 ## The config file: `sources.yaml`
 
@@ -47,13 +48,24 @@ sources:
       api_url: { env: POSTIZ_API_URL }
       api_key:  { env: POSTIZ_API_KEY }
     options: { platforms: [instagram, linkedin, x], include_scheduled: false }
+
+  # A public site: no credentials, the URL is configuration.
+  - id: website
+    type: web
+    enabled: true
+    options:
+      site_url: https://elilap.dev
+      sitemap: true
+      strategy: elilap
+      include_paths: ["^/$", "^/case-study/", "^/services$"]
+      exclude_paths: ["^/blog$", "^/tag/"]
 ```
 
 | key | meaning |
 |---|---|
 | `version` | schema version; an unknown version is an error |
 | `id` | stable name for this provider instance (the ledger key) |
-| `type` | which provider implementation to construct (`ghost`, `postiz`) |
+| `type` | which provider implementation to construct (`ghost`, `postiz`, `web`) |
 | `enabled` | `false` skips the provider without deleting its declaration |
 | `credentials` | `{ env: VAR }` references only - values are read from the environment |
 | `options` | provider-specific settings, validated against that provider's schema |
@@ -62,7 +74,8 @@ Rules: the YAML is decoded **strictly** (`KnownFields(true)`), so an unknown
 key is a hard error rather than a silently ignored setting.
 `sources validate` warns about credential variables that are unset or blank and
 exits 0 by default; `sources validate --strict` treats them as errors and
-exits 1. Blank counts as missing because a `.env` copied from `example.env`
+exits 1. A `web` source declares no credentials at all, so it never contributes
+to that warning list. Blank counts as missing because a `.env` copied from `example.env`
 contains the credential names with empty values.
 `sources list` reports set/unset state and exits 0 for missing credentials;
 `--strict` is a validate-only flag. Credential values are never printed.
@@ -94,8 +107,12 @@ incremental run cheap. A registry maps the config `type` to an options
 parser and a constructor; an unknown `type` or invalid options is a startup
 error. A type may have options but no constructor yet (a provider whose
 client has not landed): ingest reports it as not implemented instead of
-silently importing nothing. Both built-ins, `ghost` and `postiz`, are
-implemented.
+silently importing nothing. All three built-ins, `ghost`, `postiz`, and `web`,
+are implemented. Constructors receive a `shared.BuildContext` (the run's HTTP
+client and `defaults.user_agent`) rather than a bare client, so a provider that
+sends a User-Agent gets the configured one; `BuildContext.Client()` resolves a
+nil client to `http.DefaultClient`, which is the documented zero-value
+contract.
 
 The Ghost provider accepts both credential shapes: an Admin key
 (`<id>:<secret>`) uses the JWT-authenticated Admin API, while a bare key uses
@@ -130,6 +147,18 @@ same run, since that is the only place the content exists. Cross-posts chunk
 at 320 tokens with no overlap, independent of the configured defaults. See
 [Postiz API shape](postiz.md) for the captured requests and fields.
 
+The web provider is the generic HTML importer: `List` discovers pages from
+`sitemap.xml` (including one `sitemapindex` level), the conventional feeds,
+seed URLs, and an optional bounded crawl; `Fetch` extracts one page with a
+named strategy (`auto`, `article`, `selectors`, `body`, or a registered Go
+adapter). It indexes `source_kind = web_page`, obeys `/robots.txt` and a
+politeness delay, pins redirects to the configured host, skips `noindex` and
+content-free pages with a warning, and refuses any incomplete or empty
+unbounded listing (`max_pages`, an oversized `sitemapindex`, a failed sitemap,
+feed, or crawl), because the ingestor deletes drift from that listing. Strategies, adapters, and the
+`agent sources inspect` authoring loop are documented in
+[HTML website provider and per-site extraction strategies](/web.md).
+
 ## The ledger
 
 `migrations/0002_state.sql` adds two tables:
@@ -139,6 +168,10 @@ at 320 tokens with no overlap, independent of the configured defaults. See
   resolved provider config).
 * `source_items` - one row per upstream item: `content_hash`, `etag`,
   `last_modified`, `first_seen_at`, `last_seen_at`, and `seen_run_id`.
+
+An item with neither an `etag` nor a `last_modified` (a web page whose sitemap
+carries no `lastmod`) is re-fetched every run: the empty fingerprint means "no
+cheap change signal", not "unchanged".
 
 `chunks.source_id` remains the upstream **item id** (Ghost uuid / Postiz
 id), not the config id. `chunk_id = sha256(source_kind|source_id|chunk_seq)`
@@ -189,6 +222,8 @@ agent stats                       # chunk, FTS, vector and ledger counts
 agent sources list                # enabled/disabled + resolved options (no secrets)
 agent sources validate            # validate config/options; missing credentials warn
 agent sources validate --strict   # missing credentials fail (exit 1)
+agent sources inspect --source website --url https://elilap.dev/services
+agent sources inspect --url https://elilap.dev/services --format json
 ```
 
 Each run prints one summary line per source, in the configured output format
@@ -214,6 +249,8 @@ and never writes; in JSON it is the same object with `"dry_run": true` and
 
 ## Deferred
 
-The website (HTML) is not a provider yet - deferred 2026-10-23. When it
-returns it is one `sources.yaml` entry plus one package, because the
-registry is the seam.
+None for the three providers. The website provider landed on 2026-11-09 - the
+registry seam turned out to cost one package, one migration for the new
+`web_page` kind, and one `sources.yaml` entry, as planned. Sites that need a
+browser, pagination, or authenticated content remain out of scope
+([HTML website provider](/web.md)).

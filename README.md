@@ -5,20 +5,23 @@ experience, experiments, and opinions. It answers questions using published
 sources and provides verifiable citations.
 
 Local-first **agentic A2A connector** over that writing.
-Indexes Ghost posts (blog) + Postiz cross-posts (social), answers questions
-from them with its own grounded tool-calling loop — retrieval is the loop's
+Indexes Ghost posts (blog) + Postiz cross-posts (social) + the public
+website's HTML pages, answers questions from them with its own grounded
+tool-calling loop — retrieval is the loop's
 internal `search_writing` tool — and exposes that agent to remote peers
 over A2A v0.3.
 
 This repo is **infrastructure**, not the writing itself. The corpus lives
-upstream on Ghost and Postiz; the index is a derived artifact you can delete
+upstream on Ghost and Postiz plus the public website; the index is a derived
+artifact you can delete
 and rebuild at any time.
 
 ## Status
 
 Phases 1, 2, and the A2A half of Phase 4 are implemented and runnable on a
-Go host: ingestion, resumable embeddings, hybrid retrieval (BM25 + vectors,
-RRF), the grounded tool-calling loop (`agent ask`), the dev JSON paths
+Go host: ingestion (Ghost, Postiz, and the generic HTML `web` provider with
+per-site extraction strategies), resumable embeddings, hybrid retrieval
+(BM25 + vectors, RRF), the grounded tool-calling loop (`agent ask`), the dev JSON paths
 (`/v1/retrieve`, `/v1/ask`), and the A2A surface — agent card discovery,
 `message/send`, bearer tokens, a per-token rate limit, and the audit stream.
 Phase 3 operations are still open (the container path, `ingest --watch`,
@@ -30,8 +33,8 @@ Phase 3 operations are still open (the container path, `ingest --watch`,
 
 ```
 Ghost (blog)      ─┐
-                   ├─►  ingest  ─►  SQLite + sqlite-vec ─►  search_writing
-Postiz (social)   ─┘        ▲                                (hybrid RRF)
+Postiz (social)   ─┼─►  ingest  ─►  SQLite + sqlite-vec ─►  search_writing
+Website (HTML)    ─┘        ▲                                (hybrid RRF)
                             │                                     ▲
                      chat + embeddings                            │ tool call
                             │                                     │

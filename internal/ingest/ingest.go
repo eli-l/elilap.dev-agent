@@ -53,6 +53,9 @@ type Options struct {
 	Chunking shared.ChunkerConfig
 	// HTTPClient is shared by every provider; nil means http.DefaultClient.
 	HTTPClient *http.Client
+	// UserAgent is defaults.user_agent from sources.yaml, passed to providers
+	// that talk to plain HTTP (the web provider sends it on every request).
+	UserAgent string
 	// Now is overridable in tests; nil means time.Now.
 	Now func() time.Time
 }
@@ -147,7 +150,10 @@ func (r *Runner) runSource(ctx context.Context, src config.Source, opts Options)
 	if err != nil {
 		return res, err
 	}
-	provider, err := r.Registry.Build(src, parsed, opts.HTTPClient)
+	provider, err := r.Registry.Build(src, parsed, shared.BuildContext{
+		HTTPClient: opts.HTTPClient,
+		UserAgent:  opts.UserAgent,
+	})
 	if err != nil {
 		return res, err
 	}
@@ -361,6 +367,8 @@ func kindFor(typeName string) (string, error) {
 		return "ghost_post", nil
 	case "postiz":
 		return "postiz_post", nil
+	case "web":
+		return "web_page", nil
 	default:
 		return "", fmt.Errorf("provider type %q has no source_kind", typeName)
 	}

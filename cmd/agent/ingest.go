@@ -71,6 +71,7 @@ func runIngest(args []string, dbPath string, stdout, stderr io.Writer) int {
 			OverlapTokens: cfg.Defaults.Chunking.OverlapTokens,
 		},
 		HTTPClient: shared.NewHTTPClient(shared.DefaultHTTPTimeout),
+		UserAgent:  cfg.Defaults.UserAgent,
 	}
 	if *sinceRaw != "" {
 		since, err := ingest.ParseSince(*sinceRaw, time.Now())

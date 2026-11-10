@@ -33,11 +33,25 @@ Every command below is read-only over the index except `ingest` and `embed`.
 ## Rebuild the index
 
 ```bash
-./agent ingest                 # Ghost + Postiz, incremental by default
+./agent ingest                 # Ghost + Postiz + website, incremental by default
 ./agent ingest --full          # re-fetch and re-chunk everything
+./agent ingest --source website   # only the HTML site pages
 ./agent embed --progress       # vectorize pending chunks; resumable
 ./agent stats                  # chunks / fts rows / vec rows / embedded / sources
 ```
+
+The `website` source indexes `https://elilap.dev` as HTML pages (services,
+case studies, AI/project pages) while the Ghost source keeps owning
+`read.elilap.dev` posts. Its extraction is configuration: when the site's
+layout changes, re-derive it with
+
+```bash
+./agent sources inspect --source website --url https://elilap.dev/services
+```
+
+and update `options.strategy`/`options.selectors` (or the `elilap` adapter in
+`internal/sources/web`) if the suggestion changed. See
+[HTML website provider and per-site extraction strategies](/web.md).
 
 `chunks`, `chunks_fts`, and `chunks_vec` should report the same count, and
 `embedded` should equal `vec rows`. A second `./agent ingest` is a near no-op.

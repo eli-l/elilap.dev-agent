@@ -1,6 +1,6 @@
 # AGENTS.md
 
-Local-first **agentic A2A connector** over Eli's published writing: ingests Ghost posts + Postiz cross-posts into a single-file SQLite index (FTS5 + sqlite-vec), and runs its own grounded tool-calling loop (one internal tool, `search_writing`, over `internal/retrieval`) exposed through one Go binary — CLI plus a read-only HTTP surface (`/v1/retrieve`, `/v1/ask`, and A2A `message/send` + agent card). **Status: Phase 2 + A2A v0.3** — `ingest`, `embed`, `query`, `ask`, `stats`, `serve`, and `tokens` are implemented; `internal/retrieval` (hybrid BM25 + vec + RRF) and `internal/agentloop` (one grounded tool, citation-or-refusal) are live. `agent serve` exposes the agent over A2A v0.3 (`message/send` + agent card, bearer tokens, per-token rate limit, audit stream) plus the `/v1/retrieve` and `/v1/ask` JSON paths. Phase 3 operations (container, watch, backup, full eval runs) remain. `PLAN.md` is the source of truth for scope and sequencing; read it before adding code.
+Local-first **agentic A2A connector** over Eli's published writing: ingests Ghost posts + Postiz cross-posts + the public website's HTML pages into a single-file SQLite index (FTS5 + sqlite-vec), and runs its own grounded tool-calling loop (one internal tool, `search_writing`, over `internal/retrieval`) exposed through one Go binary — CLI plus a read-only HTTP surface (`/v1/retrieve`, `/v1/ask`, and A2A `message/send` + agent card). **Status: Phase 2 + A2A v0.3** — `ingest`, `embed`, `query`, `ask`, `stats`, `serve`, and `tokens` are implemented; `internal/retrieval` (hybrid BM25 + vec + RRF) and `internal/agentloop` (one grounded tool, citation-or-refusal) are live. `agent serve` exposes the agent over A2A v0.3 (`message/send` + agent card, bearer tokens, per-token rate limit, audit stream) plus the `/v1/retrieve` and `/v1/ask` JSON paths. Phase 3 operations (container, watch, backup, full eval runs) remain. `PLAN.md` is the source of truth for scope and sequencing; read it before adding code.
 
 ## Commands
 
@@ -11,6 +11,7 @@ go test -tags sqlite_fts5 ./...  # tests (use fixtures, not live APIs; FTS5 need
 gofmt -l cmd internal migrations   # must print nothing (vendor/ is upstream code, not ours)
 go test -tags sqlite_fts5 ./internal/store -run TestSchemaDDL  # schema smoke check: tables, FTS5 join-back, vec0 width + KNN
 go run ./cmd/agent sources validate   # strict-parse sources.yaml (no credentials needed)
+go run ./cmd/agent sources inspect --source website --url https://elilap.dev/services  # how a page would be extracted
 go run ./cmd/agent tokens list        # A2A token ids only (never values)
 cd evals && uv sync           # Python 3.12 venv for the Ragas harness
 cd evals && uv run python test_llm.py   # endpoint smoke test, exit 0 = ok
@@ -52,9 +53,13 @@ Workflow for any docs/ change:
   startup (`LoadDotEnv`), `envconfig` decodes the runtime `Config`, and
   `Lookup` is the single accessor for the dynamically named credentials that
   `sources.yaml` references.
-- `internal/sources/{provider.go,registry.go,ghost,postiz,shared}` — the
+- `internal/sources/{provider.go,registry.go,ghost,postiz,web,shared}` — the
   `Provider` interface, the `type → constructor` registry, upstream clients,
-  shared chunker/hash.
+  shared chunker/hash. `web` is the generic HTML provider: sitemap/feed/seed
+  discovery, robots.txt + delay politeness, the
+  `auto`/`article`/`selectors`/`body` strategy chain, and per-host Go
+  `Adapter`s (`adapter_elilap.go` is the reference); `inspect.go` powers
+  `agent sources inspect`.
 - `internal/store` — SQLite, migration runner, FTS5/vec glue.
 - `internal/embed`, `internal/retrieval`, `internal/llm` — embedding, hybrid RRF retrieval (the `search_writing` tool's engine), OpenAI-compatible HTTP connector.
 - `internal/agentloop` — the in-service loop: tool schema, grounded prompt, iteration/token budgets, citation-or-refusal; shared by `agent ask`, `/v1/ask`, and the A2A endpoint.
@@ -97,17 +102,30 @@ Workflow for any docs/ change:
   dynamic names are the `{ env: VAR }` credentials in `sources.yaml`, read
   through `envcfg.Lookup`. YAML-file config (`sources.yaml`) stays on
   `gopkg.in/yaml.v3` with `KnownFields(true)`.
+- The `web` provider keeps **extraction deterministic**: what to index is
+  `options:` (site_url, discovery, path filters, strategy, selectors), and a
+  layout the generic passes cannot read is a named Go `Adapter` registered in
+  `DefaultAdapters()`. `agent sources inspect` is the authoring seam — it prints
+  candidate regions, usable selectors, metadata, and a suggestion for a human
+  or an LLM to choose from **offline**; ingest never calls a model to decide
+  how to parse. Adapters choose a content node and overrides only; chrome
+  removal, Markdown rendering, and metadata stay in the shared extractor.
+  A page's item id is `host+path` and its kind is `web_page`.
+- Adding a `source_kind` means three files in one change: the new
+  `migrations/` file (SQLite needs a table rebuild to alter the CHECK),
+  `store.allKinds`, and `ingest.kindFor`. `retrieval`'s `source` filter and
+  `docs/` follow.
 - The LLM connector is plain `net/http` against an OpenAI-compatible API — no LLM SDKs. Tool-calling rides on the same connector: chat requests carry the `search_writing` tool definition and the client round-trips the model's tool calls.
 - The A2A surface stays a **thin binding over `internal/agentloop`**: one `message/send`, one synchronous grounded `Message` with citation metadata, no task store, no streaming. Bearer tokens are the only auth; a non-loopback bind requires `--bind-public`, at least one token, and an explicit `AGENT_A2A_PUBLIC_URL` (the card never trusts a request `Host`). The card is public, and the token store latches secured so emptying the file cannot fail open. Tokens are compared in constant time and never logged; the `audit` module records a question fingerprint and the outcome but not the question text, answer, prompt, or excerpts, and is pinned to `info` unless logging is disabled (`docs/a2a.md`).
 - The DB is derived: deleting `index.db` and re-running ingest/embed must always reproduce it. Never commit it.
-- Timestamps are ISO-8601 UTC; ids are sha256-based hex (`chunk_id = sha256(source_kind|source_id|chunk_seq)`). Here `source_id` is the upstream item id (Ghost uuid / Postiz id), not the config id; `chunk_seq` is the ordinal within that item across all its platform chunks.
+- Timestamps are ISO-8601 UTC; ids are sha256-based hex (`chunk_id = sha256(source_kind|source_id|chunk_seq)`). Here `source_id` is the upstream item id (Ghost uuid / Postiz id / web `host+path`), not the config id; `chunk_seq` is the ordinal within that item across all its platform chunks.
 - Dependencies are **vendored locally but never committed**: `vendor/` is gitignored and must exist on disk — run `go mod vendor` after any `go.mod`/`go.sum` change and build with `-mod=vendor` (the sandboxed worker has no network and its module cache is hidden). `go.mod`/`go.sum` are the source of truth for versions.
 - Keep `chunks` and `chunks_fts` writes in one transaction.
 - **A debug run is the supported RAG trace.** With `--log-level debug` / `AGENT_LOG_LEVEL=debug`, `internal/agentloop` logs on the `agent` module the chat request header, one line per message the model sees, the server-reported model id and reply, the tool call with its full excerpt payload, and the enforced answer; `internal/retrieval` logs on the `db` module the query, the generated FTS5 query, per-path candidate counts, and each ranked hit with `score`/`distance`/`bm25`/`cosine`. Those payload lines exist only at `debug`: `info` and above still log no prompts, excerpts, or bodies, and the always-on `audit` module never does (`docs/logging.md`).
 
 ## Avoid
 
-- Never write to Ghost or Postiz — this repo is strictly read-only against upstream sources.
+- Never write to Ghost, Postiz, or a fetched website — this repo is strictly read-only against upstream sources. The web provider is for sites you control or may index: robots.txt is obeyed by default, and there is no browser/JS rendering.
 - Never put credential values in `sources.yaml` or `example.env` — reference
   env vars only, and keep the template's secret values empty.
 - Never add an environment variable without listing it in `example.env`

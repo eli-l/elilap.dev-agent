@@ -399,6 +399,25 @@ func TestSearchToolSchema(t *testing.T) {
 	if schema.Type != "object" || len(schema.Properties) != 7 || len(schema.Required) != 1 || schema.Required[0] != "query" {
 		t.Errorf("schema = %+v", schema)
 	}
+	// Every retrieval source the CLI accepts must be reachable through the
+	// tool, or the loop silently cannot filter by that corpus.
+	var source struct {
+		Enum []string `json:"enum"`
+	}
+	if err := json.Unmarshal(schema.Properties["source"], &source); err != nil {
+		t.Fatalf("source property: %v", err)
+	}
+	for _, want := range []string{"all", "ghost", "postiz", "web"} {
+		found := false
+		for _, got := range source.Enum {
+			if got == want {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("source enum = %v, want it to contain %q", source.Enum, want)
+		}
+	}
 }
 
 // TestRunAcceptsHashQuotedFromExcerpt proves a 64-hex digest that appears

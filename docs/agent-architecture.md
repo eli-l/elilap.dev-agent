@@ -208,7 +208,8 @@ A2A v0.3 JSON-RPC binding, exposing the *agent*:
 
 * Moved: the answer loop (which used to be "the caller's problem") now
   lives here; the peer-facing product is the agent, not bare retrieval.
-* Unchanged: ingest stays strictly read-only against Ghost and Postiz;
+* Unchanged: ingest stays strictly read-only against Ghost, Postiz, and the
+  website it reads as HTML;
   the index stays a derived, rebuildable SQLite file; the API exposes no
   writes; generation beyond the grounded loop stays a non-goal, as does
   multi-agent orchestration inside this service.

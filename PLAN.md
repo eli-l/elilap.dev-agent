@@ -4,7 +4,12 @@ Build plan for a local-first RAG agent over Eli's published writing.
 This document is the source of truth for scope, sequencing, and exit criteria.
 Update it as we learn.
 
-**Last refined**: 2026-11-06 (A2A review hardening). Phase 2 code is complete
+**Last refined**: 2026-11-09 (website provider). The HTML `web` provider
+landed (Decision 22): `elilap.dev` pages are indexed as `web_page` chunks
+alongside the Ghost posts, with a named extraction strategy per source and
+`agent sources inspect` for authoring it; `migrations/0003_web_kind.sql` widens
+the `source_kind` CHECK. Previous refinement: 2026-11-06 (A2A review
+hardening). Phase 2 code is complete
 and verified; two exit criteria are still open — **Ragas** has only single-row
 smoke runs against its 15 answer + 14 refusal cases, and **promptfoo** has no
 captured report. **Phase 4's A2A surface shipped on 2026-11-05, ahead of
@@ -83,9 +88,10 @@ original schema.
 * Real-time streaming indexes. Hourly polling is fine.
 * Model serving at scale (multi-GPU, clustering) — the single self-hosted
   LocalAI instance is the ceiling; this repo never operates a model server.
-* Crawling Eli's website as a source — **deferred 2026-10-23**. The
-  provider registry (§2.6) is the seam that makes adding it a config change
-  later, so deferring costs nothing but one package.
+* Browser-rendered crawling. The HTML provider (§2.6, Decision 22) shipped on
+  2026-11-09, but it reads server-rendered HTML only: a page whose content
+  exists after hydration stays out of scope, and so do pagination following
+  and authenticated sections.
 
 ---
 
@@ -97,7 +103,7 @@ original schema.
 | 2 | Index store | SQLite + `sqlite-vec` (one file) | Corpus ≤1,500 chunks — service overkill, file-portable, FTS5 free |
 | 3 | Embedder + chat model | Self-hosted **LocalAI** behind one OpenAI-compatible connector (`/v1/embeddings`, `/v1/chat/completions`); embed model **`embeddinggemma-300m`** (768d, verified 2026-10-23), chat model **`spark-x2.5-4b`** | Self-hosted and environment-independent; swapping providers = changing `LOCALAI_BASE_URL` |
 | 4 | Retrieval | Hybrid: FTS5 BM25 + vec cosine, RRF merge | Neither alone is good enough on mixed prose+social |
-| 5 | Repos / sources | Ghost Admin API + Postiz HTTP API | Live, queryable, idempotent on `(source_kind, source_id)` |
+| 5 | Repos / sources | Ghost Admin API + Postiz HTTP API + the public website over HTML (Decision 22) | Live, queryable, idempotent on `(source_kind, source_id)` |
 | 2b | Go driver | CGO: `mattn/go-sqlite3` (`-tags sqlite_fts5`) + sqlite-vec Go bindings (asg017), pinned | FTS5 + vec0 in one DB handle; exact binding import path confirmed in the Phase 1 driver spike, not before |
 | 6 | Repo location | `/Users/eli/projects/elilap.dev-agent` (this host); remote `git@github.com:eli-l/elilap.dev-agent.git` — both verified 2026-10-21 | Previous plan revision assumed a different machine (`/home/openbot/...`, systemd); corrected |
 | 7 | CLI surface | One binary `agent`, subcommands `ingest`, `embed`, `query`, `ask`, `stats`, `serve`, `tokens` | Matches `./agent ingest` muscle memory; the five separate `cmd/*/main.go` stubs collapsed into `cmd/agent/` in Phase 1 |
@@ -115,6 +121,7 @@ original schema.
 | 19 | Reasoning budget | `reasoning_effort` pinned per call kind in the request (2026-11-03): `"none"` for the key-extraction call, `"low"` for every call made with excerpts in hand and for the forced no-tools answer | Unset means the backend's model config, which is unbounded on these templates: a two-sentence question burned all 4,096 completion tokens on `reasoning`, returned empty `content` with `finish_reason=length`, and the finalizer turned that into a refusal |
 | 20 | A2A statelessness | One synchronous agent `Message` per `message/send` (2026-11-05): no task store, no streaming, no resumption. `tasks/get`/`tasks/cancel` return `-32001 TaskNotFound`; `message/stream` is `-32004` | A peer gets a grounded answer in one round trip, and the service does not invent task state it cannot resume; the card advertises `streaming: false` so the contract is honest |
 | 21 | A2A credentials | Bearer tokens from `AGENT_A2A_TOKENS` (process-start pairs) plus a re-read `0600` `AGENT_A2A_TOKENS_FILE`; `agent tokens add`, `revoke`, and `list`; 30 model-touching requests/min per token via `--rate-limit`, failed auth capped via `--auth-limit`; the store latches secured once any token existed (2026-11-05) | Rotation without restart, a token id in the audit record, and a bucket that protects the single model host; a file-based store beats an env-only list for revocation |
+| 22 | Website source | A generic `web` provider (`internal/sources/web`) indexes public HTML pages: sitemap/feed/seed discovery with path filters, robots.txt + delay politeness, and a **named strategy** per source (`auto`, `article`, `selectors`, `body`, or a Go `Adapter`). Items are `source_kind = web_page` with id `host+path`; `elilap.dev` uses the `elilap` adapter and the Ghost source keeps owning `read.elilap.dev` posts. Shipped 2026-11-09 | One provider reads any server-rendered site; a layout the generic passes cannot read is one small Go adapter, and the strategy choice is made offline with `agent sources inspect` instead of by a model at ingest time, so every run stays deterministic |
 
 ### 1.5 Verified environment (audited 2026-10-21; Go floor re-verified 2026-10-23; A2A path verified 2026-11-05)
 
@@ -353,6 +360,26 @@ type Provider interface {
 `List` is cheap (an Admin API list); `Fetch` is expensive (full body).
 Providers are constructed from the registry by config `type`; an unknown
 `type` or invalid options is a startup error, never a runtime surprise.
+Constructors receive a `shared.BuildContext` (HTTP client + `defaults.user_agent`)
+so no provider has to grow its signature to learn the run's settings.
+
+**The website provider** (Decision 22, 2026-11-09) is the generic HTML
+importer. A `type: web` source declares only `options` - `site_url`, discovery
+switches (`sitemap`, `feeds`, `start_urls`, `crawl_depth`), path
+`include_paths`/`exclude_paths`, `max_pages`, politeness (`delay_ms`,
+`respect_robots`), and the extraction knobs (`strategy`, `selectors`,
+`author`, `min_chars`). It has no credentials because a public URL is
+configuration, not a secret. `List` merges sitemap (one `sitemapindex` level),
+feeds, seeds, and an optional crawl; a partial discovery failure fails the
+listing rather than letting drift deletion drop pages, and an unbounded
+listing refuses to truncate at `max_pages`. `Fetch` runs the named strategy
+(`auto` = configured selector -> matching Adapter -> `<article>`/`<main>`/body
+chain; `selectors`; `body`; or `<adapter>`), removes chrome, reads
+title/author/date/tags from the DOM and JSON-LD, and renders Markdown through
+the shared renderer. `noindex` pages and content-free pages record a ledger row
+and write no chunks. Items are `source_kind = web_page` with id `host+path`;
+`retrieval` accepts `source=web`. Strategies and the authoring loop are in
+`docs/web.md`.
 
 **The ledger** — `migrations/0002_state.sql`:
 
@@ -560,6 +587,13 @@ intentionally a separate command.
       `store.Open`, then asserts the required tables, FTS5 stored-column
       read-back plus `chunk_id` join-back, and a vec0 KNN round-trip that
       rejects a vector of the wrong width.
+- [x] `internal/sources/web`: the generic HTML provider (Decision 22) -
+      sitemap/feed/seed discovery, robots.txt + politeness, `auto`/`article`/
+      `selectors`/`body` strategies plus per-host Go adapters,
+      `migrations/0003_web_kind.sql` for `web_page`, and
+      `agent sources inspect`. **Done 2026-11-09**: 12 `elilap.dev` pages ->
+      56 chunks live, one no-op incremental rerun, `/cases` skipped as a
+      content-free 200. Docs: [HTML website provider](/docs/web.md).
 - [x] Source clients (`internal/sources/ghost`, `postiz`) + shared chunker;
       unit tests against captured fixture JSON from Phase 0, so chunker
       logic is testable without live credentials.
@@ -582,12 +616,14 @@ intentionally a separate command.
       the eval, and troubleshooting.
 - [x] End-of-phase commit + push.
 
-**Schema** (`migrations/0001_init.sql`, synced with this file):
+**Schema** (`migrations/0001_init.sql`, synced with this file; the
+`source_kind` CHECK widened to `web_page` in `migrations/0003_web_kind.sql`,
+which rebuilds the table because SQLite cannot alter a CHECK in place):
 
 ```sql
 CREATE TABLE chunks (
   chunk_id       TEXT PRIMARY KEY,           -- sha256(source_kind|source_id|chunk_seq), hex
-  source_kind    TEXT NOT NULL CHECK (source_kind IN ('ghost_post','postiz_post')),
+  source_kind    TEXT NOT NULL CHECK (source_kind IN ('ghost_post','postiz_post','web_page')),
   source_id      TEXT NOT NULL,              -- upstream item id (Ghost uuid / Postiz id)
   source_url     TEXT,
   platform       TEXT,                       -- null for ghost

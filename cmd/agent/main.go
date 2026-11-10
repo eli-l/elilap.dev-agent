@@ -141,6 +141,7 @@ func usage(w io.Writer) {
 Commands:
   sources list       list configured providers and their resolved options
   sources validate   strictly validate sources.yaml and provider options
+  sources inspect    report how a web page would be extracted (strategy authoring)
   ingest             import configured sources into the index
   embed              embed indexed chunks
   query              retrieve chunks for a query (hybrid, no LLM)
@@ -155,6 +156,7 @@ Missing credential variables warn in sources validate; --strict makes them error
 Run "agent serve --help" for the server flags (default 127.0.0.1:8080; loopback
 is token-less, a public bind needs a token from "agent tokens add").
 Run "agent tokens add --help" for token issuance, and "agent sources list
---help" or "agent sources validate --help" for source flags.
+--help", "agent sources validate --help", or "agent sources inspect --help"
+for source flags.
 `)
 }

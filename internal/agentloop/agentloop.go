@@ -195,7 +195,7 @@ func SearchTool() llm.Tool {
   "properties": {
     "query": {"type": "string", "description": "2-6 distinctive keywords extracted from the question: names, technical nouns, and identifiers copied verbatim. Not the question restated as a sentence."},
     "top_n": {"type": "integer", "minimum": 1, "maximum": 50, "description": "number of chunks to return (default 5)"},
-    "source": {"type": "string", "enum": ["all", "ghost", "postiz"], "description": "restrict to long-form posts or cross-posts"},
+    "source": {"type": "string", "enum": ["all", "ghost", "postiz", "web"], "description": "restrict to long-form posts, cross-posts, or website pages"},
     "platform": {"type": "array", "items": {"type": "string"}, "description": "restrict Postiz cross-posts to platforms such as linkedin"},
     "after": {"type": "string", "description": "inclusive lower bound, YYYY-MM-DD or RFC3339"},
     "before": {"type": "string", "description": "exclusive upper bound, YYYY-MM-DD or RFC3339"},

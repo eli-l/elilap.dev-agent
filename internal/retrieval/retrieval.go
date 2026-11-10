@@ -70,7 +70,7 @@ type Query struct {
 	Text string
 	// TopN is the maximum number of hits; zero means DefaultTopN.
 	TopN int
-	// Source is "all", "ghost", or "postiz"; empty means all.
+	// Source is "all", "ghost", "postiz", or "web"; empty means all.
 	Source string
 	// Platforms restricts Postiz cross-posts (for example "linkedin").
 	Platforms []string
@@ -379,8 +379,10 @@ func buildFilter(q Query) (store.Filter, error) {
 		filter.SourceKinds = []string{"ghost_post"}
 	case "postiz", "postiz_post":
 		filter.SourceKinds = []string{"postiz_post"}
+	case "web", "web_page":
+		filter.SourceKinds = []string{"web_page"}
 	default:
-		return filter, fmt.Errorf("%w: source must be ghost, postiz, or all, got %q",
+		return filter, fmt.Errorf("%w: source must be ghost, postiz, web, or all, got %q",
 			ErrInvalidQuery, q.Source)
 	}
 

@@ -56,7 +56,7 @@ func NewProvider(opts *Options, apiURL, apiKey string, hc *http.Client) (*Provid
 
 // NewFromSource is the registry constructor: it resolves the source's
 // credential env references and builds a Provider from parsed options.
-func NewFromSource(src config.Source, opts any, hc *http.Client) (shared.Provider, error) {
+func NewFromSource(src config.Source, opts any, bc shared.BuildContext) (shared.Provider, error) {
 	o, ok := opts.(*Options)
 	if !ok {
 		return nil, fmt.Errorf("ghost: options are %T, want *ghost.Options", opts)
@@ -65,7 +65,7 @@ func NewFromSource(src config.Source, opts any, hc *http.Client) (shared.Provide
 	if err != nil {
 		return nil, err
 	}
-	return NewProvider(o, apiURL, apiKey, hc)
+	return NewProvider(o, apiURL, apiKey, bc.Client())
 }
 
 // Type reports the config type string.

@@ -3,6 +3,7 @@ package sources
 import (
 	"github.com/eli-l/elilap.dev-agent/internal/sources/ghost"
 	"github.com/eli-l/elilap.dev-agent/internal/sources/postiz"
+	"github.com/eli-l/elilap.dev-agent/internal/sources/web"
 )
 
 // RegisterBuiltins registers the options parser and constructor of every
@@ -17,6 +18,7 @@ func RegisterBuiltins(r *Registry) error {
 	}{
 		{typeName: "ghost", parser: ghost.ParseOptions, constructor: ghost.NewFromSource},
 		{typeName: "postiz", parser: postiz.ParseOptions, constructor: postiz.NewFromSource},
+		{typeName: "web", parser: web.ParseOptions, constructor: web.NewFromSource},
 	}
 	for _, b := range builtins {
 		if err := r.Register(b.typeName, b.parser); err != nil {
