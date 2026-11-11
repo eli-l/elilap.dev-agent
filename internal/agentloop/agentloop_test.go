@@ -264,7 +264,7 @@ func TestRunStopsAtIterationBudget(t *testing.T) {
 }
 
 func TestRunTrimsExcerptsToBudget(t *testing.T) {
-	// Ten words, five-token budget: the tool result keeps five words and an
+	// Ten words, five-token budget: the tool result keeps a short prefix and an
 	// ellipsis, and the citation still resolves.
 	body := "one two three four five six seven eight nine ten"
 	chatter := &scriptedChatter{responses: []llm.ChatResponse{

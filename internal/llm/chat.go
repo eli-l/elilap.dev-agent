@@ -15,7 +15,7 @@ import (
 //
 // Requests carry the search_writing tool definition, assistant messages echo
 // the model's tool calls, and tool results come back as role="tool" messages
-// keyed by tool_call_id. spark-x2.5-4b is a reasoning model, so MaxTokens must
+// keyed by tool_call_id. Spark-X2.6-4B-q8_0 is a reasoning model, so MaxTokens must
 // budget for reasoning tokens as well as the visible answer.
 type ChatRequest struct {
 	Model    string        `json:"model"`

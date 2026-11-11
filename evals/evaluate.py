@@ -49,6 +49,16 @@ DEFAULT_BASE_URL = "http://localhost:8000/v1"
 DEFAULT_MODEL = "mtplx-qwen36-35b-a3b-optimized-speed"
 DEFAULT_API_KEY = "local"
 
+# Quality gates for the full suite. The defaults are a regression floor for
+# the local 4B baseline; the aspirational target is 0.80 correctness / 0.80
+# faithfulness, enforceable with --min-correctness 0.80 --min-faithfulness
+# 0.80. Rates keep --limit runs meaningful and let one command gate both the
+# 15 answer rows and the 14 refusal rows.
+DEFAULT_MIN_CORRECTNESS = 0.70
+DEFAULT_MIN_FAITHFULNESS = 0.75
+DEFAULT_MIN_CONTEXT_UTILIZATION = 0.80
+DEFAULT_MIN_REFUSAL_DISCIPLINE = 1.00
+
 BASE_URL = os.getenv("EVAL_BASE_URL") or DEFAULT_BASE_URL
 MODEL = os.getenv("EVAL_MODEL") or DEFAULT_MODEL
 API_KEY = os.getenv("EVAL_API_KEY") or DEFAULT_API_KEY
@@ -253,7 +263,14 @@ async def refusal_check(row, rag: AgentRAG | None = None):
 # --- reporting ------------------------------------------------------------
 
 
-def summarize_answers(results) -> int:
+def summarize_answers(
+    results,
+    *,
+    min_correctness: float,
+    min_faithfulness: float,
+    min_context_utilization: float,
+    thresholds: bool,
+) -> int:
     n = len(results)
     if not n:
         print("no rows scored")
@@ -266,27 +283,89 @@ def summarize_answers(results) -> int:
     ]
     passed = sum(1 for r in results if r.get("correctness") == "pass")
     refused = sum(1 for r in results if r.get("refused"))
+    correctness = passed / n
+    faith_mean = sum(faith) / len(faith) if faith else None
+    util_mean = sum(util) / len(util) if util else None
+
+    def status(value: float | None, minimum: float) -> str:
+        return "PASS" if value is not None and value >= minimum else "FAIL"
 
     print(f"\nrows scored        : {n}")
-    print(f"correctness pass   : {passed}/{n}")
+    if thresholds:
+        print(
+            "thresholds         : "
+            f"correctness >= {min_correctness:.0%}, "
+            f"faithfulness >= {min_faithfulness:.2f}, "
+            f"context util. >= {min_context_utilization:.2f}"
+        )
+    else:
+        print("thresholds         : disabled")
+    print(
+        f"correctness pass   : {passed}/{n} ({correctness:.1%})"
+        + (f" {status(correctness, min_correctness)}" if thresholds else "")
+    )
     print(f"refused            : {refused}/{n}")
-    if faith:
-        print(f"faithfulness mean  : {sum(faith) / len(faith):.3f} (n={len(faith)})")
-    if util:
-        print(f"context util. mean : {sum(util) / len(util):.3f} (n={len(util)})")
+    if faith_mean is None:
+        print(
+            "faithfulness mean  : n/a (no non-refused rows)"
+            + (" FAIL" if thresholds else "")
+        )
+    else:
+        print(
+            f"faithfulness mean  : {faith_mean:.3f} (n={len(faith)})"
+            + (f" {status(faith_mean, min_faithfulness)}" if thresholds else "")
+        )
+    if util_mean is None:
+        print(
+            "context util. mean : n/a (no non-refused rows)"
+            + (" FAIL" if thresholds else "")
+        )
+    else:
+        print(
+            f"context util. mean : {util_mean:.3f} (n={len(util)})"
+            + (f" {status(util_mean, min_context_utilization)}" if thresholds else "")
+        )
+
+    if not thresholds:
+        return 0
+    if correctness < min_correctness:
+        return 1
+    if faith_mean is None or faith_mean < min_faithfulness:
+        return 1
+    if util_mean is None or util_mean < min_context_utilization:
+        return 1
     return 0
 
 
-def summarize_refusals(results) -> int:
+def summarize_refusals(
+    results, *, min_refusal_discipline: float, thresholds: bool
+) -> int:
     n = len(results)
     if not n:
         print("no rows scored")
         return 1
     passed = sum(1 for r in results if r.get("refusal_discipline") == "pass")
     exact = sum(1 for r in results if r.get("refused"))
+    discipline = passed / n
     print(f"\nrows scored        : {n}")
-    print(f"refusal discipline : {passed}/{n}")
+    if thresholds:
+        print(
+            "thresholds         : "
+            f"refusal discipline >= {min_refusal_discipline:.0%}"
+        )
+    else:
+        print("thresholds         : disabled")
+    print(
+        f"refusal discipline : {passed}/{n} ({discipline:.1%})"
+        + (
+            f" {'PASS' if discipline >= min_refusal_discipline else 'FAIL'}"
+            if thresholds
+            else ""
+        )
+    )
     print(f"set refused flag   : {exact}/{n}")
+    if thresholds and discipline < min_refusal_discipline:
+        return 1
     return 0
 
 
@@ -305,7 +384,46 @@ async def main() -> int:
         default=DEFAULT_ASK_URL,
         help="POST target when --transport http (default: the eval port, 18080)",
     )
+    parser.add_argument(
+        "--min-correctness",
+        type=float,
+        default=DEFAULT_MIN_CORRECTNESS,
+        help="minimum answer correctness rate (default: %(default)s)",
+    )
+    parser.add_argument(
+        "--min-faithfulness",
+        type=float,
+        default=DEFAULT_MIN_FAITHFULNESS,
+        help="minimum mean faithfulness (default: %(default)s)",
+    )
+    parser.add_argument(
+        "--min-context-utilization",
+        type=float,
+        default=DEFAULT_MIN_CONTEXT_UTILIZATION,
+        help="minimum mean context utilization (default: %(default)s)",
+    )
+    parser.add_argument(
+        "--min-refusal-discipline",
+        type=float,
+        default=DEFAULT_MIN_REFUSAL_DISCIPLINE,
+        help="minimum refusal-discipline rate (default: %(default)s)",
+    )
+    parser.add_argument(
+        "--no-thresholds",
+        action="store_true",
+        help="report metrics only; do not fail on the quality gates (smoke runs)",
+    )
     args = parser.parse_args()
+    for name in (
+        "min_correctness",
+        "min_faithfulness",
+        "min_context_utilization",
+        "min_refusal_discipline",
+    ):
+        value = getattr(args, name)
+        if not 0.0 <= value <= 1.0:
+            parser.error(f"--{name.replace('_', '-')} must be between 0 and 1")
+    thresholds = not args.no_thresholds
 
     rag = AgentRAG(transport=args.transport, ask_url=args.ask_url)
     failed = 0
@@ -318,7 +436,13 @@ async def main() -> int:
         if len(results) != len(dataset):
             print(f"only {len(results)}/{len(dataset)} rows scored")
             failed = 1
-        failed |= summarize_answers(results)
+        failed |= summarize_answers(
+            results,
+            min_correctness=args.min_correctness,
+            min_faithfulness=args.min_faithfulness,
+            min_context_utilization=args.min_context_utilization,
+            thresholds=thresholds,
+        )
 
     if args.kind in {"refusals", "both"}:
         rows = refusal_rows()[: args.limit or None]
@@ -328,7 +452,11 @@ async def main() -> int:
         if len(results) != len(dataset):
             print(f"only {len(results)}/{len(dataset)} rows scored")
             failed = 1
-        failed |= summarize_refusals(results)
+        failed |= summarize_refusals(
+            results,
+            min_refusal_discipline=args.min_refusal_discipline,
+            thresholds=thresholds,
+        )
 
     print(f"\nresults: {OUTPUT_DIR / 'experiments'}")
     return 1 if failed else 0

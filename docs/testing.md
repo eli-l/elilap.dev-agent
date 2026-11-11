@@ -105,10 +105,12 @@ them.
 
 **Where the reports go**: `evals/output/` — `datasets/*.csv` (the rows) and
 `experiments/*.csv` (one row per question with every metric), plus any trace
-files. It is gitignored; `.gitkeep` keeps the directory. The exit status is
-about completeness (all rows scored, transport working), not a quality
-threshold — read the printed `correctness pass`, `faithfulness mean`,
-`context util. mean`, and `refusal discipline` numbers.
+files. It is gitignored; `.gitkeep` keeps the directory. The exit status fails
+on incomplete rows and on any missed quality gate: by default correctness
+≥ 70%, faithfulness ≥ 0.75, context utilization ≥ 0.80, and refusal
+discipline 100%. The stricter 80%/0.80 target is available with
+`--min-correctness 0.80 --min-faithfulness 0.80`; the printed metrics are
+always the detail.
 
 ## promptfoo — adversarial behaviour
 

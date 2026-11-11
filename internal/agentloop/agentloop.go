@@ -16,10 +16,12 @@ import (
 	"regexp"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/eli-l/elilap.dev-agent/internal/llm"
 	"github.com/eli-l/elilap.dev-agent/internal/logging"
 	"github.com/eli-l/elilap.dev-agent/internal/retrieval"
+	"github.com/eli-l/elilap.dev-agent/internal/sources/shared"
 	"github.com/rs/zerolog"
 )
 
@@ -40,14 +42,18 @@ const (
 	// DefaultMaxIterations bounds tool-executing rounds.
 	DefaultMaxIterations = 3
 	// DefaultExcerptTokens bounds the total excerpt text handed to the model.
-	DefaultExcerptTokens = 4000
+	// The shipped Spark-X2.6-4B-q8_0 model has an 8K context. The 4-chars-per-token
+	// estimate is optimistic for code/JSON excerpts, so this conservative budget
+	// leaves room for the system prompt, tool schema, history, and completion.
+	DefaultExcerptTokens = 3000
 	// DefaultMaxElapsed bounds one answer's wall-clock time. It matches the
 	// CLI and dev-server budget (90s), so a caller relying on the default does
 	// not get a shorter budget than the documented policy.
 	DefaultMaxElapsed = 90 * time.Second
-	// DefaultMaxTokens is the completion budget. spark-x2.5-4b reasons first,
-	// so this covers reasoning plus the visible answer.
-	DefaultMaxTokens = 4096
+	// DefaultMaxTokens is the completion budget. Spark-X2.6-4B-q8_0 reasons
+	// first; this covers the low-effort reasoning plus the visible answer while
+	// keeping the prompt + completion inside the model's 8K context.
+	DefaultMaxTokens = 2048
 	// MaxQuestionBytes caps an incoming question. The loop hands the whole
 	// question to the model before any excerpt budget applies, so an
 	// unbounded peer message would be an unbounded prompt. Both the A2A and
@@ -146,6 +152,36 @@ type searchArgs struct {
 	After               string   `json:"after"`
 	Before              string   `json:"before"`
 	RecencyHalflifeDays float64  `json:"recency_halflife_days"`
+}
+
+// toolHit is the compact tool-result shape the model sees. The full retrieval
+// Hit carries ranking and provenance fields the model does not use; sending
+// 13 fields per hit across three search rounds is what pushed the 8K-context
+// baseline over its limit. Citation enforcement still uses the full hit.
+type toolHit struct {
+	ChunkID     string `json:"chunk_id"`
+	SourceKind  string `json:"source_kind"`
+	SourceURL   string `json:"source_url,omitempty"`
+	Title       string `json:"title,omitempty"`
+	Section     string `json:"section,omitempty"`
+	PublishedAt string `json:"published_at"`
+	Body        string `json:"body"`
+}
+
+func compactHits(hits []retrieval.Hit) []toolHit {
+	out := make([]toolHit, len(hits))
+	for i, h := range hits {
+		out[i] = toolHit{
+			ChunkID:     h.ChunkID,
+			SourceKind:  h.SourceKind,
+			SourceURL:   h.SourceURL,
+			Title:       h.Title,
+			Section:     h.Section,
+			PublishedAt: h.PublishedAt,
+			Body:        h.Body,
+		}
+	}
+	return out
 }
 
 // groundedPrompt is the system message. It adapts the PLAN.md template to the
@@ -459,7 +495,7 @@ func (r *Runner) toolResult(ctx context.Context, call llm.ToolCall, remaining *i
 		Int("kept", len(trimmed)).
 		Int("remaining_excerpt_tokens", *remaining).
 		Msg("rag: tool hits")
-	payload, err := json.Marshal(trimmed)
+	payload, err := json.Marshal(compactHits(trimmed))
 	if err != nil {
 		return "", fmt.Errorf("agentloop: marshal tool result: %w", err)
 	}
@@ -473,31 +509,41 @@ func (r *Runner) toolResult(ctx context.Context, call llm.ToolCall, remaining *i
 }
 
 // trimHits keeps hits until the excerpt budget is spent, truncating the body of
-// the hit that crosses the line. Tokens are approximated by whitespace-separated
-// words; the budget protects the prompt, not an exact tokenizer count.
+// the hit that crosses the line. The budget uses the chunker's coarse
+// 4-chars-per-token estimate, so it protects the prompt rather than an exact
+// tokenizer count.
 func trimHits(hits []retrieval.Hit, remaining *int) []retrieval.Hit {
 	out := make([]retrieval.Hit, 0, len(hits))
 	for _, h := range hits {
 		if *remaining <= 0 {
 			break
 		}
-		words := strings.Fields(h.Body)
-		if len(words) == 0 {
+		tokens := shared.EstimateTokens(h.Body)
+		if tokens <= *remaining {
+			*remaining -= tokens
 			out = append(out, h)
 			continue
 		}
-		if len(words) <= *remaining {
-			*remaining -= len(words)
-			out = append(out, h)
-			continue
-		}
-		// The tail does not fit: keep the leading excerpt so the model still
-		// sees the match, then spend the rest of the budget.
-		h.Body = strings.Join(words[:*remaining], " ") + " …"
+		// The tail does not fit: keep a prefix that fits the remaining budget
+		// so the model still sees the match, then spend the rest.
+		h.Body = truncateToTokens(h.Body, *remaining)
 		*remaining = 0
 		out = append(out, h)
 	}
 	return out
+}
+
+// truncateToTokens cuts body at the 4-chars-per-token boundary and appends an
+// ellipsis, backing off to a rune boundary so the result stays valid UTF-8.
+func truncateToTokens(body string, tokens int) string {
+	limit := tokens * 4
+	if limit >= len(body) {
+		return body + " …"
+	}
+	for limit > 0 && !utf8.RuneStart(body[limit]) {
+		limit--
+	}
+	return body[:limit] + " …"
 }
 
 // toolError is the JSON error object returned to the model for a repairable

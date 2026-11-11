@@ -155,9 +155,9 @@ Rate limit: 30 model-touching requests per minute per token (`--rate-limit`,
 `/v1/ask`, and `/v1/retrieve`. Failed bearer-auth attempts have a separate
 `--auth-limit` budget (default 120/min per address, 0 disables). Over-limit is
 HTTP 429 with `Retry-After`.
-Each task is bounded by the loop budget (3 tool iterations, 4,000 excerpt
-tokens, 90s wall clock) and a question is capped at 8 KiB. Tokens live in a `0600` file that is re-read on
-change, so add/revoke needs no restart:
+Each task is bounded by the loop budget (3 tool iterations, 3,000 excerpt
+tokens, 90s wall clock) and a question is capped at 8 KiB. Tokens live in a
+`0600` file that is re-read on change, so add/revoke needs no restart:
 
 ```bash
 ./agent tokens add --id bob     # hand the printed value to the peer
@@ -201,13 +201,17 @@ and is not part of the Go build:
 cd evals
 uv sync
 uv run python test_llm.py     # endpoint check first; exit 0 = usable
-uv run python evaluate.py --kind answers --limit 3   # cheap smoke test
-uv run python evaluate.py     # both datasets -> output/
+uv run python evaluate.py --kind answers --limit 3 --no-thresholds  # smoke
+uv run python evaluate.py     # both datasets, gates enforced -> output/
 ```
 
 `EVAL_BASE_URL` / `EVAL_MODEL` / `EVAL_API_KEY` are in `example.env`; the
 harness does not read `.env` itself (use `uv run --env-file ../.env …`).
-Generated files are gitignored. See [ragas-eval.md](/ragas-eval.md).
+The exit status fails on incomplete rows and on missed quality gates:
+correctness ≥ 70%, faithfulness ≥ 0.75, context utilization ≥ 0.80, and
+refusal discipline 100% by default. The 80%/0.80 target uses
+`--min-correctness 0.80 --min-faithfulness 0.80`. Generated files are
+gitignored. See [ragas-eval.md](/ragas-eval.md).
 
 ### promptfoo (adversarial behaviour)
 

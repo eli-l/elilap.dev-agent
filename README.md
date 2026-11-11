@@ -25,8 +25,9 @@ with per-site extraction strategies), resumable embeddings, hybrid retrieval
 JSON paths (`/v1/retrieve`, `/v1/ask`), and the A2A surface — agent card
 discovery, `message/send`, bearer tokens, a per-token rate limit, and the
 audit stream. Runtime data (SQLite index, WAL/SHM, backups, A2A token file)
-lives under `./data/`. Phase 3 operations still open: `ingest --watch`,
-scheduling, and the first full-size runs of the two test suites. See
+lives under `./data/`. The Ragas baseline is captured (12/15 correctness on
+`Spark-X2.6-4B-q8_0`); Phase 3 operations still open: `ingest --watch`,
+scheduling, and the full promptfoo scan. See
 [`PLAN.md`](./PLAN.md) for the build plan and
 [`docs/runbook.md`](./docs/runbook.md) for the operator path.
 
@@ -40,7 +41,7 @@ Website (HTML)    ─┘        ▲                                (hybrid RRF)
                      chat + embeddings                            │ tool call
                             │                                     │
                  LocalAI (self-hosted)  ◄── agent loop ──  question
-              (`spark-x2.5-4b`, `embeddinggemma-300m`)   (`ask`, `/v1/ask`,
+              (`Spark-X2.6-4B-q8_0`, `embeddinggemma-300m`)  (`ask`, `/v1/ask`,
                                                           A2A message/send)
 ```
 
@@ -52,8 +53,8 @@ Website (HTML)    ─┘        ▲                                (hybrid RRF)
 * **Model-agnostic**: self-hosted LocalAI by default
   (`http://192.168.78.243:8080`) or any OpenAI-compatible server — one
   config switch.
-* **Models**: embeddings `embeddinggemma-300m` (768d), chat `spark-x2.5-4b`.
-  Both self-hosted; no API keys, no cloud calls.
+* **Models**: embeddings `embeddinggemma-300m` (768d), chat
+  `Spark-X2.6-4B-q8_0`. Both self-hosted; no API keys, no cloud calls.
 * **Agentic**: the service runs the loop — one internal tool
   (`search_writing`), bounded iterations, citation-or-refusal. `agent ask`
   is the CLI form; `agent serve` exposes the same loop and the raw

@@ -4,12 +4,11 @@ Build plan for a local-first RAG agent over Eli's published writing.
 This document is the source of truth for scope, sequencing, and exit criteria.
 Update it as we learn.
 
-**Last refined**: 2026-11-11 (operator small wins + CI + containers). Runtime
-data now lives under `./data/` by default (`./data/index.db` on the host,
-`/data/index.db` in the container), the container path is implemented
-(`Dockerfile`, `.dockerignore`, `compose.yaml`, `./data:/data`), and CI gates
-gofmt, vet, and the Go unit tests. Previous refinement: 2026-11-09 (website
-provider). The HTML `web`
+**Last refined**: 2026-11-11 (operator small wins + CI + containers + Ragas
+gates). Runtime data lives under `./data/` by default, the container path is
+implemented, CI gates gofmt/vet/unit tests, and Ragas now has enforceable
+quality gates plus a 12/15 correctness baseline on `Spark-X2.6-4B-q8_0`.
+Previous refinement: 2026-11-09 (website provider). The HTML `web`
 provider landed (Decision 22): `elilap.dev` pages are indexed as `web_page`
 chunks alongside the Ghost posts, with a named extraction strategy per source
 and `agent sources inspect` for authoring it; `migrations/0003_web_kind.sql`
@@ -106,7 +105,7 @@ original schema.
 |---|---|---|---|
 | 1 | Language | Go 1.27 (language floor) | Single binary, no runtime, easy ops |
 | 2 | Index store | SQLite + `sqlite-vec` (one file) | Corpus ≤1,500 chunks — service overkill, file-portable, FTS5 free |
-| 3 | Embedder + chat model | Self-hosted **LocalAI** behind one OpenAI-compatible connector (`/v1/embeddings`, `/v1/chat/completions`); embed model **`embeddinggemma-300m`** (768d, verified 2026-10-23), chat model **`spark-x2.5-4b`** | Self-hosted and environment-independent; swapping providers = changing `LOCALAI_BASE_URL` |
+| 3 | Embedder + chat model | Self-hosted **LocalAI** behind one OpenAI-compatible connector (`/v1/embeddings`, `/v1/chat/completions`); embed model **`embeddinggemma-300m`** (768d, verified 2026-10-23), chat model **`Spark-X2.6-4B-q8_0`** (re-pinned 2026-11-11; 8K context) | Self-hosted and environment-independent; swapping providers = changing `LOCALAI_BASE_URL` |
 | 4 | Retrieval | Hybrid: FTS5 BM25 + vec cosine, RRF merge | Neither alone is good enough on mixed prose+social |
 | 5 | Repos / sources | Ghost Admin API + Postiz HTTP API + the public website over HTML (Decision 22) | Live, queryable, idempotent on `(source_kind, source_id)` |
 | 2b | Go driver | CGO: `mattn/go-sqlite3` (`-tags sqlite_fts5`) + sqlite-vec Go bindings (asg017), pinned | FTS5 + vec0 in one DB handle; exact binding import path confirmed in the Phase 1 driver spike, not before |
@@ -114,7 +113,7 @@ original schema.
 | 7 | CLI surface | One binary `agent`, subcommands `ingest`, `embed`, `query`, `ask`, `stats`, `backup`, `serve`, `tokens` | Matches `./agent ingest` muscle memory; the five separate `cmd/*/main.go` stubs collapsed into `cmd/agent/` in Phase 1 |
 | 8 | Auth posture | env-loaded keys; never printed; gitignored index | Defense by default |
 | 9 | Container runtime | Multi-stage Dockerfile (builder `golang:1.27` → minimal runtime) + `compose.yaml` with the agent service only (LocalAI is external — Decision 10) | Whole system runs on any Docker host; builder tag floats to the latest 1.27 patch ≥ go.mod's `1.27` |
-| 10 | Model serving | **Existing self-hosted LocalAI instance** at `http://192.168.78.243:8080` (LAN host `dev`, LocalAI `v4.12.0`) — models already loaded: `embeddinggemma-300m`, `spark-x2.5-4b`, `spark-x2.5-1.7b-q4`; `/readyz` → 200 (verified 2026-10-23) | One server covers embeddings + chat; nothing to pull on first boot; compose no longer runs LocalAI |
+| 10 | Model serving | **Existing self-hosted LocalAI instance** at `http://192.168.78.243:8080` (LAN host `dev`, LocalAI `v4.12.0`) — models on 2026-11-11: `embeddinggemma-300m`, `Spark-X2.6-4B-q8_0`, `Spark-X2.6-1.7B-Q8_0.gguf`, plus two listed-but-OOM Q4 variants; `/readyz` → 200 | One server covers embeddings + chat; nothing to pull on first boot; compose no longer runs LocalAI |
 | 11 | SQLite placement | `AGENT_DB_PATH` env: `/data/index.db` in the container, `./data/index.db` on the host; `./data` is bind-mounted at `/data` | Keeps the index + WAL/SHM siblings on one mount; host-visible, durable, and excluded from git and the image build context |
 | 12 | Import config file | One `sources.yaml` at the repo root (YAML, strict decode: `KnownFields(true)`, `version:` field) | Providers are declared in one place and can be enabled/disabled/reconfigured without a rebuild; TOML rejected — the repo already speaks YAML (`sources.yaml`) and YAML carries comments in a hand-edited file (decided 2026-10-23) |
 | 13 | Provider model | One `Provider` interface (`List` cheap → `Fetch` full) + a registry keyed by config `type`; unknown type or bad options = startup error | One code path for every source; the `List`/`Fetch` split is what makes incremental ingest cheap and fixtures-testable without credentials |
@@ -151,10 +150,10 @@ Facts checked on the actual dev machines, so the plan stops guessing:
   `http://192.168.78.243:8080`** (LAN host `dev`; the AI Node is
   `192.168.78.242`). Verified from the node 2026-10-23: `GET /readyz` →
   200; `GET /version` → `v4.12.0 (15e37df9)`; `GET /v1/models` →
-  `embeddinggemma-300m`, `spark-x2.5-4b`, `spark-x2.5-1.7b-q4`;
+  `embeddinggemma-300m`, `Spark-X2.6-4B-q8_0`, `Spark-X2.6-1.7B-Q8_0.gguf`;
   `POST /v1/embeddings` with `embeddinggemma-300m` returns **768** dims
   (matches `chunks_vec.embedding float[768]`); `POST /v1/chat/completions`
-  with `spark-x2.5-4b` answers. `spark-x2.5-4b` is a **reasoning** model —
+  with `Spark-X2.6-4B-q8_0` answers. It is a **reasoning** model —
   the response carries a `reasoning` field, so `max_tokens` must budget
   for reasoning or `content` comes back empty (observed at
   `max_tokens=10`). This is the model backend: we consume it, we do not
@@ -260,7 +259,7 @@ services:
     environment:
       LOCALAI_BASE_URL: http://192.168.78.243:8080/v1   # self-hosted LocalAI on host `dev`
       EMBED_MODEL: embeddinggemma-300m
-      CHAT_MODEL: spark-x2.5-4b
+      CHAT_MODEL: Spark-X2.6-4B-q8_0
       AGENT_DB_PATH: /data/index.db
       AGENT_A2A_TOKENS_FILE: /data/a2a-tokens.txt
       AGENT_A2A_PUBLIC_URL: http://127.0.0.1:8081
@@ -576,7 +575,7 @@ intentionally a separate command.
       `LOCALAI_BASE_URL` (default `http://192.168.78.243:8080/v1` — the
       verified self-hosted instance), `LOCALAI_API_KEY` (optional),
       `EMBED_MODEL` (default `embeddinggemma-300m`), `CHAT_MODEL`
-      (default `spark-x2.5-4b`). LocalAI is the default; any
+      (default `Spark-X2.6-4B-q8_0`). LocalAI is the default; any
       OpenAI-compatible server (llama.cpp server, vLLM, OpenAI itself)
       works by changing the base URL. The tool-calling loop (Decision 15)
       rides on the same connector: chat requests carry the
@@ -584,7 +583,7 @@ intentionally a separate command.
       the model's tool calls. Two behaviours the client must
       honour: embeddings are **768d** (the schema says `float[768]` —
       assert the dimension before writing, or refuse to write), and
-      `spark-x2.5-4b` is a **reasoning** model whose response carries a
+      `Spark-X2.6-4B-q8_0` is a **reasoning** model whose response carries a
       `reasoning` field — `max_tokens` must budget for reasoning or
       `content` comes back empty.
 - [x] Containerize (§2.5) — moved to Phase 3 and **done 2026-11-11**:
@@ -809,7 +808,7 @@ they are unchanged contractually.
     `recency_halflife_days`);
   - grounded prompt assembly (template below) and bounded tool-calling
     iterations over the `internal/llm` connector (chat model
-    `spark-x2.5-4b`; `max_iterations` default 3, a total excerpt-token
+    `Spark-X2.6-4B-q8_0`; `max_iterations` default 3, a total excerpt-token
     budget, a per-request wall-clock cap);
   - citation enforcement: every claim must cite `chunk_id` + `source_url`
     from retrieved chunks; on grounding failure the answer is the refusal
@@ -817,7 +816,7 @@ they are unchanged contractually.
   - no retries across requests, no cross-request state, no host `codex`
     dependency.
   **Done 2026-11-02** (`internal/agentloop`): the tool schema, grounded
-  prompt, 3-iteration/4,000-excerpt-token/wall-clock budgets, and
+  prompt, 3-iteration/3,000-excerpt-token/wall-clock budgets, and
   citation-resolve-or-refusal; live answer 17.7s, refusal 9.4s.
 - [x] `agent ask`: CLI form of the loop — same prompt, same budget, same
       refusal behavior. `scripts/ask` stays as a thin wrapper around
@@ -887,9 +886,12 @@ citation and refusal rules above are unchanged.
   question names them. The keys feed the embedder verbatim and FTS5 as an
   `OR` term list, so question words that never occur in the corpus would
   dilute both paths.
-* Budget: max 3 tool iterations, ~4,000 total prompt tokens of excerpts
-  per answer, and 4,096 completion tokens (reasoning included); stop on
-  budget or when the model stops calling the tool. If the iteration
+* Budget: max 3 tool iterations, ~3,000 estimated excerpt tokens
+  (4-chars-per-token) per answer, and 2,048 completion tokens (reasoning
+  included) so the 8K-context 4B model fits; stop on budget or when the
+  model stops calling the tool. Tool results carry only citation fields plus
+  body; ranking and provenance fields stay service-side, which keeps the
+  prompt inside the 8K context without shrinking the excerpt budget. If the iteration
   budget runs out, one final no-tools call forces an answer from what
   was already retrieved. An immediate refusal with zero tool calls gets
   one "search before refusing" nudge (2026-11-02), so an answerable
@@ -920,15 +922,16 @@ citation and refusal rules above are unchanged.
 
 - Answer quality reaches the Ragas thresholds on the hand-verified configs in
   `evals/configs/`; the retrieval-only 20-query hit@5 gate is retired.
-  **Last retrieval-only baseline 2026-11-02: 19/20. Not yet measured at
-  full size (2026-11-05): the configs hold 15 answer + 14 refusal cases and
-  `evals/output/` holds three single-row smoke runs.**
+  **Baseline 2026-11-11 on `Spark-X2.6-4B-q8_0`: all 29 rows scored, 12/15
+  correctness (80.0%), 0.864 faithfulness, 0.977 context utilization, 14/14
+  refusal discipline, no task failures. Default gates are 70%/0.75/0.80/100%;
+  the 80%/0.80 target was met on this run.**
 - p50 retrieval latency <300ms; end-to-end `ask` p50 <8s on a GPU-capable
   host, ≤60s on the CPU-only Docker setup (small chat model, reasoning
   budget included). **Measured 2026-11-02: retrieval p50 58ms on the
   886-chunk index; `ask` 9-24s on this CPU host.**
-- Loop behavior verified against a reasoning chat model (`spark-x2.5-4b`
-  default; this host's `.env` runs `spark-x2.6-4b-q4`): tool calls round-trip,
+- Loop behavior verified against a reasoning chat model
+  (`Spark-X2.6-4B-q8_0` default): tool calls round-trip,
   the iteration/token budget holds, and unanswerable questions return
   the refusal string instead of hallucinated content. **Verified
   2026-11-02** (cited answer, refusal, HTTP parity).
@@ -955,7 +958,7 @@ server).
 
 **Status 2026-11-11: container path done; operations remain.** The container
 image/compose path, `agent backup`, the `scripts/ingest-all.sh` fix, and CI
-landed. `ingest --watch`, scheduling, the full-suite runs, and the shadow week
+landed. `ingest --watch`, scheduling, the promptfoo run, and the shadow week
 remain. The Phase 4 A2A surface shipped ahead of this phase, so the container
 image and operator scheduling were built over an A2A-reachable service rather
 than a dev-only one.
@@ -967,9 +970,13 @@ full size.
 
 **Tasks**
 
-- [ ] Close the Phase 2 exit criteria the code is already waiting on:
-      one full `evals/` run (`answers` + `refusals`, 29 cases) and one
-      `tests-ai/` promptfoo run, each captured as a `docs/runs/` record.
+- [x] Full Ragas run: **done 2026-11-11** — all 15 answer + 14 refusal rows
+      scored on `Spark-X2.6-4B-q8_0`; 12/15 correctness (80.0%), 0.864
+      faithfulness, 0.977 context utilization, 14/14 refusal discipline, no
+      task failures. Quality gates are enforced in `evals/evaluate.py`
+      (`docs/runs/ragas-baseline-2026-11-11.md`).
+- [ ] Full promptfoo run: one `tests-ai/` scan captured as a `docs/runs/`
+      record.
 - [x] Containerize (§2.5, moved from Phase 1): **done 2026-11-11** —
       `Dockerfile`, `.dockerignore`, `compose.yaml`, a `./data:/data` bind
       mount, and `AGENT_DB_PATH=/data/index.db`. Verified in-image stats, a
@@ -1087,7 +1094,7 @@ flag, rate limits, and the audit log.
   is HTTP 429 with `Retry-After`; `/a2a` returns JSON-RPC `-32000` with
   `data.retry_after_seconds`. Failed bearer-auth attempts have a separate
   `--auth-limit` budget (default 120/min per address, charged only on a
-  failed lookup). The loop's own per-task budget (3 iterations, 4,000 excerpt
+  failed lookup). The loop's own per-task budget (3 iterations, 3,000 excerpt
   tokens, 90s wall clock) still applies underneath.
 - [x] Operational documentation: `docs/a2a.md` (wire contract, card,
   tokens, rotation, rate limit, audit, security), `docs/runbook.md`
@@ -1148,8 +1155,8 @@ rate limits). Shipped in one pass on 2026-11-05.
 | sqlite-vec CGO build trouble on darwin/arm64 | Medium | Build fragility | Phase 1 driver spike decides mattn vs ncruces before store code lands; pin versions |
 | CGO/sqlite-vec misbehaves inside the container | Medium | Image build breaks | Driver spike must prove `docker compose build` + KNN round-trip in-container before store code lands |
 | Model host `dev` (192.168.78.243) down or unreachable from the container | Medium | `embed`/`ask` blocked | Agent probes `/readyz` at startup and fails fast with a clear message; models are pre-loaded, so no first-boot wait; documented fallback is a local `localai` compose service |
-| Model host is CPU-only (no GPU confirmed for `dev`) | Medium | Slow chat | `spark-x2.5-4b` is a 4B model — acceptable at this corpus size; Phase 2 latency targets are measured against the real host, not guessed |
-| `spark-x2.5-4b` is a reasoning model — the token budget is eaten by `reasoning` | Medium | Empty `content` in `agent ask` | `max_tokens` must budget for reasoning; `agent ask` reads the `reasoning` field and errors loudly on empty content; `spark-x2.5-1.7b-q4` is the lighter fallback |
+| Model host is CPU-only (no GPU confirmed for `dev`) | Medium | Slow chat | `Spark-X2.6-4B-q8_0` is a 4B model — acceptable at this corpus size; Phase 2 latency targets are measured against the real host, not guessed |
+| The 4B q8 model is a reasoning model with an 8K context — the token budget is eaten by `reasoning` | Medium | Empty `content` or a context-overflow 400 in `agent ask` | `max_tokens` must budget for reasoning; the loop keeps excerpts to ~3,000 estimated tokens and completion to 2,048; `Spark-X2.6-1.7B-Q8_0.gguf` is the lighter fallback |
 | Docker daemon unreachable from the agent sandbox (verified) | Certain in-sandbox | Slow dev loop for container steps | Run container commands with explicit permission or outside the sandbox; never bake keys into the image |
 | SQLite on a macOS bind mount (VirtioFS) is slow / has locking quirks | Low | Degraded perf when DB is host-visible | Named volume is the default; bind mount documented for export only |
 | Contentless-FTS5 trap (caught in refinement) | Fixed | Would have broken query join-back | Self-contained FTS5 in `0001_init.sql` |
@@ -1182,8 +1189,10 @@ rate limits). Shipped in one pass on 2026-11-05.
    unique across both sources, values are ≥32 characters, and a loose or
    malformed file fails startup.
 4. ~~Default LocalAI chat model~~ — **decided 2026-10-23**: `spark-x2.5-4b`
-   (self-hosted on `dev`). `spark-x2.5-1.7b-q4` is the fallback if the
-   Phase 2 eval shows the 4B is too slow on that host.
+   (self-hosted on `dev`). **Re-pinned 2026-11-11**: the host's catalog no
+   longer has that id; `Spark-X2.6-4B-q8_0` is the working 4B baseline,
+   `Spark-X2.6-1.7B-Q8_0.gguf` is the lighter fallback, and both Q4 variants
+   fail with CUDA OOM.
 5. ~~Pin LocalAI by versioned tag~~ — **moot 2026-10-23**: the instance we
    use is external (`192.168.78.243`, currently `v4.12.0`), so its version
    is that host's concern. We depend on the OpenAI-compatible surface, not

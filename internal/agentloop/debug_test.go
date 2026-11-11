@@ -113,6 +113,13 @@ func TestDebugLogsTheWholeRAGTrace(t *testing.T) {
 	// The tool result line is the retrieval-to-prompt boundary.
 	if res := recs["rag: tool result"][0]; !strings.Contains(stringOf(res["tool_result"]), "vendor lock-in") {
 		t.Errorf("tool result = %v, want the excerpt JSON", res["tool_result"])
+	} else {
+		tool := stringOf(res["tool_result"])
+		for _, field := range []string{`"score"`, `"distance"`, `"bm25"`, `"cosine"`} {
+			if strings.Contains(tool, field) {
+				t.Errorf("tool result carries ranking field %s: %v", field, tool)
+			}
+		}
 	}
 
 	// The closing line reports the enforced outcome.

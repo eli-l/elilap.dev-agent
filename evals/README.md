@@ -41,6 +41,31 @@ numeric metrics — there are no claims to check.
 |---|---|
 | `refusal_discipline` (DiscreteMetric) | Did it decline instead of inventing an answer? |
 
+## Quality gates
+
+`evaluate.py` exits non-zero when a metric misses its gate, not only when the
+run is incomplete. Defaults:
+
+| Gate | Default | Flag |
+|---|---:|---|
+| Correctness pass rate | 70% | `--min-correctness` |
+| Mean faithfulness | 0.75 | `--min-faithfulness` |
+| Mean context utilization | 0.80 | `--min-context-utilization` |
+| Refusal discipline | 100% | `--min-refusal-discipline` |
+
+The defaults are a regression floor for the local 4B model. The stricter
+target is 80% correctness / 0.80 faithfulness:
+
+```bash
+uv run python evaluate.py --min-correctness 0.80 --min-faithfulness 0.80
+```
+
+`--no-thresholds` reports the metrics without failing a smoke run.
+
+The 2026-11-11 baseline on `Spark-X2.6-4B-q8_0` scored 12/15 correctness
+(80.0%), 0.864 faithfulness, 0.977 context utilization, and 14/14 refusal
+discipline. See [`../docs/runs/ragas-baseline-2026-11-11.md`](../docs/runs/ragas-baseline-2026-11-11.md).
+
 ## Config format
 
 Both configs share one shape:
@@ -78,10 +103,10 @@ sqlite3 data/index.db "select count(*) from chunks where body like '%<term>%'"
 uv sync
 
 uv run python test_llm.py                        # endpoint check, exit 0 = ok
-uv run python evaluate.py --kind answers --limit 3   # cheap smoke test
+uv run python evaluate.py --kind answers --limit 3 --no-thresholds   # smoke
 uv run python evaluate.py --kind answers
 uv run python evaluate.py --kind refusals
-uv run python evaluate.py                        # both
+uv run python evaluate.py                        # both, with gates
 ```
 
 Options:
@@ -140,4 +165,6 @@ an explicit `max_tokens=4096`. Expect roughly a minute per answer row.
   `EVAL_EMBED_*` variable in the repo's env inventory.
 * The agent's loop is sampled and the chat model is small, so the same row can
   refuse on one run and answer on the next. One run is a capability sample,
-  not a reliability measurement — run several and compare.
+  not a reliability measurement — run several and compare. The 80% target sits
+  exactly on the 12/15 baseline, so the default gate is the lower regression
+  floor.

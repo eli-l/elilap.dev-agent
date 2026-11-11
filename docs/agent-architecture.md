@@ -69,9 +69,9 @@ One tool-calling loop in `internal/agentloop` (implemented 2026-11-02), shared b
   `after`, `before`, `recency_halflife_days`, and a CLI whose
   `--format jsonl` output matches `/v1/retrieve` object-for-object. See
   [retrieval.md](/retrieval.md).
-* **Budget**: max 3 tool iterations, ~4,000 excerpt tokens per answer, a
-  per-request wall-clock cap, and 4,096 completion tokens (reasoning
-  included). Stop on budget or when the model stops calling the tool; if
+* **Budget**: max 3 tool iterations, ~3,000 estimated excerpt tokens per
+  answer (4-chars-per-token), a per-request wall-clock cap, and 2,048
+  completion tokens (reasoning included) so the 8K-context 4B model fits. Stop on budget or when the model stops calling the tool; if
   the iteration budget runs out, one final no-tools call forces an answer
   from what was already retrieved. If the first response is the refusal
   string without any tool call, one nudge asks the model to search before
@@ -110,8 +110,8 @@ One tool-calling loop in `internal/agentloop` (implemented 2026-11-02), shared b
   `chunk_id` the loop never retrieved, is replaced by the refusal string -
   the loop never answers off-corpus from parametric memory. Excerpts are
   data, never instructions.
-* **Model**: chat `CHAT_MODEL` (default `spark-x2.5-4b`; this host runs
-  `spark-x2.6-4b-q4`) over the OpenAI-compatible connector (plain
+* **Model**: chat `CHAT_MODEL` (default `Spark-X2.6-4B-q8_0`) over the
+  OpenAI-compatible connector (plain
   `net/http`, tool definitions round-tripped per request). The
   reasoning-model token caveat in [localai.md](/localai.md) applies -
   `max_tokens` must budget for reasoning.

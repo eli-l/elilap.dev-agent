@@ -1,16 +1,18 @@
 ---
 type: Reference
 title: Self-hosted LocalAI endpoint and model catalog
-description: Verified facts about the LocalAI instance at http://192.168.78.243:8080 - version, model ids, embedding dimensions, chat behaviour, and the reasoning_effort controls - captured from the AI Node on 2026-10-23, re-probed on 2026-11-03, and re-checked on 2026-11-11.
+description: Verified facts about the LocalAI instance at http://192.168.78.243:8080 - version, model ids, embedding dimensions, chat behaviour, the reasoning_effort controls, and the current 4B baseline - captured from the AI Node on 2026-10-23, re-probed on 2026-11-03, and re-checked on 2026-11-11.
 status: stable
 generated:
   by: deepseek/deepseek-v4.1-flash
-  at: 2026-11-11T07:10:21Z
+  at: 2026-11-11T11:30:00Z
 verified:
   - by: process:localai-probe
     at: 2026-11-03T19:20:00Z
   - by: process:localai-probe
     at: 2026-11-11T07:09:04Z
+  - by: process:localai-probe
+    at: 2026-11-11T11:30:00Z
 tags: [localai, embeddings, chat, models, reasoning, phase-0]
 ---
 
@@ -33,22 +35,23 @@ this repo deploys. `PLAN.md` Decision 10 records the decision.
 | id | role |
 |---|---|
 | `embeddinggemma-300m` | embeddings - **768 dims** |
-| `spark-x2.5-4b` | chat / LLM - pinned default; failed to load on 2026-11-10 |
-| `spark-x2.6-4b-q4` | chat / LLM - listed; failed to load on 2026-11-10 |
-| `Spark-X2.6-1.7B-Q4_K_M` | chat / LLM - 1.7B class; served on 2026-11-03 |
-| `spark-x2.5-1.7b-q4` | chat / LLM - 1.7B class; served (the 2026-11-10 eval generator) |
+| `Spark-X2.6-4B-q8_0` | chat / LLM - **pinned default**; 8K context; the 2026-11-11 baseline |
+| `Spark-X2.6-1.7B-Q8_0.gguf` | chat / LLM - lighter fallback; serves |
+| `spark-x2.6-4b-q4` | chat / LLM - listed, but CUDA OOM on load (2026-11-11) |
+| `Spark-X2.6-1.7B-Q4_K_M` | chat / LLM - listed, but CUDA OOM on load (2026-11-11) |
 
-## Host drift (2026-11-10/11)
+## Host drift (2026-11-11)
 
-`GET /v1/models` on 2026-11-11 lists all five ids above. A catalog entry is
-not a promise that the model loads: on 2026-11-10 both 4B chat models failed
-with an internal-loader RPC error (`code = Unavailable`, `error reading from
-server: EOF`), after which the endpoint answered `503 model "spark-x2.5-4b"
-load is in cooldown` for tens of minutes. The full Ragas run therefore used
-`spark-x2.5-1.7b-q4`. See
-[Ragas answer evaluation (evals)](/ragas-eval.md) and the
-[validator sweep](/runs/validator-sweep-2026-11-10.md). A healthy 4B model is
-still needed before the shipped `CHAT_MODEL` can produce a quality baseline.
+`GET /v1/models` on 2026-11-11 lists the five ids above. The previous
+`spark-x2.5-4b` model is gone. A catalog entry is not a promise that the model
+loads: `Spark-X2.6-4B-q8_0` and `Spark-X2.6-1.7B-Q8_0.gguf` served real chat
+completions, while both Q4 variants failed with a CUDA out-of-memory loader
+error. The 4B q8 model has an **8K context**, so the loop's excerpt budget was
+retuned to 3,000 estimated tokens and the completion budget to 2,048; that
+keeps the system prompt, tool schema, excerpts, and completion inside 8K.
+
+The current Ragas baseline uses `Spark-X2.6-4B-q8_0`; see
+[Ragas answer evaluation (evals)](/ragas-eval.md).
 
 ## Verified on 2026-10-23 (from the AI Node)
 
@@ -98,10 +101,10 @@ prompt and the `search_writing` tool, 3 runs each):
 ```bash
 export LOCALAI_BASE_URL=http://192.168.78.243:8080/v1
 export EMBED_MODEL=embeddinggemma-300m
-export CHAT_MODEL=spark-x2.5-4b
+export CHAT_MODEL=Spark-X2.6-4B-q8_0
 ```
 
-`CHAT_MODEL` must name a model the host can currently load. On 2026-11-10 the
-4B ids above did not, so use a 1.7B id until the 4B loader is fixed.
+`CHAT_MODEL` must name a model the host can currently load. On 2026-11-11 the
+4B q8 id is the baseline; the Q4 ids are listed but fail with CUDA OOM.
 
 No API key is required for this instance (`LOCALAI_API_KEY` stays unset).

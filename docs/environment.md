@@ -65,7 +65,7 @@ constants, not in struct tags, so there is exactly one definition.
 | `LOCALAI_BASE_URL` | `internal/envcfg` | `http://192.168.78.243:8080/v1` | Any OpenAI-compatible server |
 | `LOCALAI_API_KEY` | `internal/envcfg` | empty | Optional bearer token |
 | `EMBED_MODEL` | `internal/envcfg` | `embeddinggemma-300m` | Must produce 768 dims |
-| `CHAT_MODEL` | `internal/envcfg` | `spark-x2.5-4b` | Reasoning model, used by the loop |
+| `CHAT_MODEL` | `internal/envcfg` | `Spark-X2.6-4B-q8_0` | Reasoning model, used by the loop; the host's 8K-context 4B q8 baseline |
 | `AGENT_A2A_TOKENS` | `internal/envcfg` | empty | Comma-separated `id:token` bearer list for the A2A surface; empty and loopback = token-less dev |
 | `AGENT_A2A_TOKENS_FILE` | `internal/envcfg` | `./data/a2a-tokens.txt` | `0600` token file, re-read on change (rotation without restart); gitignored, missing = no tokens |
 | `AGENT_A2A_PUBLIC_URL` | `internal/envcfg` | empty | Absolute service root advertised in the agent card; required with `--bind-public`, otherwise a loopback bind derives `http://<addr>` |

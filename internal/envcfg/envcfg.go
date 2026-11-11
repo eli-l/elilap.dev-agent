@@ -69,8 +69,9 @@ const (
 	DefaultLocalAIBaseURL = "http://192.168.78.243:8080/v1"
 	// DefaultEmbedModel produces the 768-dim vectors chunks_vec stores.
 	DefaultEmbedModel = "embeddinggemma-300m"
-	// DefaultChatModel is the reasoning model the agent loop calls.
-	DefaultChatModel = "spark-x2.5-4b"
+	// DefaultChatModel is the reasoning model the agent loop calls. The 4B q8
+	// model is the current host baseline; see docs/localai.md.
+	DefaultChatModel = "Spark-X2.6-4B-q8_0"
 	// DefaultA2ATokensFile is the local token file `agent tokens` edits. It
 	// lives with the other runtime data and is gitignored; a missing file
 	// simply means no tokens are configured.
