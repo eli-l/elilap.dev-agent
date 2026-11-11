@@ -109,7 +109,10 @@ Two end-to-end tools, no third harness:
 
 Retrieval is not scored on its own; a ranking problem surfaces as a
 faithfulness or correctness miss in the Ragas suite. Unit tests stay in Go:
-`go test -tags sqlite_fts5 ./...`.
+`go test -tags sqlite_fts5 ./...`. CI
+([`.github/workflows/ci.yml`](./.github/workflows/ci.yml)) runs only `gofmt`,
+`go vet`, and those unit tests; the Ragas and promptfoo suites stay local
+because they need a model host and a populated `index.db`.
 
 ## What is NOT in this repo
 

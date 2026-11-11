@@ -4,9 +4,10 @@ Build plan for a local-first RAG agent over Eli's published writing.
 This document is the source of truth for scope, sequencing, and exit criteria.
 Update it as we learn.
 
-**Last refined**: 2026-11-11 (operator small wins). `agent backup` is live
-(online `VACUUM INTO`) and `scripts/ingest-all.sh` calls the built binary
-again. Previous refinement: 2026-11-09 (website provider). The HTML `web`
+**Last refined**: 2026-11-11 (operator small wins + CI). `agent backup` is live
+(online `VACUUM INTO`), `scripts/ingest-all.sh` calls the built binary again,
+and `.github/workflows/ci.yml` gates gofmt, vet, and the Go unit tests.
+Previous refinement: 2026-11-09 (website provider). The HTML `web`
 provider landed (Decision 22): `elilap.dev` pages are indexed as `web_page`
 chunks alongside the Ghost posts, with a named extraction strategy per source
 and `agent sources inspect` for authoring it; `migrations/0003_web_kind.sql`
@@ -972,6 +973,11 @@ full size.
       while the writer is live; it refuses to overwrite an existing file. The
       default lands in `/data` in container mode and was verified on the live
       949-chunk index (`docs/runs/backup-2026-11-11.md`).
+- [x] CI gate: **done 2026-11-11** — `.github/workflows/ci.yml` runs
+      `gofmt -l cmd internal migrations`, `go vet -tags sqlite_fts5 ./...`,
+      and `go test -tags sqlite_fts5 -count=1 ./...` on pushes to `main` and
+      pull requests. CGO is enabled for sqlite; no model host, promptfoo
+      account, or end-to-end suite is in CI.
 - [ ] Schedule on this Mac: **launchd** agent or user cron (no systemd on
       darwin) invoking the container command above. Hourly default.
 - [ ] Wherever your agent memory lives, note: "for questions about my

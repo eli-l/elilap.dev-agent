@@ -1,0 +1,49 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: fmt, vet, unit tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      # mattn/go-sqlite3 and sqlite-vec are CGO packages.
+      CGO_ENABLED: "1"
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+
+      - name: Download modules
+        run: go mod download
+
+      - name: Check formatting
+        run: |
+          unformatted="$(gofmt -l cmd internal migrations)"
+          if [ -n "$unformatted" ]; then
+            printf 'gofmt required for:\n%s\n' "$unformatted" >&2
+            exit 1
+          fi
+
+      - name: Vet
+        run: go vet -tags sqlite_fts5 ./...
+
+      - name: Unit tests
+        run: go test -tags sqlite_fts5 -count=1 ./...

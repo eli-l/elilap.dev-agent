@@ -1,13 +1,14 @@
 ---
 type: Guide
-title: End-to-end testing - suites, ports, configs, and reports
-description: The single reference for the two end-to-end test suites - what Ragas and promptfoo each check, the ports and local models they use, the exact commands, where every config lives, where every report is written, and what is committed versus gitignored.
+title: End-to-end testing - CI, suites, ports, configs, and reports
+description: The single reference for testing - the CI gate for formatting, vet, and unit tests, the two end-to-end suites (what Ragas and promptfoo each check, the ports and local models they use, the exact commands, where every config lives, where every report is written), and what is committed versus gitignored.
 status: stable
 generated:
   by: deepseek/deepseek-v4.1-flash
-  at: 2026-11-06T13:22:52Z
-tags: [testing, evals, ragas, promptfoo, ports, reports]
+  at: 2026-11-11T07:55:00Z
+tags: [testing, ci, evals, ragas, promptfoo, ports, reports]
 sources:
+  - ../.github/workflows/ci.yml
   - ../AGENTS.md
   - ../evals/README.md
   - ../evals/evaluate.py
@@ -190,6 +191,22 @@ README files. Generated and gitignored: `evals/output/`, `evals/.venv/`,
 When a run is worth keeping as evidence, capture a trimmed record under
 `docs/runs/` using the `type: Run` format (command, trimmed output, timestamp)
 rather than committing the raw reports.
+
+## CI
+
+`.github/workflows/ci.yml` runs on every push to `main` and every pull
+request. It is deliberately limited to checks that need no model host, no
+promptfoo account, and no network beyond the Go module download:
+
+1. `gofmt -l cmd internal migrations` must print nothing.
+2. `go vet -tags sqlite_fts5 ./...`
+3. `go test -tags sqlite_fts5 -count=1 ./...`
+
+CGO is enabled because `mattn/go-sqlite3` and sqlite-vec are CGO packages, and
+the `sqlite_fts5` tag is required by the driver and the schema tests. The
+Ragas and promptfoo suites, `agent ingest`/`embed`/`ask`, and every other path
+that touches LocalAI stay local, on-demand runs against a populated
+`index.db`; they are not part of CI.
 
 ## Related
 
