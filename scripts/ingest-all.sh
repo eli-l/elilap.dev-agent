@@ -1,9 +1,17 @@
 #!/usr/bin/env bash
 # ingest-all.sh — cron-friendly ingest runner.
 #
-# Real implementation lands in Phase 1.
-# See ../PLAN.md for the build plan.
+# Calls the built binary from the repo root. The binary loads .env and
+# resolves ./index.db relative to the working directory, so run from here
+# rather than the caller's directory.
 
 set -euo pipefail
-cd "$(dirname "$0")/.."
-exec go run ./cmd/ingest "$@"
+
+root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+if [ ! -x "$root/agent" ]; then
+	echo "ingest-all: $root/agent not found; build it with 'go build -tags sqlite_fts5 -o agent ./cmd/agent'" >&2
+	exit 1
+fi
+
+cd "$root"
+exec "$root/agent" ingest "$@"

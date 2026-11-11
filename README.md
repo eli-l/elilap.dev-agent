@@ -25,7 +25,7 @@ per-site extraction strategies), resumable embeddings, hybrid retrieval
 (`/v1/retrieve`, `/v1/ask`), and the A2A surface — agent card discovery,
 `message/send`, bearer tokens, a per-token rate limit, and the audit stream.
 Phase 3 operations are still open (the container path, `ingest --watch`,
-`backup`, and the first full-size runs of the two test suites). See
+and the first full-size runs of the two test suites). See
 [`PLAN.md`](./PLAN.md) for the build plan and
 [`docs/runbook.md`](./docs/runbook.md) for the operator path.
 
@@ -73,6 +73,7 @@ go build -tags sqlite_fts5 -o agent ./cmd/agent
 ./agent embed
 ./agent query "when did I write about burnout"
 ./agent ask "what did I write about harnesses?"
+./agent backup            # online VACUUM INTO snapshot next to the index
 ./agent serve             # 127.0.0.1:8080, token-less loopback
 ./agent tokens add --id alice   # then re-run serve; prints id:token once
 ./agent serve --bind-public --addr 0.0.0.0:8080   # requires a token

@@ -1,6 +1,6 @@
 # AGENTS.md
 
-Local-first **agentic A2A connector** over Eli's published writing: ingests Ghost posts + Postiz cross-posts + the public website's HTML pages into a single-file SQLite index (FTS5 + sqlite-vec), and runs its own grounded tool-calling loop (one internal tool, `search_writing`, over `internal/retrieval`) exposed through one Go binary — CLI plus a read-only HTTP surface (`/v1/retrieve`, `/v1/ask`, and A2A `message/send` + agent card). **Status: Phase 2 + A2A v0.3** — `ingest`, `embed`, `query`, `ask`, `stats`, `serve`, and `tokens` are implemented; `internal/retrieval` (hybrid BM25 + vec + RRF) and `internal/agentloop` (one grounded tool, citation-or-refusal) are live. `agent serve` exposes the agent over A2A v0.3 (`message/send` + agent card, bearer tokens, per-token rate limit, audit stream) plus the `/v1/retrieve` and `/v1/ask` JSON paths. Phase 3 operations (container, watch, backup, full eval runs) remain. `PLAN.md` is the source of truth for scope and sequencing; read it before adding code.
+Local-first **agentic A2A connector** over Eli's published writing: ingests Ghost posts + Postiz cross-posts + the public website's HTML pages into a single-file SQLite index (FTS5 + sqlite-vec), and runs its own grounded tool-calling loop (one internal tool, `search_writing`, over `internal/retrieval`) exposed through one Go binary — CLI plus a read-only HTTP surface (`/v1/retrieve`, `/v1/ask`, and A2A `message/send` + agent card). **Status: Phase 2 + A2A v0.3** — `ingest`, `embed`, `query`, `ask`, `stats`, `backup`, `serve`, and `tokens` are implemented; `internal/retrieval` (hybrid BM25 + vec + RRF) and `internal/agentloop` (one grounded tool, citation-or-refusal) are live. `agent serve` exposes the agent over A2A v0.3 (`message/send` + agent card, bearer tokens, per-token rate limit, audit stream) plus the `/v1/retrieve` and `/v1/ask` JSON paths. Phase 3 operations (container, watch, full eval runs) remain. `PLAN.md` is the source of truth for scope and sequencing; read it before adding code.
 
 ## Commands
 
@@ -22,7 +22,7 @@ cd tests-ai && npm run redteam   # generate + evaluate; reports in tests-ai/repo
 cd tests-ai && npm run redteam:report   # local report UI on :15500
 ```
 
-Run target: `go build -tags sqlite_fts5 -o agent ./cmd/agent` (one `cmd/agent/` with subcommands `ingest`, `embed`, `query`, `ask`, `stats`, `serve` (the A2A + `/v1/*` HTTP surface), and `tokens` (A2A bearer issuance/revocation) — do not add new top-level `cmd/` dirs).
+Run target: `go build -tags sqlite_fts5 -o agent ./cmd/agent` (one `cmd/agent/` with subcommands `ingest`, `embed`, `query`, `ask`, `stats`, `backup` (online `VACUUM INTO` snapshot), `serve` (the A2A + `/v1/*` HTTP surface), and `tokens` (A2A bearer issuance/revocation) — do not add new top-level `cmd/` dirs).
 
 ## OKF docs bundle
 

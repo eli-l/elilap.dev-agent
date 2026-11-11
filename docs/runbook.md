@@ -1,13 +1,13 @@
 ---
 type: Guide
 title: Runbook - build, ingest, embed, query, ask, serve
-description: The operator path from a clean checkout to grounded answers - building the binary, rebuilding the index, running hybrid queries and the agent loop, the HTTP server (A2A card + message/send, bearer tokens, /v1/* paths), the two end-to-end test suites (Ragas and promptfoo), and the failures you are likely to hit.
+description: The operator path from a clean checkout to grounded answers - building the binary, rebuilding the index, running hybrid queries and the agent loop, the HTTP server (A2A card + message/send, bearer tokens, /v1/* paths), the two end-to-end test suites (Ragas and promptfoo), the online backup command, and the failures you are likely to hit.
 status: stable
 generated:
   by: deepseek/deepseek-v4.1-flash
-  at: 2026-11-03T17:20:00Z
+  at: 2026-11-11T07:48:11Z
 tags: [runbook, operations, cli, http, eval, troubleshooting]
-sources: ["../PLAN.md", "../AGENTS.md"]
+sources: ["../PLAN.md", "../AGENTS.md", "../scripts/ingest-all.sh"]
 ---
 
 # Runbook
@@ -55,6 +55,23 @@ and update `options.strategy`/`options.selectors` (or the `elilap` adapter in
 
 `chunks`, `chunks_fts`, and `chunks_vec` should report the same count, and
 `embedded` should equal `vec rows`. A second `./agent ingest` is a near no-op.
+
+For cron, `scripts/ingest-all.sh` wraps the built binary from the repo root
+(`./agent ingest "$@"`); build `./agent` first.
+
+## Backup
+
+```bash
+./agent backup                          # -> index-<UTC stamp>.db next to the index
+./agent backup --out /data/backup.db     # explicit destination; must not exist
+```
+
+`agent backup` runs SQLite's online `VACUUM INTO` from a read-only handle, so
+it is safe while `ingest`, `embed`, or `serve` is running. The result is one
+self-contained database file (no `-wal`/`-shm` siblings) and the command
+refuses to overwrite an existing destination. In container mode the default
+lands next to `AGENT_DB_PATH`, i.e. in `/data`. Open a snapshot with
+`./agent stats --db <snapshot>` to confirm its counts.
 
 ## Query (no LLM)
 
@@ -223,15 +240,12 @@ needs a re-run on this non-deterministic model.
 
 ## Not yet in this runbook (Phase 3)
 
-This runbook covers the **Go-host path**, which is complete end to end. All
-of the following is Phase 3 work:
+This runbook covers the **Go-host path**, which is complete end to end. The
+remaining Phase 3 work is:
 
 * the container path — `Dockerfile`, `compose.yaml`, and
   `docker compose run --rm agent agent ingest`;
-* `agent ingest --watch` plus the launchd/cron schedule;
-* `agent backup` (`VACUUM INTO`);
-* `scripts/ingest-all.sh` — **currently broken**, it still execs the removed
-  `go run ./cmd/ingest`.
+* `agent ingest --watch` plus the launchd/cron schedule.
 
 ## Troubleshooting
 

@@ -81,6 +81,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 		code = runEmbed(args[1:], rtCfg, stdout, stderr)
 	case "stats":
 		code = runStats(args[1:], rtCfg.DBPath, stdout, stderr)
+	case "backup":
+		code = runBackup(args[1:], rtCfg.DBPath, stdout, stderr)
 	case "query":
 		code = runQuery(args[1:], rtCfg, stdout, stderr)
 	case "ask":
@@ -147,6 +149,7 @@ Commands:
   query              retrieve chunks for a query (hybrid, no LLM)
   ask                answer a question from the index (grounded loop)
   stats              report index statistics
+  backup             snapshot the index with VACUUM INTO
   serve              serve the read-only HTTP surface (A2A, card, /v1/*)
   tokens             issue, revoke, and list A2A bearer tokens
 
@@ -155,8 +158,8 @@ Missing credential variables warn in sources validate; --strict makes them error
 `+loggingFlagHelp+`
 Run "agent serve --help" for the server flags (default 127.0.0.1:8080; loopback
 is token-less, a public bind needs a token from "agent tokens add").
-Run "agent tokens add --help" for token issuance, and "agent sources list
---help", "agent sources validate --help", or "agent sources inspect --help"
-for source flags.
+Run "agent backup --help" for the snapshot flags, and "agent tokens add --help"
+for token issuance, and "agent sources list --help", "agent sources validate
+--help", or "agent sources inspect --help" for source flags.
 `)
 }

@@ -4,11 +4,13 @@ Build plan for a local-first RAG agent over Eli's published writing.
 This document is the source of truth for scope, sequencing, and exit criteria.
 Update it as we learn.
 
-**Last refined**: 2026-11-09 (website provider). The HTML `web` provider
-landed (Decision 22): `elilap.dev` pages are indexed as `web_page` chunks
-alongside the Ghost posts, with a named extraction strategy per source and
-`agent sources inspect` for authoring it; `migrations/0003_web_kind.sql` widens
-the `source_kind` CHECK. Previous refinement: 2026-11-06 (A2A review
+**Last refined**: 2026-11-11 (operator small wins). `agent backup` is live
+(online `VACUUM INTO`) and `scripts/ingest-all.sh` calls the built binary
+again. Previous refinement: 2026-11-09 (website provider). The HTML `web`
+provider landed (Decision 22): `elilap.dev` pages are indexed as `web_page`
+chunks alongside the Ghost posts, with a named extraction strategy per source
+and `agent sources inspect` for authoring it; `migrations/0003_web_kind.sql`
+widens the `source_kind` CHECK. Earlier refinement: 2026-11-06 (A2A review
 hardening). Phase 2 code is complete
 and verified; two exit criteria are still open — **Ragas** has only single-row
 smoke runs against its 15 answer + 14 refusal cases, and **promptfoo** has no
@@ -16,7 +18,7 @@ captured report. **Phase 4's A2A surface shipped on 2026-11-05, ahead of
 Phase 3**, because it was the next product surface: `agent serve` now serves
 the A2A v0.3 agent card, `message/send`, bearer tokens, the per-token rate
 limit, and the audit stream, and `docs/a2a.md` is the wire contract. Phase 3
-operations (container, watch, backup, full eval runs) remain. The query-fan-out
+operations (container, watch, full eval runs) remain. The query-fan-out
 answer path was built, A/B'd, and **removed on 2026-11-05**, so the
 tool-calling loop is the only answer path (`docs/fanout-experiment.md`), and
 `reasoning_effort` is pinned per call kind. The container path — the last
@@ -106,7 +108,7 @@ original schema.
 | 5 | Repos / sources | Ghost Admin API + Postiz HTTP API + the public website over HTML (Decision 22) | Live, queryable, idempotent on `(source_kind, source_id)` |
 | 2b | Go driver | CGO: `mattn/go-sqlite3` (`-tags sqlite_fts5`) + sqlite-vec Go bindings (asg017), pinned | FTS5 + vec0 in one DB handle; exact binding import path confirmed in the Phase 1 driver spike, not before |
 | 6 | Repo location | `/Users/eli/projects/elilap.dev-agent` (this host); remote `git@github.com:eli-l/elilap.dev-agent.git` — both verified 2026-10-21 | Previous plan revision assumed a different machine (`/home/openbot/...`, systemd); corrected |
-| 7 | CLI surface | One binary `agent`, subcommands `ingest`, `embed`, `query`, `ask`, `stats`, `serve`, `tokens` | Matches `./agent ingest` muscle memory; the five separate `cmd/*/main.go` stubs collapsed into `cmd/agent/` in Phase 1 |
+| 7 | CLI surface | One binary `agent`, subcommands `ingest`, `embed`, `query`, `ask`, `stats`, `backup`, `serve`, `tokens` | Matches `./agent ingest` muscle memory; the five separate `cmd/*/main.go` stubs collapsed into `cmd/agent/` in Phase 1 |
 | 8 | Auth posture | env-loaded keys; never printed; gitignored index | Defense by default |
 | 9 | Container runtime | Multi-stage Dockerfile (builder `golang:1.27` → minimal runtime) + `compose.yaml` with the agent service only (LocalAI is external — Decision 10) | Whole system runs on any Docker host; builder tag floats to the latest 1.27 patch ≥ go.mod's `1.27` |
 | 10 | Model serving | **Existing self-hosted LocalAI instance** at `http://192.168.78.243:8080` (LAN host `dev`, LocalAI `v4.12.0`) — models already loaded: `embeddinggemma-300m`, `spark-x2.5-4b`, `spark-x2.5-1.7b-q4`; `/readyz` → 200 (verified 2026-10-23) | One server covers embeddings + chat; nothing to pull on first boot; compose no longer runs LocalAI |
@@ -218,7 +220,7 @@ elilap.dev-agent/
 ├── tests-ai/                         # promptfoo red-team suite over POST /v1/ask
 ├── scripts/
 │   ├── ask                           # thin wrapper over `agent ask`
-│   └── ingest-all.sh                 # cron-friendly (Phase 3: still calls the removed cmd/ingest)
+│   └── ingest-all.sh                 # cron-friendly ingest runner (calls the built binary)
 ├── docs/                             # OKF v0.2 bundle; see docs/index.md
 │   ├── a2a.md                        # A2A wire contract
 │   ├── agent-architecture.md         # loop + surfaces
@@ -289,7 +291,7 @@ pinned to a versioned tag) and point `LOCALAI_BASE_URL` at it.
 * A bind mount (`-v "$PWD/data:/data"`) is supported when the file must be
   host-visible (inspection, backup). On macOS bind mounts are slower
   (VirtioFS) — fine occasionally, not the default.
-* Backup: `agent backup` (online `VACUUM INTO`, Phase 3) or stop + copy the
+* Backup: `agent backup` (online `VACUUM INTO`) or stop + copy the
   volume. Documented in the runbook.
 
 **Image contract**: multi-stage `Dockerfile` — builder `golang:1.27`
@@ -937,10 +939,11 @@ server).
 
 ### Phase 3 — MVP operations
 
-**Status 2026-11-05: not started.** The Phase 4 A2A surface shipped ahead of
-this phase, so the container image and the operator scheduling can be built
-over an A2A-reachable service rather than a dev-only one. Everything below
-still applies.
+**Status 2026-11-11: partially started.** `agent backup` and the
+`scripts/ingest-all.sh` fix landed; the container image, `ingest --watch`,
+scheduling, and the full-suite runs remain. The Phase 4 A2A surface shipped
+ahead of this phase, so the container image and the operator scheduling can be
+built over an A2A-reachable service rather than a dev-only one.
 
 **Goal**: the system runs unattended and you actually use it. This phase also
 absorbs the two things Phase 2 left undone: the container path (moved from
@@ -957,16 +960,18 @@ full size.
       `AGENT_DB_PATH=/data/index.db`. Prove the sqlite-vec KNN round-trips
       inside the image (the open risk in §4) and that `docker compose run
       --rm agent agent ingest` indexes on a clean host.
-- [ ] `scripts/ingest-all.sh`: **currently broken** — it still execs
-      `go run ./cmd/ingest`, and `cmd/ingest` was collapsed into
-      `cmd/agent` in Phase 1. Make it call the built binary
-      (`./agent ingest "$@"`), not `go run`. Container mode:
+- [x] `scripts/ingest-all.sh`: **fixed 2026-11-11** — it now calls the built
+      binary (`./agent ingest "$@"`) from the repo root and fails with a build
+      hint when `./agent` is missing. Container mode remains
       `docker compose run --rm agent agent ingest`.
 - [ ] `agent ingest --watch`: poll upstream every N minutes during work
       hours, no-op when nothing changed. In container mode the `agent`
       service runs long-lived with `restart: unless-stopped`.
-- [ ] `agent backup`: online `VACUUM INTO` snapshot of the SQLite file
-      into `/data` (safe while the writer is live).
+- [x] `agent backup`: **done 2026-11-11** — online `VACUUM INTO` snapshot into
+      `index-<UTC stamp>.db` next to the index (or an explicit `--out`), safe
+      while the writer is live; it refuses to overwrite an existing file. The
+      default lands in `/data` in container mode and was verified on the live
+      949-chunk index (`docs/runs/backup-2026-11-11.md`).
 - [ ] Schedule on this Mac: **launchd** agent or user cron (no systemd on
       darwin) invoking the container command above. Hourly default.
 - [ ] Wherever your agent memory lives, note: "for questions about my
@@ -1208,5 +1213,5 @@ The project is "done" when:
 We are not done at MVP. We are not done at Phase 2. The A2A half of
 "done" is shipped: an A2A-reachable agent, with the loop, the tool, and
 the grounding guarantees living in this repo. What remains is the Phase 3
-operator path — container image, unattended scheduling, backup, and the
-two full-size eval runs — plus a month of shadow usage.
+operator path — container image, unattended scheduling, and the two full-size
+eval runs — plus a month of shadow usage.
