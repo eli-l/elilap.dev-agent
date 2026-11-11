@@ -5,7 +5,7 @@ description: The environment layer - godotenv loading .env at startup, the envco
 status: stable
 generated:
   by: deepseek/deepseek-v4.1-flash
-  at: 2026-10-28T13:04:26Z
+  at: 2026-11-11T08:50:00Z
 tags: [config, environment, envconfig, godotenv, secrets, ops]
 sources:
   - internal/envcfg/envcfg.go
@@ -61,13 +61,13 @@ constants, not in struct tags, so there is exactly one definition.
 |---|---|---|---|
 | `AGENT_LOG_LEVEL` | `internal/logging` | `info` | `trace`…`disabled`; `--log-level` wins over it |
 | `AGENT_LOG_FORMAT` | `internal/logging` | `text` | `text` or `json`; `--log-format` wins over it |
-| `AGENT_DB_PATH` | `internal/envcfg` | `./index.db` | `/data/index.db` in the container (PLAN.md Decision 11) |
+| `AGENT_DB_PATH` | `internal/envcfg` | `./data/index.db` | `/data/index.db` in the container, where `./data` is bind-mounted at `/data` (PLAN.md Decision 11) |
 | `LOCALAI_BASE_URL` | `internal/envcfg` | `http://192.168.78.243:8080/v1` | Any OpenAI-compatible server |
 | `LOCALAI_API_KEY` | `internal/envcfg` | empty | Optional bearer token |
 | `EMBED_MODEL` | `internal/envcfg` | `embeddinggemma-300m` | Must produce 768 dims |
 | `CHAT_MODEL` | `internal/envcfg` | `spark-x2.5-4b` | Reasoning model, used by the loop |
 | `AGENT_A2A_TOKENS` | `internal/envcfg` | empty | Comma-separated `id:token` bearer list for the A2A surface; empty and loopback = token-less dev |
-| `AGENT_A2A_TOKENS_FILE` | `internal/envcfg` | `./a2a-tokens.txt` | `0600` token file, re-read on change (rotation without restart); gitignored, missing = no tokens |
+| `AGENT_A2A_TOKENS_FILE` | `internal/envcfg` | `./data/a2a-tokens.txt` | `0600` token file, re-read on change (rotation without restart); gitignored, missing = no tokens |
 | `AGENT_A2A_PUBLIC_URL` | `internal/envcfg` | empty | Absolute service root advertised in the agent card; required with `--bind-public`, otherwise a loopback bind derives `http://<addr>` |
 | `EVAL_BASE_URL` | `evals/` (Python) | `http://localhost:8000/v1` | Judge endpoint for the Ragas harness; the promptfoo `redteam.provider` mirrors it. Independent of `LOCALAI_*` |
 | `EVAL_MODEL` | `evals/` (Python) | `mtplx-qwen36-35b-a3b-optimized-speed` | Model the harness scores; promptfoo generates (local-capable plugins) and grades with it |
@@ -76,6 +76,12 @@ constants, not in struct tags, so there is exactly one definition.
 | `GHOST_API_KEY` | `sources.yaml` ref | — | Secret |
 | `POSTIZ_API_URL` | `sources.yaml` ref | — | Credential reference, value required |
 | `POSTIZ_API_KEY` | `sources.yaml` ref | — | Secret |
+
+Runtime files (the SQLite index and its WAL/SHM siblings, `agent backup`
+snapshots, and the A2A token file) live under `./data/` on the host and
+`/data` in the container. `.gitkeep` keeps the directory; its contents are
+gitignored and excluded from the image build context, and compose bind-mounts
+`./data:/data`.
 
 Credentials are the one **dynamic** case: `sources.yaml` declares
 `{ env: VAR }` references, so the names are configuration data, not Go

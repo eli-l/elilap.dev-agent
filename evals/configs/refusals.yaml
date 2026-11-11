@@ -11,7 +11,7 @@ version: 1
 #   * personal        the corpus never states it about the author
 #
 # Before adding a case, verify the absence — `grep` the corpus, do not assume:
-#   sqlite3 index.db "select count(*) from chunks where body like '%<term>%'"
+#   sqlite3 data/index.db "select count(*) from chunks where body like '%<term>%'"
 #
 #   cd evals && uv run python evaluate.py --kind refusals
 queries:

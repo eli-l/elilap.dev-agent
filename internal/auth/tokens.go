@@ -480,6 +480,9 @@ func writeFileTokens(path string, tokens []Token) error {
 		b.WriteString("\n")
 	}
 	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return fmt.Errorf("auth: create token directory: %w", err)
+	}
 	tmp, err := os.CreateTemp(dir, ".a2a-tokens-*")
 	if err != nil {
 		return fmt.Errorf("auth: write token file: %w", err)

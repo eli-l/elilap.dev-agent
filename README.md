@@ -18,14 +18,15 @@ and rebuild at any time.
 
 ## Status
 
-Phases 1, 2, and the A2A half of Phase 4 are implemented and runnable on a
-Go host: ingestion (Ghost, Postiz, and the generic HTML `web` provider with
-per-site extraction strategies), resumable embeddings, hybrid retrieval
-(BM25 + vectors, RRF), the grounded tool-calling loop (`agent ask`), the dev JSON paths
-(`/v1/retrieve`, `/v1/ask`), and the A2A surface — agent card discovery,
-`message/send`, bearer tokens, a per-token rate limit, and the audit stream.
-Phase 3 operations are still open (the container path, `ingest --watch`,
-and the first full-size runs of the two test suites). See
+Phases 1, 2, the A2A half of Phase 4, and the container path are implemented
+and runnable: ingestion (Ghost, Postiz, and the generic HTML `web` provider
+with per-site extraction strategies), resumable embeddings, hybrid retrieval
+(BM25 + vectors, RRF), the grounded tool-calling loop (`agent ask`), the dev
+JSON paths (`/v1/retrieve`, `/v1/ask`), and the A2A surface — agent card
+discovery, `message/send`, bearer tokens, a per-token rate limit, and the
+audit stream. Runtime data (SQLite index, WAL/SHM, backups, A2A token file)
+lives under `./data/`. Phase 3 operations still open: `ingest --watch`,
+scheduling, and the first full-size runs of the two test suites. See
 [`PLAN.md`](./PLAN.md) for the build plan and
 [`docs/runbook.md`](./docs/runbook.md) for the operator path.
 
@@ -44,9 +45,9 @@ Website (HTML)    ─┘        ▲                                (hybrid RRF)
 ```
 
 * **One Go binary** with subcommands: `ingest`, `embed`, `query`, `ask`,
-  `stats`, `serve` (A2A card + `message/send` + `/v1/retrieve` +
+  `stats`, `backup`, `serve` (A2A card + `message/send` + `/v1/retrieve` +
   `/v1/ask`), and `tokens` (A2A bearer issuance/revocation).
-* **One SQLite file** (`index.db`) you can `cp` to back up.
+* **One SQLite file** (`data/index.db`) you can `cp` to back up.
 * **Hybrid retrieval**: BM25 (FTS5) + vector (sqlite-vec) with RRF merging.
 * **Model-agnostic**: self-hosted LocalAI by default
   (`http://192.168.78.243:8080`) or any OpenAI-compatible server — one
@@ -69,7 +70,7 @@ cp example.env .env       # then fill in the credentials
 go mod vendor             # vendor/ is gitignored
 
 go build -tags sqlite_fts5 -o agent ./cmd/agent
-./agent ingest
+./agent ingest            # writes ./data/index.db
 ./agent embed
 ./agent query "when did I write about burnout"
 ./agent ask "what did I write about harnesses?"
@@ -84,6 +85,12 @@ An A2A client discovers the agent at
 to `http://127.0.0.1:8080/a2a`. See
 [`docs/a2a.md`](./docs/a2a.md) for the wire contract, token rotation, rate
 limit, and audit record.
+
+The container path uses the same binary and bind-mounts `./data` at `/data`:
+`docker compose build`, then `docker compose run --rm agent agent ingest`
+(or `embed`/`stats`/`backup`); `docker compose up` serves A2A on
+`127.0.0.1:8081` with a token. See
+[`docs/runbook.md`](./docs/runbook.md#container-docker-compose).
 
 `example.env` lists every environment variable the agent reads, with defaults
 for settings and empty values for secrets. The binary loads `.env` at startup
@@ -112,12 +119,12 @@ faithfulness or correctness miss in the Ragas suite. Unit tests stay in Go:
 `go test -tags sqlite_fts5 ./...`. CI
 ([`.github/workflows/ci.yml`](./.github/workflows/ci.yml)) runs only `gofmt`,
 `go vet`, and those unit tests; the Ragas and promptfoo suites stay local
-because they need a model host and a populated `index.db`.
+because they need a model host and a populated `data/index.db`.
 
 ## What is NOT in this repo
 
 * The corpus itself — owned by Ghost and Postiz.
-* Generated embeddings — those live in `index.db` (gitignored).
+* Generated embeddings — those live in `data/index.db` (gitignored).
 * Free-form generation beyond the grounded loop — answers come only from
   the corpus (citation-or-refusal), never from open-domain chat; the loop
   itself stays model-agnostic via the OpenAI-compatible connector.

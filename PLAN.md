@@ -4,10 +4,12 @@ Build plan for a local-first RAG agent over Eli's published writing.
 This document is the source of truth for scope, sequencing, and exit criteria.
 Update it as we learn.
 
-**Last refined**: 2026-11-11 (operator small wins + CI). `agent backup` is live
-(online `VACUUM INTO`), `scripts/ingest-all.sh` calls the built binary again,
-and `.github/workflows/ci.yml` gates gofmt, vet, and the Go unit tests.
-Previous refinement: 2026-11-09 (website provider). The HTML `web`
+**Last refined**: 2026-11-11 (operator small wins + CI + containers). Runtime
+data now lives under `./data/` by default (`./data/index.db` on the host,
+`/data/index.db` in the container), the container path is implemented
+(`Dockerfile`, `.dockerignore`, `compose.yaml`, `./data:/data`), and CI gates
+gofmt, vet, and the Go unit tests. Previous refinement: 2026-11-09 (website
+provider). The HTML `web`
 provider landed (Decision 22): `elilap.dev` pages are indexed as `web_page`
 chunks alongside the Ghost posts, with a named extraction strategy per source
 and `agent sources inspect` for authoring it; `migrations/0003_web_kind.sql`
@@ -19,7 +21,7 @@ captured report. **Phase 4's A2A surface shipped on 2026-11-05, ahead of
 Phase 3**, because it was the next product surface: `agent serve` now serves
 the A2A v0.3 agent card, `message/send`, bearer tokens, the per-token rate
 limit, and the audit stream, and `docs/a2a.md` is the wire contract. Phase 3
-operations (container, watch, full eval runs) remain. The query-fan-out
+operations (watch, scheduling, full eval runs) remain. The query-fan-out
 answer path was built, A/B'd, and **removed on 2026-11-05**, so the
 tool-calling loop is the only answer path (`docs/fanout-experiment.md`), and
 `reasoning_effort` is pinned per call kind. The container path — the last
@@ -61,7 +63,7 @@ original schema.
 1. Retrieval over ~130 Ghost posts and ~4 months of Postiz cross-posts.
 2. Hybrid retrieval (BM25 + vectors) with RRF merging.
 3. Single-host, single-file SQLite index; no long-lived vector DB service.
-4. Reproducible: `rm index.db && ./agent ingest && ./agent embed` rebuilds
+4. Reproducible: `rm -rf data/index.db* && ./agent ingest && ./agent embed` rebuilds
    the whole thing from upstream sources.
 5. A grounded, citation-first answer loop: one internal tool-calling
    agent (Decisions 15/16) turns a peer's conversational question into
@@ -113,7 +115,7 @@ original schema.
 | 8 | Auth posture | env-loaded keys; never printed; gitignored index | Defense by default |
 | 9 | Container runtime | Multi-stage Dockerfile (builder `golang:1.27` → minimal runtime) + `compose.yaml` with the agent service only (LocalAI is external — Decision 10) | Whole system runs on any Docker host; builder tag floats to the latest 1.27 patch ≥ go.mod's `1.27` |
 | 10 | Model serving | **Existing self-hosted LocalAI instance** at `http://192.168.78.243:8080` (LAN host `dev`, LocalAI `v4.12.0`) — models already loaded: `embeddinggemma-300m`, `spark-x2.5-4b`, `spark-x2.5-1.7b-q4`; `/readyz` → 200 (verified 2026-10-23) | One server covers embeddings + chat; nothing to pull on first boot; compose no longer runs LocalAI |
-| 11 | SQLite placement | `AGENT_DB_PATH` env: `/data/index.db` in container, `./index.db` on host; named volume `agent-data` by default | Keeps `index.db` + WAL/SHM siblings on one mount; clean, durable host mapping |
+| 11 | SQLite placement | `AGENT_DB_PATH` env: `/data/index.db` in the container, `./data/index.db` on the host; `./data` is bind-mounted at `/data` | Keeps the index + WAL/SHM siblings on one mount; host-visible, durable, and excluded from git and the image build context |
 | 12 | Import config file | One `sources.yaml` at the repo root (YAML, strict decode: `KnownFields(true)`, `version:` field) | Providers are declared in one place and can be enabled/disabled/reconfigured without a rebuild; TOML rejected — the repo already speaks YAML (`sources.yaml`) and YAML carries comments in a hand-edited file (decided 2026-10-23) |
 | 13 | Provider model | One `Provider` interface (`List` cheap → `Fetch` full) + a registry keyed by config `type`; unknown type or bad options = startup error | One code path for every source; the `List`/`Fetch` split is what makes incremental ingest cheap and fixtures-testable without credentials |
 | 14 | Ingest modes | Default = incremental against a state ledger (`source_state` + `source_items`); `--full` = re-fetch + re-chunk + **re-embed** (decided 2026-10-23) | On a full reindex the index is rebuilt exactly as the sources stand today, and the corpus is small enough (≤1,500 chunks) that the CPU cost is acceptable |
@@ -174,8 +176,8 @@ Facts checked on the actual dev machines, so the plan stops guessing:
 
 ## 2. Repo layout
 
-Current tree (Phases 1 and 2 plus the Phase 4 A2A surface are implemented;
-the container files are Phase 3):
+Current tree (Phases 1 and 2, the Phase 4 A2A surface, and the container path
+are implemented):
 
 ```
 elilap.dev-agent/
@@ -187,11 +189,13 @@ elilap.dev-agent/
 ├── sources.yaml                      # static import config: providers, enable/disable, options
 ├── go.mod / go.sum                   # dependency source of truth
 ├── vendor/                           # local only (gitignored); `go mod vendor`
+├── data/                             # runtime: index + WAL/SHM, backups,
+│                                     # token file (contents gitignored)
 ├── cmd/
 │   └── agent/                        # one binary; subcommand dispatch +
 │                                     # one file per subcommand: ingest.go,
 │                                     # embed.go, query.go, ask.go, stats.go,
-│                                     # serve.go, tokens.go
+│                                     # backup.go, serve.go, tokens.go
 ├── internal/
 │   ├── a2a/                          # A2A v0.3 wire types, agent card,
 │   │                                 # message/send handler
@@ -235,17 +239,16 @@ elilap.dev-agent/
 │   ├── fanout-experiment.md          # removed answer path (historical record)
 │   ├── index.md / log.md             # bundle manifest and update log
 │   └── runs/                         # timestamped run captures
-├── Dockerfile / .dockerignore        # Phase 3: multi-stage image
-├── compose.yaml                      # Phase 3: agent service only; LocalAI is external
-└── index.db (+ -wal/-shm)            # derived, gitignored, never committed
+├── Dockerfile / .dockerignore        # multi-stage image; data/ excluded from context
+└── compose.yaml                      # agent service; ./data:/data; LocalAI is external
 ```
 
 What is not in the tree: `localai/` (the model server is external — Decision
-10), and any file that would put a credential or the index in git. The
-container files (`Dockerfile`, `.dockerignore`, `compose.yaml`) are Phase 3
-deliverables and do not exist yet.
+10), and any file that would put a credential or the index contents in git.
+`data/` is tracked only by `.gitkeep`; its contents are gitignored and
+excluded from the image build context.
 
-### 2.5 Container topology (target)
+### 2.5 Container topology (implemented)
 
 One `docker compose up` brings up the agent on any Docker host; the model
 server is external (Decision 10):
@@ -259,11 +262,16 @@ services:
       EMBED_MODEL: embeddinggemma-300m
       CHAT_MODEL: spark-x2.5-4b
       AGENT_DB_PATH: /data/index.db
+      AGENT_A2A_TOKENS_FILE: /data/a2a-tokens.txt
+      AGENT_A2A_PUBLIC_URL: http://127.0.0.1:8081
+    ports:
+      - "127.0.0.1:8081:8080"
     volumes:
-      - agent-data:/data
-
-volumes:
-  agent-data:
+      - type: bind
+        source: ./data
+        target: /data
+        bind:
+          create_host_path: false
 ```
 
 **LocalAI is external now.** The compose stack runs the agent only; the
@@ -284,23 +292,29 @@ pinned to a versioned tag) and point `LOCALAI_BASE_URL` at it.
 **SQLite mapping contract** (the clean way):
 
 * The DB path is one env var, `AGENT_DB_PATH` — `/data/index.db` inside the
-  container, `./index.db` in a host run. Same binary, same behavior.
-* `/data` is a **named volume** (`agent-data`) by default: durable across
-  container recreations, fast on every platform, and it keeps `index.db`,
-  `index.db-wal`, `index.db-shm` together on one filesystem (required by
-  SQLite WAL — never split them across mounts).
-* A bind mount (`-v "$PWD/data:/data"`) is supported when the file must be
-  host-visible (inspection, backup). On macOS bind mounts are slower
-  (VirtioFS) — fine occasionally, not the default.
-* Backup: `agent backup` (online `VACUUM INTO`) or stop + copy the
-  volume. Documented in the runbook.
+  container, `./data/index.db` in a host run. Same binary, same behavior.
+* `./data` is the runtime data directory on the host. Compose bind-mounts it
+  at `/data`, so the index, its WAL/SHM siblings, backups, and the A2A token
+  file are host-visible and durable across container recreations. The
+  directory is tracked by `.gitkeep`; its contents are gitignored and
+  excluded from the image build context.
+* The DB and WAL/SHM must stay on one filesystem; the single `/data` mount
+  keeps them together. A named volume can replace the bind mount when
+  host-visibility is not wanted.
+* Backup: `agent backup` (online `VACUUM INTO`) writes next to the DB by
+  default, i.e. into `./data` or `/data`. Documented in the runbook.
 
 **Image contract**: multi-stage `Dockerfile` — builder `golang:1.27`
-(Debian variant: CGO on, toolchain present, tag floats to the newest 1.27
-patch) → runtime `debian:bookworm-slim` carrying only the binary plus CA
-certs and tzdata. If the Phase 1 driver spike lands a static or pure-Go
-build (ncruces), the runtime collapses to `distroless`/`scratch` as a
-one-line swap. We do not ship LocalAI in the image — it runs on
+(Debian variant: CGO on, `libsqlite3-dev` for the sqlite-vec header,
+toolchain present, tag floats to the newest 1.27 patch) → runtime
+`debian:bookworm-slim` (digest-pinned) carrying only the binary plus CA certs
+and tzdata.
+Compose runs the container as root so the `./data` bind mount works on any
+host, while dropping all capabilities, setting `no-new-privileges`, and
+making the root filesystem read-only; `./data` is the writable mount. If the
+Phase 1 driver spike lands a static or pure-Go build (ncruces), the runtime
+collapses to `distroless`/`scratch` as a one-line swap. We do not ship
+LocalAI in the image — it runs on
 `192.168.78.243` (Decision 10, currently `v4.12.0`), so model behavior
 depends on that host's build, not ours. If the fallback service is ever
 added here, pin it to a **versioned tag, not `latest`**.
@@ -573,11 +587,10 @@ intentionally a separate command.
       `spark-x2.5-4b` is a **reasoning** model whose response carries a
       `reasoning` field — `max_tokens` must budget for reasoning or
       `content` comes back empty.
-- [ ] Containerize (§2.5) — **moved to Phase 3 on 2026-11-05**: no Phase 2
-      deliverable needs it, and Phase 3's operator path does. `Dockerfile`,
-      `.dockerignore`, `compose.yaml`
-      with the agent service, `agent-data` volume, `AGENT_DB_PATH` wiring,
-      and `LOCALAI_BASE_URL` pointing at `http://192.168.78.243:8080/v1`.
+- [x] Containerize (§2.5) — moved to Phase 3 and **done 2026-11-11**:
+      `Dockerfile`, `.dockerignore`, and `compose.yaml` with the agent
+      service, a `./data:/data` bind mount, `AGENT_DB_PATH` wiring, and
+      `LOCALAI_BASE_URL` pointing at `http://192.168.78.243:8080/v1`.
       No LocalAI service and no `/readyz` healthcheck in compose — the
       agent probes `/readyz` on the model host itself at startup and fails
       fast with a clear error. Embed model `embeddinggemma-300m` (768d,
@@ -921,9 +934,9 @@ citation and refusal rules above are unchanged.
   2026-11-02** (cited answer, refusal, HTTP parity).
 - A second human can read `README.md` + `docs/runbook.md` and run `ask`
   without help — including via `docker compose up` on a clean host.
-  **Runbook written 2026-11-02** (CLI path verified end to end); the
-  compose path moved to Phase 3 on 2026-11-05, so this criterion is
-  satisfied for the Go host only.
+  **Runbook written 2026-11-02** (CLI path verified end to end); the container
+  path is documented and was exercised on this host on 2026-11-11, so both
+  paths now exist. A second human has not independently walked them yet.
 - `POST /v1/retrieve` and `agent query --format jsonl` return identical
   results for identical inputs; `POST /v1/ask` returns the same answer
   content as `agent ask` for the same question (model non-determinism
@@ -940,11 +953,12 @@ server).
 
 ### Phase 3 — MVP operations
 
-**Status 2026-11-11: partially started.** `agent backup` and the
-`scripts/ingest-all.sh` fix landed; the container image, `ingest --watch`,
-scheduling, and the full-suite runs remain. The Phase 4 A2A surface shipped
-ahead of this phase, so the container image and the operator scheduling can be
-built over an A2A-reachable service rather than a dev-only one.
+**Status 2026-11-11: container path done; operations remain.** The container
+image/compose path, `agent backup`, the `scripts/ingest-all.sh` fix, and CI
+landed. `ingest --watch`, scheduling, the full-suite runs, and the shadow week
+remain. The Phase 4 A2A surface shipped ahead of this phase, so the container
+image and operator scheduling were built over an A2A-reachable service rather
+than a dev-only one.
 
 **Goal**: the system runs unattended and you actually use it. This phase also
 absorbs the two things Phase 2 left undone: the container path (moved from
@@ -956,11 +970,13 @@ full size.
 - [ ] Close the Phase 2 exit criteria the code is already waiting on:
       one full `evals/` run (`answers` + `refusals`, 29 cases) and one
       `tests-ai/` promptfoo run, each captured as a `docs/runs/` record.
-- [ ] Containerize (§2.5, moved from Phase 1): `Dockerfile`,
-      `.dockerignore`, `compose.yaml`, the `agent-data` volume, and
-      `AGENT_DB_PATH=/data/index.db`. Prove the sqlite-vec KNN round-trips
-      inside the image (the open risk in §4) and that `docker compose run
-      --rm agent agent ingest` indexes on a clean host.
+- [x] Containerize (§2.5, moved from Phase 1): **done 2026-11-11** —
+      `Dockerfile`, `.dockerignore`, `compose.yaml`, a `./data:/data` bind
+      mount, and `AGENT_DB_PATH=/data/index.db`. Verified in-image stats, a
+      hybrid query exercising vec0 KNN, `agent backup`, and a clean-data
+      ingest + embed (859 chunks) (`docs/runs/container-2026-11-11.md`).
+      Compose publishes `127.0.0.1:8081` and requires a token for the
+      `--bind-public` serve command.
 - [x] `scripts/ingest-all.sh`: **fixed 2026-11-11** — it now calls the built
       binary (`./agent ingest "$@"`) from the repo root and fails with a build
       hint when `./agent` is missing. Container mode remains
@@ -1206,8 +1222,9 @@ The project is "done" when:
 
 * `agent ingest` is idempotent against both sources.
 * `agent query` returns verifiable, citable answers.
-* The repo + one `index.db` file constitute the entire operational footprint
-  (the index lives in the `agent-data` volume in container mode).
+* The repo + one `data/index.db` file constitute the entire operational
+  footprint (the index lives in `./data` on the host and `/data` in container
+  mode, bind-mounted from `./data`).
 * The whole system runs from `docker compose up` on a clean host with only
   a container runtime — environment independence proven.
 * A second agent can task our agent over A2A and receive a grounded,
@@ -1219,5 +1236,5 @@ The project is "done" when:
 We are not done at MVP. We are not done at Phase 2. The A2A half of
 "done" is shipped: an A2A-reachable agent, with the loop, the tool, and
 the grounding guarantees living in this repo. What remains is the Phase 3
-operator path — container image, unattended scheduling, and the two full-size
-eval runs — plus a month of shadow usage.
+operator path — unattended scheduling and the two full-size eval runs — plus a
+month of shadow usage.

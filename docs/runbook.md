@@ -1,13 +1,13 @@
 ---
 type: Guide
 title: Runbook - build, ingest, embed, query, ask, serve
-description: The operator path from a clean checkout to grounded answers - building the binary, rebuilding the index, running hybrid queries and the agent loop, the HTTP server (A2A card + message/send, bearer tokens, /v1/* paths), the two end-to-end test suites (Ragas and promptfoo), the online backup command, and the failures you are likely to hit.
+description: The operator path from a clean checkout to grounded answers - building the binary, rebuilding the index, running hybrid queries and the agent loop, the HTTP server (A2A card + message/send, bearer tokens, /v1/* paths), the container path, the two end-to-end test suites (Ragas and promptfoo), the online backup command, and the failures you are likely to hit.
 status: stable
 generated:
   by: deepseek/deepseek-v4.1-flash
-  at: 2026-11-11T07:48:11Z
-tags: [runbook, operations, cli, http, eval, troubleshooting]
-sources: ["../PLAN.md", "../AGENTS.md", "../scripts/ingest-all.sh"]
+  at: 2026-11-11T08:50:00Z
+tags: [runbook, operations, cli, http, container, eval, troubleshooting]
+sources: ["../PLAN.md", "../AGENTS.md", "../Dockerfile", "../compose.yaml", "../scripts/ingest-all.sh"]
 ---
 
 # Runbook
@@ -16,6 +16,8 @@ sources: ["../PLAN.md", "../AGENTS.md", "../scripts/ingest-all.sh"]
 
 * Go 1.27 and a CGO toolchain (the SQLite driver needs both).
 * A populated `.env` (start from `example.env`; credentials live only there).
+* A writable `./data/` directory; the committed `.gitkeep` keeps it present.
+  It holds the index, WAL/SHM, backups, and the A2A token file.
 * The model host in `LOCALAI_BASE_URL` reachable:
   `curl "${LOCALAI_BASE_URL%/v1}/readyz"` (the default is
   `http://192.168.78.243:8080`). It serves both embeddings (`EMBED_MODEL`)
@@ -55,6 +57,8 @@ and update `options.strategy`/`options.selectors` (or the `elilap` adapter in
 
 `chunks`, `chunks_fts`, and `chunks_vec` should report the same count, and
 `embedded` should equal `vec rows`. A second `./agent ingest` is a near no-op.
+The default `AGENT_DB_PATH` is `./data/index.db`; the container uses
+`/data/index.db` from the same `./data` bind mount.
 
 For cron, `scripts/ingest-all.sh` wraps the built binary from the repo root
 (`./agent ingest "$@"`); build `./agent` first.
@@ -62,8 +66,8 @@ For cron, `scripts/ingest-all.sh` wraps the built binary from the repo root
 ## Backup
 
 ```bash
-./agent backup                          # -> index-<UTC stamp>.db next to the index
-./agent backup --out /data/backup.db     # explicit destination; must not exist
+./agent backup                          # -> data/index-<UTC stamp>.db
+./agent backup --out data/backup.db      # explicit destination; must not exist
 ```
 
 `agent backup` runs SQLite's online `VACUUM INTO` from a read-only handle, so
@@ -106,18 +110,19 @@ On this CPU host an answer takes roughly 10-25 seconds.
 
 ```bash
 ./agent serve                          # 127.0.0.1:8080, token-less, loopback only
-./agent serve --addr 127.0.0.1:18080 --db ./index.db   # the evaluation port
+./agent serve --addr 127.0.0.1:18080 --db ./data/index.db   # the evaluation port
 ./agent tokens add --id alice          # issue a token; prints alice:<token> once
 AGENT_A2A_PUBLIC_URL=https://agent.example \
   ./agent serve --bind-public --addr 0.0.0.0:8080   # requires a token + URL
 ```
 
-The ports are split on purpose: **8080** is yours for interactive work, and
+The ports are split on purpose: **8080** is yours for interactive work,
 **18080** is reserved for the evaluation suites (`evals/` and `tests-ai/`),
-which target it by default.
+which target it by default, and the container publishes the A2A service on
+**8081** (`docker compose up` maps `127.0.0.1:8081` to container 8080).
 
 Without a configured token the loopback server is the token-less dev surface.
-Once a token exists (env or `./a2a-tokens.txt`) every `/a2a` and `/v1/*`
+Once a token exists (env or `./data/a2a-tokens.txt`) every `/a2a` and `/v1/*`
 request needs `Authorization: Bearer <token>`. `--bind-public` is the only way
 to bind a non-loopback address and it refuses to start without a token and an
 explicit `AGENT_A2A_PUBLIC_URL` (the card never derives its URL from an
@@ -238,14 +243,52 @@ fabricated RAG citations, plus `basic` and `jailbreak:meta` strategies. See
 for plugin details, the response-transform caveat, and why a suspected finding
 needs a re-run on this non-deterministic model.
 
-## Not yet in this runbook (Phase 3)
+## Container (Docker Compose)
 
-This runbook covers the **Go-host path**, which is complete end to end. The
-remaining Phase 3 work is:
+The image is a multi-stage build of the same binary plus `migrations/` and
+`sources.yaml`. Compose bind-mounts `./data` at `/data`, so the index, WAL/SHM,
+backups, and token file stay on the host. LocalAI stays external.
 
-* the container path — `Dockerfile`, `compose.yaml`, and
-  `docker compose run --rm agent agent ingest`;
-* `agent ingest --watch` plus the launchd/cron schedule.
+```bash
+cp example.env .env        # fill in credentials
+mkdir -p data              # the committed .gitkeep keeps it present
+docker compose build
+docker compose run --rm agent agent ingest
+docker compose run --rm agent agent embed
+docker compose run --rm agent agent stats
+```
+
+For the A2A server on `127.0.0.1:8081`:
+
+```bash
+docker compose run --rm agent agent tokens add --id local   # prints the token once
+docker compose up -d
+curl -sS http://127.0.0.1:8081/.well-known/agent-card.json | jq .
+docker compose down
+```
+
+`docker compose up` runs `agent serve --bind-public` inside the container, so
+it requires the token file and `AGENT_A2A_PUBLIC_URL` (compose defaults it to
+`http://127.0.0.1:8081`). The image runs as root so the `./data` bind mount
+works on any host; compose drops all capabilities, sets `no-new-privileges`,
+and makes the container filesystem read-only. Compose uses
+`create_host_path: false`, so a missing `./data` is a clear error instead of a
+silently created root-owned directory; `agent tokens add` creates the token
+file's parent directory when needed. On Linux, if the host needs to edit files
+created by the container, run `sudo chown -R "$(id -u):$(id -g)" data`
+afterwards.
+
+One-shot container commands use the same paths: `docker compose run --rm agent
+agent backup` writes `data/index-<UTC stamp>.db`, and every subcommand sees
+`/data/index.db`.
+
+## Remaining Phase 3 work
+
+This runbook covers the Go-host and container paths. The remaining Phase 3
+work is:
+
+* `agent ingest --watch`;
+* the launchd/cron schedule.
 
 ## Troubleshooting
 

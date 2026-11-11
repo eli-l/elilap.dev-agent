@@ -60,7 +60,7 @@ plugin and disables remote generation, so it is a fully local run.
 ## Prerequisites
 
 * Node.js ≥ 20.
-* A populated, embedded `index.db`, and the agent server on the **evaluation
+* A populated, embedded `data/index.db`, and the agent server on the **evaluation
   port** (the suite targets `http://127.0.0.1:18080/v1/ask`, so the interactive
   server on 8080 is untouched):
 

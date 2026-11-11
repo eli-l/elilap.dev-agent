@@ -34,7 +34,7 @@ adversarial behaviour through promptfoo.
 | **promptfoo** | Does the agent behave under adversarial input: bias, harmful content, PII, excessive agency, hijacking, hallucination, fabricated citations? | `tests-ai/` | Node.js ≥ 20 + npm | promptfoo `0.125.1` |
 
 Both talk to the same system under test: the real Go agent over
-`POST /v1/ask`, backed by a real `index.db`. Tests never run against stubs or
+`POST /v1/ask`, backed by a real `data/index.db`. Tests never run against stubs or
 live upstream APIs.
 
 ## Ports and endpoints
@@ -42,6 +42,7 @@ live upstream APIs.
 | Port | Used by | Notes |
 |---|---|---|
 | `8080` | interactive development | Default `agent serve`; never used by the suites. |
+| `8081` | container A2A | `docker compose up` publishes `127.0.0.1:8081` to the container's 8080; the host 8080/18080 stay free. |
 | `18080` | both test suites | `./agent serve --addr 127.0.0.1:18080`; both harnesses target `127.0.0.1:18080/v1/ask`. |
 | `8000` | the local judge model | `EVAL_BASE_URL=http://localhost:8000/v1`, model `mtplx-qwen36-35b-a3b-optimized-speed`. Used by Ragas and by promptfoo. |
 | `15500` | promptfoo report UI | `npm run redteam:report`, reads the local database. |
@@ -62,7 +63,7 @@ go build -mod=vendor -tags sqlite_fts5 -o agent ./cmd/agent
 ## Ragas — answer quality
 
 **Tool**: `evals/evaluate.py`, the only entry point. It asks the real agent
-each question, reads the body of every cited chunk from `index.db`, and scores
+each question, reads the body of every cited chunk from `data/index.db`, and scores
 the answer with the local judge.
 
 **What is used**
@@ -173,7 +174,7 @@ interactive server on 8080 alone.
   before treating it as real, and keep `--force` for config/generation changes
   rather than blaming one noisy run.
 * **Citations matter.** Ragas scores against the excerpts the answer cited
-  (read back from `index.db`). A fabricated citation therefore has no
+  (read back from `data/index.db`). A fabricated citation therefore has no
   supporting context and shows up as a faithfulness/attribution problem.
 * **Tests use the real loop.** They exercise ingest → embed → retrieve →
   grounded answer; a retrieval miss surfaces as a correctness or faithfulness
@@ -186,7 +187,10 @@ Committed: `evals/evaluate.py`, `evals/agent.py`, `evals/configs/*.yaml`,
 `tests-ai/run-promptfoo.sh`, `tests-ai/.npmrc`, `tests-ai/go.mod`, and both
 README files. Generated and gitignored: `evals/output/`, `evals/.venv/`,
 `tests-ai/node_modules/`, `tests-ai/.promptfoo/`, `tests-ai/redteam.yaml`, and
-`tests-ai/reports/*` (the `.gitkeep` files keep the directories).
+`tests-ai/reports/*` (the `.gitkeep` files keep the directories). `data/` is
+tracked by `.gitkeep` only; the index, WAL/SHM, backups, and A2A token file
+inside it are generated and gitignored, and `data/` is excluded from the image
+build context.
 
 When a run is worth keeping as evidence, capture a trimmed record under
 `docs/runs/` using the `type: Run` format (command, trimmed output, timestamp)
@@ -206,7 +210,7 @@ CGO is enabled because `mattn/go-sqlite3` and sqlite-vec are CGO packages, and
 the `sqlite_fts5` tag is required by the driver and the schema tests. The
 Ragas and promptfoo suites, `agent ingest`/`embed`/`ask`, and every other path
 that touches LocalAI stay local, on-demand runs against a populated
-`index.db`; they are not part of CI.
+`data/index.db`; they are not part of CI.
 
 ## Related
 

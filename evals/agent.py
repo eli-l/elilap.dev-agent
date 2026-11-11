@@ -32,7 +32,7 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
 AGENT_BIN = REPO / "agent"
-DEFAULT_DB = Path(os.getenv("AGENT_DB_PATH") or REPO / "index.db")
+DEFAULT_DB = Path(os.getenv("AGENT_DB_PATH") or REPO / "data" / "index.db")
 
 # The loop runs several chat completions; a hung model must not hang the eval.
 ASK_TIMEOUT_SECONDS = 300

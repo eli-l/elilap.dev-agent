@@ -14,7 +14,7 @@ writes CSV results to `output/`. There is no other entry point.
 | Path | What it is |
 |---|---|
 | `evaluate.py` | The tool. Loads configs, asks the agent, runs the metrics, reports. |
-| `agent.py` | The system under test: calls `agent ask --format json` (or `POST /v1/ask` with `--transport http`) and reads the body of every cited chunk from `index.db`, so Ragas scores against exactly the excerpts the answer was allowed to cite. |
+| `agent.py` | The system under test: calls `agent ask --format json` (or `POST /v1/ask` with `--transport http`) and reads the body of every cited chunk from `data/index.db`, so Ragas scores against exactly the excerpts the answer was allowed to cite. |
 | `configs/answers.yaml` | 15 answerable questions with verified evidence and the facts a correct answer must state. |
 | `configs/refusals.yaml` | 14 questions the corpus cannot answer. |
 | `output/` | Generated CSV datasets, experiment results, and traces. Gitignored. |
@@ -63,13 +63,13 @@ Add a case by reading the chunk first, then copying its full 64-character
 `chunk_id`:
 
 ```bash
-sqlite3 index.db "select chunk_id, section, body from chunks where title='<post>' order by rowid"
+sqlite3 data/index.db "select chunk_id, section, body from chunks where title='<post>' order by rowid"
 ```
 
 For a refusal case, prove the absence rather than assuming it:
 
 ```bash
-sqlite3 index.db "select count(*) from chunks where body like '%<term>%'"
+sqlite3 data/index.db "select count(*) from chunks where body like '%<term>%'"
 ```
 
 ## Running

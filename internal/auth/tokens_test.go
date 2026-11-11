@@ -140,6 +140,24 @@ func TestStoreRejectsDuplicateAcrossSources(t *testing.T) {
 	}
 }
 
+func TestAddTokenCreatesParentDirectory(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "nested", "data", "a2a-tokens.txt")
+	tok, err := auth.AddToken(path, "alice")
+	if err != nil {
+		t.Fatalf("AddToken with a missing parent: %v", err)
+	}
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("stat token file: %v", err)
+	}
+	store, err := auth.NewStore("", path)
+	if err != nil {
+		t.Fatalf("NewStore: %v", err)
+	}
+	if got, ok := store.Lookup(tok.Value); !ok || got.ID != "alice" {
+		t.Errorf("issued token does not authenticate: %+v %v", got, ok)
+	}
+}
+
 func TestAddAndRevokeToken(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "tokens")
 	tok, err := auth.AddToken(path, "alice")

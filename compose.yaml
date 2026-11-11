@@ -1,0 +1,42 @@
+name: elilap-dev-agent
+
+services:
+  agent:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: elilap-dev-agent:local
+    # .env is the same file a host run loads; it is not baked into the image.
+    # Optional so `docker compose config`/one-shot stats work before setup.
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      AGENT_DB_PATH: /data/index.db
+      AGENT_A2A_TOKENS_FILE: /data/a2a-tokens.txt
+      # The host publishes 8081 -> container 8080, and --bind-public requires
+      # this absolute URL in the agent card. Override it if the host differs.
+      AGENT_A2A_PUBLIC_URL: ${AGENT_A2A_PUBLIC_URL:-http://127.0.0.1:8081}
+    command: ["agent", "serve", "--bind-public", "--addr", "0.0.0.0:8080"]
+    ports:
+      - "127.0.0.1:8081:8080"
+    volumes:
+      # Runtime data (index, WAL/SHM, backups, token file) stays on the host.
+      # Long syntax + create_host_path: false makes a missing ./data fail
+      # clearly instead of Compose creating a root-owned directory.
+      - type: bind
+        source: ./data
+        target: /data
+        bind:
+          create_host_path: false
+    # A missing token makes `agent serve --bind-public` exit. Create one first:
+    #   docker compose run --rm agent agent tokens add --id local
+    restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    init: true

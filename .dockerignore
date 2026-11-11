@@ -1,0 +1,29 @@
+# Build context: source only. Runtime data, secrets, and generated artifacts
+# never enter the image. `data/` is bind-mounted at runtime instead.
+.git
+.github
+.zed
+data
+vendor
+evals
+tests-ai
+docs
+scripts
+tmp
+*.md
+agent
+index*.db
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+.env
+.env.*
+config.local.yaml
+a2a-tokens.txt
+.a2a-tokens-*
+bin
+dist
+*.test
+*.out
+*.log

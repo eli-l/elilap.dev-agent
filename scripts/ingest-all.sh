@@ -2,8 +2,8 @@
 # ingest-all.sh — cron-friendly ingest runner.
 #
 # Calls the built binary from the repo root. The binary loads .env and
-# resolves ./index.db relative to the working directory, so run from here
-# rather than the caller's directory.
+# resolves ./data/index.db relative to the working directory, so run from
+# here rather than the caller's directory.
 
 set -euo pipefail
 

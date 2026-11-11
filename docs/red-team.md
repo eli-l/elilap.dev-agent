@@ -36,7 +36,7 @@ checked in; generated results are not.
   configured; with a token, add `Authorization: Bearer <token>` to the target
   headers). The suites own 18080, so a long run never collides with the
   interactive server on 8080.
-* A populated, embedded `index.db`; the suite must exercise the real retrieval
+* A populated, embedded `data/index.db`; the suite must exercise the real retrieval
   + loop path, not a stub.
 * The local judge reachable at `http://localhost:8000/v1` — no cloud key
   needed. `redteam.provider` in the config mirrors `EVAL_BASE_URL` /

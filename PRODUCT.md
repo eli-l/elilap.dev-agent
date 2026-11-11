@@ -79,7 +79,7 @@ durable request ID, and Eli sees the question and reason in his request inbox.
   instructions. Provide owner-local deletion for unwanted submissions.
 * **Rebuild-safe persistence — Critical value:** requests are original data,
   unlike the derived writing index. Store them separately from the
-  disposable `index.db`; index rebuilds must preserve them, and backup and
+  disposable `data/index.db`; index rebuilds must preserve them, and backup and
   recovery must cover the request store.
 
 Implementation requires an explicit PLAN.md/wire-contract update: the current

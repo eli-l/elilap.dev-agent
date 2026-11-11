@@ -61,18 +61,20 @@ const (
 // Defaults for the settings above. They are exported so callers, docs, and
 // tests agree with the one definition.
 const (
-	// DefaultDBPath is where the index lives in a host run; the container
-	// sets /data/index.db explicitly (PLAN.md Decision 11).
-	DefaultDBPath = "./index.db"
+	// DefaultDBPath is where the index lives in a host run. The container
+	// sets /data/index.db explicitly (PLAN.md Decision 11); both paths keep
+	// the DB and its WAL/SHM siblings inside the runtime data directory.
+	DefaultDBPath = "./data/index.db"
 	// DefaultLocalAIBaseURL is the verified self-hosted instance (Decision 10).
 	DefaultLocalAIBaseURL = "http://192.168.78.243:8080/v1"
 	// DefaultEmbedModel produces the 768-dim vectors chunks_vec stores.
 	DefaultEmbedModel = "embeddinggemma-300m"
 	// DefaultChatModel is the reasoning model the agent loop calls.
 	DefaultChatModel = "spark-x2.5-4b"
-	// DefaultA2ATokensFile is the local token file `agent tokens` edits. It is
-	// gitignored; a missing file simply means no tokens are configured.
-	DefaultA2ATokensFile = "./a2a-tokens.txt"
+	// DefaultA2ATokensFile is the local token file `agent tokens` edits. It
+	// lives with the other runtime data and is gitignored; a missing file
+	// simply means no tokens are configured.
+	DefaultA2ATokensFile = "./data/a2a-tokens.txt"
 )
 
 // Config is every static runtime setting, decoded by envconfig from the

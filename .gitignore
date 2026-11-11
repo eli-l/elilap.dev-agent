@@ -17,6 +17,11 @@
 *.db-wal
 *.db-shm
 
+# Runtime data lives in ./data: index + WAL/SHM, backups, and the A2A token
+# file. Keep the directory itself so a fresh checkout has it.
+/data/*
+!/data/.gitkeep
+
 # Local config / secrets (never commit)
 /.env
 /.env.*

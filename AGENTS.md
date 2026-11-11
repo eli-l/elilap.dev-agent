@@ -1,6 +1,6 @@
 # AGENTS.md
 
-Local-first **agentic A2A connector** over Eli's published writing: ingests Ghost posts + Postiz cross-posts + the public website's HTML pages into a single-file SQLite index (FTS5 + sqlite-vec), and runs its own grounded tool-calling loop (one internal tool, `search_writing`, over `internal/retrieval`) exposed through one Go binary — CLI plus a read-only HTTP surface (`/v1/retrieve`, `/v1/ask`, and A2A `message/send` + agent card). **Status: Phase 2 + A2A v0.3** — `ingest`, `embed`, `query`, `ask`, `stats`, `backup`, `serve`, and `tokens` are implemented; `internal/retrieval` (hybrid BM25 + vec + RRF) and `internal/agentloop` (one grounded tool, citation-or-refusal) are live. `agent serve` exposes the agent over A2A v0.3 (`message/send` + agent card, bearer tokens, per-token rate limit, audit stream) plus the `/v1/retrieve` and `/v1/ask` JSON paths. Phase 3 operations (container, watch, full eval runs) remain. `PLAN.md` is the source of truth for scope and sequencing; read it before adding code.
+Local-first **agentic A2A connector** over Eli's published writing: ingests Ghost posts + Postiz cross-posts + the public website's HTML pages into a single-file SQLite index (FTS5 + sqlite-vec), and runs its own grounded tool-calling loop (one internal tool, `search_writing`, over `internal/retrieval`) exposed through one Go binary — CLI plus a read-only HTTP surface (`/v1/retrieve`, `/v1/ask`, and A2A `message/send` + agent card). **Status: Phase 2 + A2A v0.3** — `ingest`, `embed`, `query`, `ask`, `stats`, `backup`, `serve`, and `tokens` are implemented; `internal/retrieval` (hybrid BM25 + vec + RRF) and `internal/agentloop` (one grounded tool, citation-or-refusal) are live. `agent serve` exposes the agent over A2A v0.3 (`message/send` + agent card, bearer tokens, per-token rate limit, audit stream) plus the `/v1/retrieve` and `/v1/ask` JSON paths. Phase 3 operations (watch, scheduling, full eval runs) remain; the container path is implemented. `PLAN.md` is the source of truth for scope and sequencing; read it before adding code.
 
 ## Commands
 
@@ -42,7 +42,7 @@ Workflow for any docs/ change:
 
 ## Layout
 
-- `cmd/` — binary entry points (stubs today).
+- `cmd/agent/` — the single binary; one file per subcommand (`ingest`, `embed`, `query`, `ask`, `stats`, `backup`, `serve`, `tokens`, `sources`).
 - `sources.yaml` — static import config: every provider, its `enabled` flag,
   and its options. Secrets are never in it — credentials are `{ env: VAR }`
   references.
@@ -50,6 +50,13 @@ Workflow for any docs/ change:
   the binary reads: defaults for settings, empty values for secrets. `.env`
   is a gitignored copy of it, loaded at startup. A new env var is not added
   until it is listed here (see Conventions and `docs/environment.md`).
+- `data/` — runtime files: the SQLite index + WAL/SHM, backups, and the A2A
+  token file. `.gitkeep` keeps the directory; its contents are gitignored and
+  `.dockerignore`d. Host default `./data/index.db`; compose bind-mounts
+  `./data:/data` and sets `/data/index.db`.
+- `Dockerfile` / `.dockerignore` / `compose.yaml` — multi-stage image and the
+  one-service compose path; LocalAI stays external and `data/` stays out of
+  the build context.
 - `internal/config` — `sources.yaml` loader: strict YAML decode
   (`KnownFields(true)`), version check, per-provider option validation,
   credential resolution (values never printed).
@@ -121,7 +128,8 @@ Workflow for any docs/ change:
   `docs/` follow.
 - The LLM connector is plain `net/http` against an OpenAI-compatible API — no LLM SDKs. Tool-calling rides on the same connector: chat requests carry the `search_writing` tool definition and the client round-trips the model's tool calls.
 - The A2A surface stays a **thin binding over `internal/agentloop`**: one `message/send`, one synchronous grounded `Message` with citation metadata, no task store, no streaming. Bearer tokens are the only auth; a non-loopback bind requires `--bind-public`, at least one token, and an explicit `AGENT_A2A_PUBLIC_URL` (the card never trusts a request `Host`). The card is public, and the token store latches secured so emptying the file cannot fail open. Tokens are compared in constant time and never logged; the `audit` module records a question fingerprint and the outcome but not the question text, answer, prompt, or excerpts, and is pinned to `info` unless logging is disabled (`docs/a2a.md`).
-- The DB is derived: deleting `index.db` and re-running ingest/embed must always reproduce it. Never commit it.
+- The DB is derived: deleting `data/index.db*` and re-running ingest/embed must always reproduce it. Never commit it.
+- Runtime files live under `./data/`: the index (plus WAL/SHM), `agent backup` snapshots, and the A2A token file. The directory is tracked by `.gitkeep`, its contents are gitignored and excluded from the image build context, and the container sees the same files at `/data`.
 - Timestamps are ISO-8601 UTC; ids are sha256-based hex (`chunk_id = sha256(source_kind|source_id|chunk_seq)`). Here `source_id` is the upstream item id (Ghost uuid / Postiz id / web `host+path`), not the config id; `chunk_seq` is the ordinal within that item across all its platform chunks.
 - Dependencies are **vendored locally but never committed**: `vendor/` is gitignored and must exist on disk — run `go mod vendor` after any `go.mod`/`go.sum` change and build with `-mod=vendor` (the sandboxed worker has no network and its module cache is hidden). `go.mod`/`go.sum` are the source of truth for versions.
 - Keep `chunks` and `chunks_fts` writes in one transaction.

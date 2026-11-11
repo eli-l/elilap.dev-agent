@@ -169,7 +169,7 @@ Tokens come from two sources, both declared in `example.env`:
 * `AGENT_A2A_TOKENS` — comma-separated `id:token` pairs, fixed at process
   start (containers, cron, launchd).
 * `AGENT_A2A_TOKENS_FILE` — a `0600` file of `id:token` lines (default
-  `./a2a-tokens.txt`, gitignored). The server re-reads it when its mtime or
+  `./data/a2a-tokens.txt`, gitignored). The server re-reads it when its mtime or
   size changes, so rotation needs **no restart**. A group/world-readable
   file is a startup error, and a broken reload keeps the last good set and
   logs a warning.
