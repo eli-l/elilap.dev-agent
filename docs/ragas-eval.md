@@ -1,11 +1,11 @@
 ---
 type: Reference
 title: Ragas answer evaluation (evals)
-description: The single Python/Ragas tool in evals/ - the configs holding hand-verified ground truth, the agent-ask client that becomes the system under test, the faithfulness/context-utilization/correctness metrics, refusal discipline, the EVAL_* variables, and the gitignored output directory.
+description: The single Python/Ragas tool in evals/ - the configs holding hand-verified ground truth, the agent-ask client that becomes the system under test, the faithfulness/context-utilization/correctness metrics, refusal discipline, the EVAL_* variables, the gitignored output directory, and the captured full-size run with stand-in models.
 status: draft
 generated:
   by: deepseek/deepseek-v4.1-flash
-  at: 2026-11-04T12:10:56Z
+  at: 2026-11-11T07:10:21Z
 tags: [evaluation, ragas, python, uv, llm, rag, citations]
 sources:
   - ../evals/README.md
@@ -112,16 +112,29 @@ structured-output calls — they return truncated JSON
 (`IncompleteOutputException`) — so rows run one at a time and the judge is
 given an explicit `max_tokens=4096`. Expect roughly a minute per answer row.
 
-## Run status (2026-11-05)
+## Run status (2026-11-11)
 
-`status: draft` on purpose: the tool is written and smoke-tested, but no full
-run has been captured. `evals/output/experiments/` holds three single-row runs
-covering two cases (`--limit 1`): one answer case twice (faithfulness 1.00 then
-0.57, correctness `pass` both times) and one off-corpus refusal at `pass`. The
-15 answer and 14 refusal cases in `configs/` have therefore never been scored
-in one run, so "the agent meets the Ragas thresholds" is still an open Phase 2
-exit criterion (`../PLAN.md`). Nothing in the harness is missing to close it —
-only the run and its `docs/runs/` capture.
+`status: draft` on purpose: the harness runs at full size, but its answer
+metrics have not yet been produced by the shipped models. The first full
+29-case run was captured on the merged eval-harness branch on 2026-11-10: all
+15 answer rows and all 14 refusal rows scored, refusal discipline 14/14, and
+correctness 9/15 (faithfulness 0.561, context utilization 0.875 over the 12
+non-refused answer rows). See
+[Full validator sweep on the eval-harness branch](/runs/validator-sweep-2026-11-10.md).
+
+Those answer numbers are a **plumbing result, not a baseline**. `spark-x2.5-4b`
+(the pinned `CHAT_MODEL`) failed to load on the LocalAI host, so the agent ran
+on `spark-x2.5-1.7b-q4`; the judge ran as
+`mtplx-qwen36-35b-a3b-optimized-speed-fp16` because the configured `EVAL_MODEL`
+id had been renamed. Embeddings were unaffected, so retrieval, citation
+resolution, and the metric pipeline were the real thing. A full run on healthy,
+shipped generator and judge models is still open (`../PLAN.md` Phase 3), and
+`PLAN.md` still has no numeric pass/fail threshold for these metrics; the
+harness exit status currently reports completeness, not quality.
+
+The older `evals/output/experiments/` single-row runs remain in a local
+checkout only, because `output/` is gitignored. The full-run numbers above are
+recorded in the run capture, not in the local artifacts.
 
 ## Known limits
 

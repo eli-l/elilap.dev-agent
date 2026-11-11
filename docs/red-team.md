@@ -5,7 +5,7 @@ description: How to run the promptfoo red-team suite in tests-ai against the loo
 status: draft
 generated:
   by: deepseek/deepseek-v4.1-flash
-  at: 2026-11-03T11:45:00Z
+  at: 2026-11-11T07:10:21Z
 tags: [red-team, promptfoo, evaluation, security, rag, citations]
 sources: ["../tests-ai/promptfooconfig.yaml", "../PLAN.md"]
 ---
@@ -136,5 +136,19 @@ and `tests-ai/.promptfoo/` are local evidence only - generated attacks can
 contain offensive text - so they are gitignored; only the configs, the
 lockfile, the run script, and the README are committed.
 
-Configured 2026-11-03; a full run report has not been captured in `docs/runs/`
-yet.
+## Run status (2026-11-11)
+
+`status: draft` on purpose. The **smoke scan** passes end to end: `npm run
+redteam:smoke` uses one local-capable `hallucination` plugin, generates one
+probe, gets an answer from the agent on `:18080`, grades it with the local
+judge, and writes `tests-ai/reports/smoke/` in 28s (1 passed, 0 failed, 0
+errors). It is a wiring check, not a security verdict. See
+[Full validator sweep on the eval-harness branch](/runs/validator-sweep-2026-11-10.md).
+
+The **full scan** (`npm run redteam`, 43 plugins x 5 probes x `basic` and
+`jailbreak:meta`) has not been captured. It is the open Phase 3 item in
+`../PLAN.md`. Many of its plugins are promptfoo-remote-only, so the full run
+depends on promptfoo-hosted inference (and, if required, credentials in a
+gitignored `tests-ai/.env`), unlike the fully local smoke scan. Decide whether
+the full-run exit criterion covers the remote-only plugin set or only the
+locally generated subset before starting that run.

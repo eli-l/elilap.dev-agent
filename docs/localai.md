@@ -1,14 +1,16 @@
 ---
 type: Reference
 title: Self-hosted LocalAI endpoint and model catalog
-description: Verified facts about the LocalAI instance at http://192.168.78.243:8080 - version, model ids, embedding dimensions, chat behaviour, and the reasoning_effort controls - captured from the AI Node on 2026-10-23 and re-probed on 2026-11-03.
+description: Verified facts about the LocalAI instance at http://192.168.78.243:8080 - version, model ids, embedding dimensions, chat behaviour, and the reasoning_effort controls - captured from the AI Node on 2026-10-23, re-probed on 2026-11-03, and re-checked on 2026-11-11.
 status: stable
 generated:
-  by: dave
-  at: 2026-11-03T19:30:00Z
+  by: deepseek/deepseek-v4.1-flash
+  at: 2026-11-11T07:10:21Z
 verified:
   - by: process:localai-probe
     at: 2026-11-03T19:20:00Z
+  - by: process:localai-probe
+    at: 2026-11-11T07:09:04Z
 tags: [localai, embeddings, chat, models, reasoning, phase-0]
 ---
 
@@ -31,8 +33,22 @@ this repo deploys. `PLAN.md` Decision 10 records the decision.
 | id | role |
 |---|---|
 | `embeddinggemma-300m` | embeddings - **768 dims** |
-| `spark-x2.5-4b` | chat / LLM - default |
-| `spark-x2.5-1.7b-q4` | chat / LLM - lighter fallback |
+| `spark-x2.5-4b` | chat / LLM - pinned default; failed to load on 2026-11-10 |
+| `spark-x2.6-4b-q4` | chat / LLM - listed; failed to load on 2026-11-10 |
+| `Spark-X2.6-1.7B-Q4_K_M` | chat / LLM - 1.7B class; served on 2026-11-03 |
+| `spark-x2.5-1.7b-q4` | chat / LLM - 1.7B class; served (the 2026-11-10 eval generator) |
+
+## Host drift (2026-11-10/11)
+
+`GET /v1/models` on 2026-11-11 lists all five ids above. A catalog entry is
+not a promise that the model loads: on 2026-11-10 both 4B chat models failed
+with an internal-loader RPC error (`code = Unavailable`, `error reading from
+server: EOF`), after which the endpoint answered `503 model "spark-x2.5-4b"
+load is in cooldown` for tens of minutes. The full Ragas run therefore used
+`spark-x2.5-1.7b-q4`. See
+[Ragas answer evaluation (evals)](/ragas-eval.md) and the
+[validator sweep](/runs/validator-sweep-2026-11-10.md). A healthy 4B model is
+still needed before the shipped `CHAT_MODEL` can produce a quality baseline.
 
 ## Verified on 2026-10-23 (from the AI Node)
 
@@ -84,5 +100,8 @@ export LOCALAI_BASE_URL=http://192.168.78.243:8080/v1
 export EMBED_MODEL=embeddinggemma-300m
 export CHAT_MODEL=spark-x2.5-4b
 ```
+
+`CHAT_MODEL` must name a model the host can currently load. On 2026-11-10 the
+4B ids above did not, so use a 1.7B id until the 4B loader is fixed.
 
 No API key is required for this instance (`LOCALAI_API_KEY` stays unset).
