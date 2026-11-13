@@ -3,6 +3,7 @@ package main
 import (
 	"path/filepath"
 	"reflect"
+	"strconv"
 	"testing"
 
 	"github.com/eli-l/elilap.dev-agent/internal/config"
@@ -38,10 +39,14 @@ func TestExampleEnvIsComplete(t *testing.T) {
 		logging.EnvLevel:         logging.DefaultLevel,
 		logging.EnvFormat:        logging.DefaultFormat,
 		envcfg.EnvDBPath:         envcfg.DefaultDBPath,
-		envcfg.EnvLocalAIBaseURL: envcfg.DefaultLocalAIBaseURL,
-		envcfg.EnvLocalAIAPIKey:  "",
+		envcfg.EnvEmbedBaseURL:   envcfg.DefaultModelBaseURL,
+		envcfg.EnvEmbedAPIKey:    "",
 		envcfg.EnvEmbedModel:     envcfg.DefaultEmbedModel,
+		envcfg.EnvEmbedDims:      strconv.Itoa(envcfg.DefaultEmbedDims),
+		envcfg.EnvChatBaseURL:    envcfg.DefaultModelBaseURL,
+		envcfg.EnvChatAPIKey:     "",
 		envcfg.EnvChatModel:      envcfg.DefaultChatModel,
+		envcfg.EnvChatTokenParam: envcfg.DefaultChatTokenParam,
 		envcfg.EnvA2ATokens:      "",
 		envcfg.EnvA2ATokensFile:  envcfg.DefaultA2ATokensFile,
 		envcfg.EnvA2APublicURL:   "",

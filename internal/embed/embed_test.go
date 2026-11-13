@@ -31,7 +31,7 @@ func (f *fakeEmbedder) Embed(ctx context.Context, model string, inputs []string)
 	for i := range inputs {
 		dims := f.dims
 		if dims == 0 {
-			dims = store.EmbeddingDims
+			dims = store.DefaultEmbeddingDims
 		}
 		v := make([]float32, dims)
 		for j := range v {
@@ -44,7 +44,7 @@ func (f *fakeEmbedder) Embed(ctx context.Context, model string, inputs []string)
 
 func newTestStore(t *testing.T) *store.Store {
 	t.Helper()
-	s, err := store.Open(filepath.Join(t.TempDir(), "index.db"), "../../migrations")
+	s, err := store.Open(filepath.Join(t.TempDir(), "index.db"), "../../migrations", store.DefaultEmbeddingDims)
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}

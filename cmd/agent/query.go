@@ -96,12 +96,12 @@ func runQuery(args []string, rtCfg envcfg.Config, stdout, stderr io.Writer) int 
 	}
 	defer st.Close()
 
-	if err := verifyIndexModel(st, *model); err != nil {
+	if err := verifyIndexModel(st, *model, int(rtCfg.EmbedDims)); err != nil {
 		fmt.Fprintf(stderr, "agent query: %v\n", err)
 		return 1
 	}
 
-	client, err := llm.NewClient(rtCfg.LocalAIBaseURL, rtCfg.LocalAIAPIKey,
+	client, err := llm.NewClient(rtCfg.EmbedBaseURL, rtCfg.EmbedAPIKey,
 		shared.NewHTTPClient(embedHTTPTimeout))
 	if err != nil {
 		fmt.Fprintf(stderr, "agent query: %v\n", err)

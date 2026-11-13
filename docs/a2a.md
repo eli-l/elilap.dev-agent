@@ -26,10 +26,13 @@ sources:
 `agent serve` exposes the in-service loop as an **A2A v0.3 agent** over a
 single JSON-RPC endpoint. A peer discovers the agent card, sends one
 `message/send` with a question, and receives a grounded answer whose
-citations resolve to `chunk_id` + `source_url` in the index — or the exact
-refusal string `Not in my published writing`. The loop, tool, budgets, and
-citation policy are in [agent-architecture.md](/agent-architecture.md); this
-file is the wire contract.
+citations are the excerpts it was grounded on and whose sources are the
+documents behind them — or the exact refusal string
+`Not in my published writing`. Neither list carries a chunk id: that
+identifier is logged for tracing and never returned. The loop, tool,
+budgets, and response contract are in
+[agent-architecture.md](/agent-architecture.md); this file is the wire
+contract.
 
 A2A is the peer-facing surface; `/v1/retrieve` and `/v1/ask` are the JSON
 equivalents the CLI and the Ragas/promptfoo suites use. All three are served
@@ -106,12 +109,25 @@ The result is a single agent `Message` — not a `Task` (see below):
     "role": "agent",
     "messageId": "<generated hex>",
     "contextId": "ctx-smoke",
-    "parts": [{"kind": "text", "text": "The excerpt on Eli Lap's writing about vendor lock-in: ..."}],
+    "parts": [{"kind": "text", "text": "Eli's take: harnesses are a form of vendor lock-in, and the zero-harness detour cost more than it saved."}],
     "metadata": {
       "citations": [
         {
-          "chunk_id": "ccdecc4556e1e05b5566bcbd9df58a5fce347e491dbd72437db41ea8d73e97c7",
-          "source_url": "https://read.elilap.dev/i-gave-up-on-zero-harness-and-here-is-why/"
+          "source_kind": "ghost_post",
+          "source_url": "https://read.elilap.dev/i-gave-up-on-zero-harness-and-here-is-why/",
+          "title": "I gave up on zero-harness and here is why",
+          "section": "The harness tax",
+          "published_at": "2026-11-02T13:21:35Z",
+          "excerpt": "the exact excerpt text the model was shown"
+        }
+      ],
+      "sources": [
+        {
+          "kind": "ghost_post",
+          "url": "https://read.elilap.dev/i-gave-up-on-zero-harness-and-here-is-why/",
+          "title": "I gave up on zero-harness and here is why",
+          "author": "Eli Lap",
+          "published_at": "2026-11-02T13:21:35Z"
         }
       ],
       "refused": false,
@@ -132,8 +148,11 @@ Contract details enforced by `internal/a2a`:
   `text/plain`, `text/*`, and `*/*` are accepted; parameters are ignored, so
   `text/plain; charset=utf-8` is accepted too. Anything else is `-32005`.
 * `configuration.pushNotificationConfig` is rejected with `-32003`.
-* A peer `contextId` is echoed; absent, the service generates one. The
-  returned `metadata.citations` is always an array and is `[]` on a refusal.
+* A peer `contextId` is echoed; absent, the service generates one.
+  `metadata.citations` (one entry per grounded excerpt) and
+  `metadata.sources` (one per distinct document) are always arrays and are
+  `[]` on a refusal. Neither carries a `chunk_id`; `source_url` joins the
+  two lists. A refusal's `parts[0].text` is the refusal string.
 * The loop timeout (`agentloop.DefaultMaxElapsed`, 90s) is the task budget;
   a timeout is `-32000` with `data.retryable: true`, a backend failure is
   `-32603`. Details stay in the server log.
@@ -216,7 +235,7 @@ Every completed task writes one line on the `audit` module (see
 [logging.md](/logging.md)):
 
 ```json
-{"level":"info","module":"audit","token_id":"smoke","method":"a2a/message/send","question_sha256":"<64 hex>","question_bytes":45,"outcome":"answered","tool_iterations":1,"citations":1,"refused":false,"elapsed_ms":2987,"message":"task"}
+{"level":"info","module":"audit","token_id":"smoke","method":"a2a/message/send","question_sha256":"<64 hex>","question_bytes":45,"outcome":"answered","tool_iterations":1,"citations":1,"sources":1,"refused":false,"elapsed_ms":2987,"message":"task"}
 ```
 
 `outcome` is `answered`, `refused`, `timeout`, `canceled`, or `error`. The
@@ -230,9 +249,12 @@ same record with `method: "v1/ask"`.
 ## Security posture
 
 * Read-only: no method mutates the index or any upstream source.
-* Peer text is data, never instructions. The grounded prompt says so and the
-  citation check is the backstop: an answer without a resolvable retrieved
-  citation becomes the refusal string.
+* Peer text is data, never instructions. The grounded prompt says so, and
+  refusing any answer produced without a retrieved excerpt is the
+  backstop: an ungrounded reply becomes the refusal string.
+* Chunk ids never leave the service. They are logged on the `rag: answer`
+  debug line and in the retrieval trace; the peer sees `source_url`,
+  `title`, `section`, and the excerpt text instead.
 * Loopback bind by default; public exposure requires `--bind-public` **and**
   a token.
 * Tokens are high-entropy, rotatable without restart, and never logged.

@@ -2,6 +2,9 @@ package agentloop_test
 
 import (
 	"context"
+	"encoding/json"
+	"regexp"
+	"strings"
 	"testing"
 
 	"github.com/eli-l/elilap.dev-agent/internal/agentloop"
@@ -12,90 +15,111 @@ import (
 // urlOf is the source URL the hit helper attaches to a chunk id.
 var urlOf = func(id string) string { return "https://read.elilap.dev/" + id[:8] }
 
-func TestRunAcceptsSourceURLCitation(t *testing.T) {
-	// The small chat model often copies the source_url but drops the 64-hex
-	// chunk id; the URL is the same published source, so it must ground.
+// hexID matches a sha256 chunk id, which must never appear in a response.
+var hexID = regexp.MustCompile(`\b[0-9a-f]{64}\b`)
+
+// TestEvidenceDescribesExcerptsAndDocuments pins the response's two reference
+// lists: one Citation per excerpt the model was shown (in ranking order), one
+// Source per distinct document. Both are built from the loop's own retrieval
+// record, so neither can be fabricated by the model.
+func TestEvidenceDescribesExcerptsAndDocuments(t *testing.T) {
+	postiz := retrieval.Hit{
+		ChunkID: idC, SourceKind: "postiz_post", SourceID: "postiz-1",
+		SourceURL: "https://www.linkedin.com/posts/x", Platform: "linkedin",
+		Author: "Ilja Lapkovsky", Title: "Cross-post", Section: "Reply",
+		PublishedAt: "2026-11-01T10:00:00Z", Body: "a cross-posted excerpt",
+	}
 	chatter := &scriptedChatter{responses: []llm.ChatResponse{
 		toolCallResponse(call("call_1", agentloop.ToolName, `{"query":"harness"}`)),
-		answerResponse("Harnesses are vendor lock-in (" + urlOf(idA) + ")."),
+		answerResponse("A plain summary with no citations in it."),
 	}}
-	searcher := &fakeSearcher{hits: []retrieval.Hit{hit(idA, "harnesses are vendor lock-in")}}
+	searcher := &fakeSearcher{hits: []retrieval.Hit{hit(idA, "the ghost excerpt"), postiz}}
 	ans, err := newRunner(chatter, searcher).Run(context.Background(), "q")
 	if err != nil {
 		t.Fatalf("run: %v", err)
 	}
-	if ans.Refused {
-		t.Fatalf("refused a URL-only citation: %+v", ans)
+	if ans.Refused || ans.Answer != "A plain summary with no citations in it." {
+		t.Fatalf("answer = %+v, want the model's text verbatim", ans)
 	}
-	if len(ans.Citations) != 1 || ans.Citations[0].ChunkID != idA ||
-		ans.Citations[0].SourceURL != urlOf(idA) {
-		t.Errorf("citations = %+v, want idA resolved from its URL", ans.Citations)
+
+	if len(ans.Citations) != 2 {
+		t.Fatalf("citations = %+v, want one per excerpt", ans.Citations)
+	}
+	first := ans.Citations[0]
+	if first.SourceKind != "ghost_post" || first.SourceURL != urlOf(idA) ||
+		first.Title != "A title" || first.PublishedAt != "2026-11-02T13:21:35Z" ||
+		first.Excerpt != "the ghost excerpt" {
+		t.Errorf("first citation = %+v, want the first retrieved excerpt", first)
+	}
+	if second := ans.Citations[1]; second.SourceKind != "postiz_post" || second.Section != "Reply" {
+		t.Errorf("second citation = %+v, want the postiz excerpt", second)
+	}
+
+	if len(ans.Sources) != 2 {
+		t.Fatalf("sources = %+v, want one per document", ans.Sources)
+	}
+	if src := ans.Sources[0]; src.Kind != "ghost_post" || src.URL != urlOf(idA) ||
+		src.Author != "Eli" || src.Title != "A title" {
+		t.Errorf("first source = %+v", src)
+	}
+	if src := ans.Sources[1]; src.Platform != "linkedin" || src.Author != "Ilja Lapkovsky" ||
+		src.PublishedAt != "2026-11-01T10:00:00Z" {
+		t.Errorf("second source = %+v, want the cross-post metadata", src)
 	}
 }
 
-func TestRunResolvesSourceURLToBestRankedChunk(t *testing.T) {
-	// Two chunks of the same post share a URL; the citation must resolve to the
-	// better-ranked chunk, deterministically, and only once.
-	second := hit(idB, "another excerpt")
-	second.SourceURL = urlOf(idA)
+// TestResponseNeverExposesChunkIDs is the hard requirement on the wire shape:
+// the internal identifier is logged for tracing, but no answer surface may
+// carry it. Marshalling the whole Answer covers every field a surface emits.
+func TestResponseNeverExposesChunkIDs(t *testing.T) {
 	chatter := &scriptedChatter{responses: []llm.ChatResponse{
 		toolCallResponse(call("call_1", agentloop.ToolName, `{"query":"harness"}`)),
-		answerResponse("Grounded (" + urlOf(idA) + ")."),
-	}}
-	searcher := &fakeSearcher{hits: []retrieval.Hit{hit(idA, "excerpt"), second}}
-	ans, err := newRunner(chatter, searcher).Run(context.Background(), "q")
-	if err != nil {
-		t.Fatalf("run: %v", err)
-	}
-	if len(ans.Citations) != 1 || ans.Citations[0].ChunkID != idA {
-		t.Errorf("citations = %+v, want the best-ranked chunk idA only", ans.Citations)
-	}
-}
-
-func TestRunRefusesUnretrievedSourceURL(t *testing.T) {
-	chatter := &scriptedChatter{responses: []llm.ChatResponse{
-		toolCallResponse(call("call_1", agentloop.ToolName, `{"query":"harness"}`)),
-		answerResponse("Made up (https://read.elilap.dev/never-retrieved/)."),
+		answerResponse("Summary."),
 	}}
 	searcher := &fakeSearcher{hits: []retrieval.Hit{hit(idA, "excerpt")}}
 	ans, err := newRunner(chatter, searcher).Run(context.Background(), "q")
 	if err != nil {
 		t.Fatalf("run: %v", err)
 	}
-	if !ans.Refused || ans.Answer != agentloop.Refusal {
-		t.Errorf("answer = %+v, want refusal for a URL the loop never retrieved", ans)
-	}
-}
-
-func TestRunDoesNotTreatExcerptBodyLinkAsCitation(t *testing.T) {
-	// An excerpt can link elsewhere; quoting that link is source material, not a
-	// citation of a chunk the loop retrieved.
-	body := "see https://example.com/elsewhere for the linked post"
-	chatter := &scriptedChatter{responses: []llm.ChatResponse{
-		toolCallResponse(call("call_1", agentloop.ToolName, `{"query":"harness"}`)),
-		answerResponse("Grounded (https://example.com/elsewhere)."),
-	}}
-	searcher := &fakeSearcher{hits: []retrieval.Hit{hit(idA, body)}}
-	ans, err := newRunner(chatter, searcher).Run(context.Background(), "q")
+	payload, err := json.Marshal(ans)
 	if err != nil {
-		t.Fatalf("run: %v", err)
+		t.Fatalf("marshal answer: %v", err)
 	}
-	if !ans.Refused {
-		t.Errorf("answer = %+v, want refusal: a body link is not a citation", ans)
+	encoded := string(payload)
+	if strings.Contains(encoded, "chunk_id") {
+		t.Errorf("response carries a chunk_id field: %s", encoded)
+	}
+	if id := hexID.FindString(encoded); id != "" {
+		t.Errorf("response carries a chunk id %s: %s", id, encoded)
+	}
+	// The reference lists are still there, just without the identifier.
+	for _, want := range []string{`"citations":[`, `"sources":[`} {
+		if !strings.Contains(encoded, want) {
+			t.Errorf("response is missing %s: %s", want, encoded)
+		}
 	}
 }
 
-func TestRunAcceptsMarkdownLinkedSourceURL(t *testing.T) {
+// TestRefusalExposesNoEvidence keeps the refusal shape stable for clients: a
+// refused answer is the refusal string with two empty arrays, not nulls.
+func TestRefusalExposesNoEvidence(t *testing.T) {
 	chatter := &scriptedChatter{responses: []llm.ChatResponse{
-		toolCallResponse(call("call_1", agentloop.ToolName, `{"query":"harness"}`)),
-		answerResponse("Grounded ([the post](" + urlOf(idA) + "))."),
+		toolCallResponse(call("call_1", agentloop.ToolName, `{"query":"off corpus"}`)),
+		answerResponse(agentloop.Refusal),
 	}}
 	searcher := &fakeSearcher{hits: []retrieval.Hit{hit(idA, "excerpt")}}
 	ans, err := newRunner(chatter, searcher).Run(context.Background(), "q")
 	if err != nil {
 		t.Fatalf("run: %v", err)
 	}
-	if ans.Refused || len(ans.Citations) != 1 || ans.Citations[0].ChunkID != idA {
-		t.Errorf("answer = %+v, want a citation parsed out of the markdown link", ans)
+	payload, err := json.Marshal(ans)
+	if err != nil {
+		t.Fatalf("marshal answer: %v", err)
+	}
+	encoded := string(payload)
+	for _, want := range []string{`"citations":[]`, `"sources":[]`, `"refused":true`} {
+		if !strings.Contains(encoded, want) {
+			t.Errorf("refusal response is missing %s: %s", want, encoded)
+		}
 	}
 }

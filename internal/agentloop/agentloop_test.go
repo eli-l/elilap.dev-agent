@@ -22,8 +22,9 @@ var (
 
 func hit(id, body string) retrieval.Hit {
 	return retrieval.Hit{
-		ChunkID: id, SourceKind: "ghost_post", SourceURL: "https://read.elilap.dev/" + id[:8],
-		Title: "A title", Body: body, PublishedAt: "2026-11-02T13:21:35Z",
+		ChunkID: id, SourceKind: "ghost_post", SourceID: "post-" + id[:8],
+		SourceURL: "https://read.elilap.dev/" + id[:8],
+		Author:    "Eli", Title: "A title", Body: body, PublishedAt: "2026-11-02T13:21:35Z",
 	}
 }
 
@@ -86,7 +87,7 @@ func newRunner(chatter *scriptedChatter, searcher *fakeSearcher) *agentloop.Runn
 func TestRunCallsToolThenAnswersWithCitations(t *testing.T) {
 	chatter := &scriptedChatter{responses: []llm.ChatResponse{
 		toolCallResponse(call("call_1", agentloop.ToolName, `{"query":"harness lock-in","top_n":2}`)),
-		answerResponse("Harness lock-in is the theme (" + idA + ", https://read.elilap.dev/aaaaaaaa)."),
+		answerResponse("Harness lock-in is the theme."),
 	}}
 	searcher := &fakeSearcher{hits: []retrieval.Hit{hit(idA, "harnesses are vendor lock-in"), hit(idB, "another excerpt")}}
 	ans, err := newRunner(chatter, searcher).Run(context.Background(), "What is the harness take?")
@@ -99,11 +100,15 @@ func TestRunCallsToolThenAnswersWithCitations(t *testing.T) {
 	if ans.ToolIterations != 1 {
 		t.Errorf("tool iterations = %d, want 1", ans.ToolIterations)
 	}
-	if len(ans.Citations) != 1 || ans.Citations[0].ChunkID != idA {
-		t.Errorf("citations = %+v, want idA", ans.Citations)
+	if len(ans.Citations) != 2 {
+		t.Fatalf("citations = %+v, want one per retrieved excerpt", ans.Citations)
 	}
-	if ans.Citations[0].SourceURL == "" {
-		t.Error("citation URL was not resolved from the retrieved hit")
+	if got := ans.Citations[0]; got.SourceURL != urlOf(idA) || got.Title != "A title" ||
+		got.SourceKind != "ghost_post" || got.Excerpt != "harnesses are vendor lock-in" {
+		t.Errorf("citation = %+v, want the excerpt the model was shown", got)
+	}
+	if len(ans.Sources) != 2 || ans.Sources[0].URL != urlOf(idA) || ans.Sources[0].Author != "Eli" {
+		t.Errorf("sources = %+v, want the two retrieved documents", ans.Sources)
 	}
 	if !strings.Contains(ans.Answer, "Harness lock-in") {
 		t.Errorf("answer = %q", ans.Answer)
@@ -120,8 +125,12 @@ func TestRunCallsToolThenAnswersWithCitations(t *testing.T) {
 	if toolMsg.Role != "tool" || toolMsg.ToolCallID != "call_1" {
 		t.Errorf("tool message = %+v", toolMsg)
 	}
-	if !strings.Contains(toolMsg.Content, idA) || !strings.Contains(toolMsg.Content, "vendor lock-in") {
+	if !strings.Contains(toolMsg.Content, "vendor lock-in") {
 		t.Errorf("tool content = %q, want the retrieved hits", toolMsg.Content)
+	}
+	// The model writes prose only, so the loop never hands it the identifier.
+	if strings.Contains(toolMsg.Content, idA) || strings.Contains(toolMsg.Content, "chunk_id") {
+		t.Errorf("tool content exposes the chunk id: %q", toolMsg.Content)
 	}
 	if len(chatter.requests[0].Tools) != 1 || chatter.requests[0].Tools[0].Function.Name != agentloop.ToolName {
 		t.Errorf("first request tools = %+v", chatter.requests[0].Tools)
@@ -139,7 +148,7 @@ func TestRunPinsReasoningEffortPerCallKind(t *testing.T) {
 	chatter := &scriptedChatter{responses: []llm.ChatResponse{
 		toolCallResponse(call("c1", agentloop.ToolName, `{"query":"one"}`)),
 		toolCallResponse(call("c2", agentloop.ToolName, `{"query":"two"}`)),
-		answerResponse("Grounded (" + idA + ")."),
+		answerResponse("Grounded answer."),
 	}}
 	searcher := &fakeSearcher{hits: []retrieval.Hit{hit(idA, "excerpt")}}
 	if _, err := newRunner(chatter, searcher).Run(context.Background(), "q"); err != nil {
@@ -166,7 +175,7 @@ func TestRunForcedFinalAnswerUsesAnswerEffort(t *testing.T) {
 	chatter := &scriptedChatter{responses: []llm.ChatResponse{
 		toolCallResponse(call("c1", agentloop.ToolName, `{"query":"one"}`)),
 		toolCallResponse(call("c2", agentloop.ToolName, `{"query":"two"}`)),
-		answerResponse("Grounded (" + idA + ")."),
+		answerResponse("Grounded answer."),
 	}}
 	searcher := &fakeSearcher{hits: []retrieval.Hit{hit(idA, "excerpt")}}
 	runner := newRunner(chatter, searcher)
@@ -183,10 +192,12 @@ func TestRunForcedFinalAnswerUsesAnswerEffort(t *testing.T) {
 	}
 }
 
-func TestRunRefusesWithoutCitation(t *testing.T) {
+// TestRunRefusesWithoutRetrieval is the backstop the model-side rules no
+// longer provide: an answer written without a single retrieved excerpt has no
+// evidence to stand on, so it collapses to the refusal.
+func TestRunRefusesWithoutRetrieval(t *testing.T) {
 	chatter := &scriptedChatter{responses: []llm.ChatResponse{
-		toolCallResponse(call("call_1", agentloop.ToolName, `{"query":"harness"}`)),
-		answerResponse("Harnesses are a form of vendor lock-in, but I forgot to cite."),
+		answerResponse("Harnesses are a form of vendor lock-in."),
 	}}
 	searcher := &fakeSearcher{hits: []retrieval.Hit{hit(idA, "excerpt")}}
 	ans, err := newRunner(chatter, searcher).Run(context.Background(), "q")
@@ -194,40 +205,36 @@ func TestRunRefusesWithoutCitation(t *testing.T) {
 		t.Fatalf("run: %v", err)
 	}
 	if !ans.Refused || ans.Answer != agentloop.Refusal {
-		t.Errorf("answer = %+v, want the refusal", ans)
+		t.Errorf("answer = %+v, want the refusal for an answer with no retrieval", ans)
 	}
-	if len(ans.Citations) != 0 {
-		t.Errorf("citations = %+v, want none", ans.Citations)
+	if len(ans.Citations) != 0 || len(ans.Sources) != 0 {
+		t.Errorf("citations/sources = %+v/%+v, want empty", ans.Citations, ans.Sources)
+	}
+	if len(chatter.requests) != 1 {
+		t.Errorf("chat calls = %d, want 1", len(chatter.requests))
 	}
 }
 
-func TestRunRefusesHallucinatedCitation(t *testing.T) {
+// TestRunCollapsesExcerptsPerDocument proves the two lists are different
+// layers: one citation per excerpt, one source per upstream item.
+func TestRunCollapsesExcerptsPerDocument(t *testing.T) {
+	second := hit(idB, "another excerpt")
+	second.SourceID = "post-" + idA[:8]
+	second.SourceURL = urlOf(idA)
 	chatter := &scriptedChatter{responses: []llm.ChatResponse{
 		toolCallResponse(call("call_1", agentloop.ToolName, `{"query":"harness"}`)),
-		answerResponse("Made up (" + idC + ")."),
+		answerResponse("Two excerpts, one post."),
 	}}
-	searcher := &fakeSearcher{hits: []retrieval.Hit{hit(idA, "excerpt")}}
+	searcher := &fakeSearcher{hits: []retrieval.Hit{hit(idA, "excerpt one"), second}}
 	ans, err := newRunner(chatter, searcher).Run(context.Background(), "q")
 	if err != nil {
 		t.Fatalf("run: %v", err)
 	}
-	if !ans.Refused || ans.Answer != agentloop.Refusal {
-		t.Errorf("answer = %+v, want the refusal for an unresolvable citation", ans)
+	if len(ans.Citations) != 2 {
+		t.Errorf("citations = %+v, want one per excerpt", ans.Citations)
 	}
-}
-
-func TestRunDeduplicatesCitations(t *testing.T) {
-	chatter := &scriptedChatter{responses: []llm.ChatResponse{
-		toolCallResponse(call("call_1", agentloop.ToolName, `{"query":"harness"}`)),
-		answerResponse("First " + idA + " then again " + idA + "."),
-	}}
-	searcher := &fakeSearcher{hits: []retrieval.Hit{hit(idA, "excerpt")}}
-	ans, err := newRunner(chatter, searcher).Run(context.Background(), "q")
-	if err != nil {
-		t.Fatalf("run: %v", err)
-	}
-	if len(ans.Citations) != 1 {
-		t.Errorf("citations = %+v, want one after deduplication", ans.Citations)
+	if len(ans.Sources) != 1 || ans.Sources[0].URL != urlOf(idA) {
+		t.Errorf("sources = %+v, want the post once", ans.Sources)
 	}
 }
 
@@ -236,7 +243,7 @@ func TestRunStopsAtIterationBudget(t *testing.T) {
 		toolCallResponse(call("c1", agentloop.ToolName, `{"query":"one"}`)),
 		toolCallResponse(call("c2", agentloop.ToolName, `{"query":"two"}`)),
 		toolCallResponse(call("c3", agentloop.ToolName, `{"query":"three"}`)),
-		answerResponse("Grounded (" + idA + ")."),
+		answerResponse("Grounded answer."),
 	}}
 	searcher := &fakeSearcher{hits: []retrieval.Hit{hit(idA, "excerpt")}}
 	runner := newRunner(chatter, searcher)
@@ -269,7 +276,7 @@ func TestRunTrimsExcerptsToBudget(t *testing.T) {
 	body := "one two three four five six seven eight nine ten"
 	chatter := &scriptedChatter{responses: []llm.ChatResponse{
 		toolCallResponse(call("call_1", agentloop.ToolName, `{"query":"harness"}`)),
-		answerResponse("Grounded (" + idA + ")."),
+		answerResponse("Grounded answer."),
 	}}
 	searcher := &fakeSearcher{hits: []retrieval.Hit{hit(idA, body)}}
 	runner := newRunner(chatter, searcher)
@@ -288,8 +295,11 @@ func TestRunTrimsExcerptsToBudget(t *testing.T) {
 	if strings.Contains(toolContent, "six") {
 		t.Errorf("tool content kept words past the budget: %q", toolContent)
 	}
-	if !strings.Contains(toolContent, idA) {
-		t.Error("truncation lost the chunk id the answer cites")
+	if strings.Contains(toolContent, idA) || strings.Contains(toolContent, "chunk_id") {
+		t.Error("the tool result exposes the chunk id")
+	}
+	if excerpt := ans.Citations[0].Excerpt; !strings.Contains(excerpt, "…") || strings.Contains(excerpt, "six") {
+		t.Errorf("citation excerpt = %q, want the truncated text the model saw", excerpt)
 	}
 }
 
@@ -350,7 +360,7 @@ func TestRunNudgesImmediateRefusal(t *testing.T) {
 	chatter := &scriptedChatter{responses: []llm.ChatResponse{
 		answerResponse(agentloop.Refusal),
 		toolCallResponse(call("call_1", agentloop.ToolName, `{"query":"identity"}`)),
-		answerResponse("Grounded (" + idA + ")."),
+		answerResponse("Grounded answer."),
 	}}
 	searcher := &fakeSearcher{hits: []retrieval.Hit{hit(idA, "excerpt")}}
 	ans, err := newRunner(chatter, searcher).Run(context.Background(), "who is this?")
@@ -417,28 +427,6 @@ func TestSearchToolSchema(t *testing.T) {
 		if !found {
 			t.Errorf("source enum = %v, want it to contain %q", source.Enum, want)
 		}
-	}
-}
-
-// TestRunAcceptsHashQuotedFromExcerpt proves a 64-hex digest that appears
-// inside retrieved source text is not mistaken for a fabricated citation.
-func TestRunAcceptsHashQuotedFromExcerpt(t *testing.T) {
-	chatter := &scriptedChatter{responses: []llm.ChatResponse{
-		toolCallResponse(call("call_1", agentloop.ToolName, `{"query":"digest"}`)),
-		answerResponse("The build digest is " + idC + "; see the source (" + idA + ")."),
-	}}
-	searcher := &fakeSearcher{hits: []retrieval.Hit{
-		hit(idA, "release notes mention digest "+idC+" in passing"),
-	}}
-	ans, err := newRunner(chatter, searcher).Run(context.Background(), "what is the digest?")
-	if err != nil {
-		t.Fatalf("run: %v", err)
-	}
-	if ans.Refused {
-		t.Fatalf("refused on a hash quoted from the excerpt: %+v", ans)
-	}
-	if len(ans.Citations) != 1 || ans.Citations[0].ChunkID != idA {
-		t.Errorf("citations = %+v, want only idA", ans.Citations)
 	}
 }
 

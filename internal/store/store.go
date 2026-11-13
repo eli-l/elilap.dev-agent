@@ -32,19 +32,36 @@ func init() {
 	vec.Auto()
 }
 
-// EmbeddingDims is the vector width of chunks_vec.embedding (768, from the
-// LocalAI embeddinggemma-300m model). The embed step must produce exactly
-// this many dimensions; the store refuses writes that do not match.
-const EmbeddingDims = 768
+// DefaultEmbeddingDims is the vector width chunks_vec.embedding has when
+// EMBED_DIMS is unset: 768, from the local embeddinggemma-300m model. The
+// schema in migrations/0001_init.sql declares that width; Open rebuilds the
+// table when a run is configured for a model that returns another one.
+const DefaultEmbeddingDims = 768
 
 // Store is a handle to the single-file SQLite index.
 type Store struct {
 	db *sql.DB
+	// dims is the width of chunks_vec.embedding in this index. A read-only
+	// open takes it from the schema; a read-write open sets it from the
+	// configured width (rebuilding the table when they disagree).
+	dims int
 }
 
+// Dims reports the vector width this index stores; 0 means the index has no
+// chunks_vec table (a database that never finished ingesting).
+func (s *Store) Dims() int { return s.dims }
+
 // Open opens (creating if necessary) the index database at path and brings
-// its schema up to date by applying every migration in migrationsDir.
-func Open(path, migrationsDir string) (*Store, error) {
+// its schema up to date by applying every migration in migrationsDir. dims is
+// the configured embedding width (EMBED_DIMS); a non-zero width different from
+// the one chunks_vec already has rebuilds that table, which invalidates every
+// stored vector and makes the next `agent embed` re-embed the corpus.
+func Open(path, migrationsDir string, dims int) (*Store, error) {
+	dims = normalizeDims(dims)
+	if dims > maxEmbeddingDims {
+		return nil, fmt.Errorf("embedding width %d exceeds the supported maximum %d",
+			dims, maxEmbeddingDims)
+	}
 	log := logging.DB().With().Str("db", path).Logger()
 	start := time.Now()
 	if dir := filepath.Dir(path); dir != "" && dir != "." {
@@ -62,14 +79,20 @@ func Open(path, migrationsDir string) (*Store, error) {
 	// SQLite is happiest with a single writer; capping the pool keeps
 	// concurrent ingest and embed runs from fighting over the write lock.
 	db.SetMaxOpenConns(1)
-	s := &Store{db: db}
+	s := &Store{db: db, dims: dims}
 	if err := s.migrate(migrationsDir); err != nil {
 		db.Close()
 		log.Error().Err(err).Str("migrations", migrationsDir).Msg("migration failed")
 		return nil, err
 	}
+	if err := s.ensureVecDims(dims); err != nil {
+		db.Close()
+		log.Error().Err(err).Int("dims", dims).Msg("vector table check failed")
+		return nil, err
+	}
 	log.Info().
 		Str("migrations", migrationsDir).
+		Int("embed_dims", dims).
 		Dur("duration", time.Since(start)).
 		Msg("database ready")
 	return s, nil
@@ -80,9 +103,10 @@ func Open(path, migrationsDir string) (*Store, error) {
 var ErrNoDatabase = errors.New("index database does not exist")
 
 // OpenReadOnly opens an existing index without creating it or applying
-// migrations. It is the path for read-only commands (stats, ingest
-// --dry-run): a missing file is an error rather than a silently created empty
-// schema.
+// migrations. It is the path for read-only commands (stats, ingest --dry-run):
+// a missing file is an error rather than a silently created empty schema. The
+// vector width comes from the index itself, so a width mismatch is reported by
+// CheckDims at the call site that actually needs to compare vectors.
 func OpenReadOnly(path string) (*Store, error) {
 	if _, err := os.Stat(path); err != nil {
 		if errors.Is(err, os.ErrNotExist) {
@@ -96,7 +120,14 @@ func OpenReadOnly(path string) (*Store, error) {
 		return nil, fmt.Errorf("open %s (read-only): %w", path, err)
 	}
 	db.SetMaxOpenConns(1)
-	return &Store{db: db}, nil
+	s := &Store{db: db}
+	dims, err := s.currentVecDims()
+	if err != nil {
+		db.Close()
+		return nil, err
+	}
+	s.dims = dims
+	return s, nil
 }
 
 // Close releases the database handle.

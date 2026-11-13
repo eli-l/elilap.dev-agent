@@ -12,7 +12,16 @@ targets:
       headers:
         Content-Type: application/json
       body: '{"question":"{{prompt}}"}'
-      transformResponse: json.answer
+      # The answer is the summary only; the evidence is in the separate
+      # citations/sources arrays (no chunk ids). Append the sources so the
+      # graders - and a human reading a report - can check attribution.
+      transformResponse: >-
+        json.answer + (json.sources && json.sources.length
+          ? "\n\nSources:\n" + json.sources.map((s) =>
+              "- " + (s.kind || "") + (s.title ? " | " + s.title : "") +
+              (s.url ? " | " + s.url : "") + (s.platform ? " | " + s.platform : "")
+            ).join("\n")
+          : "")
     label: elilap.dev-agent-http
 prompts:
   - '{{prompt}}'

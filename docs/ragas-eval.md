@@ -29,7 +29,7 @@ promptfoo suite in `tests-ai/`; see [red-team.md](red-team.md).
 | File | Role |
 |---|---|
 | `evaluate.py` | The tool. Reads the configs, asks the agent, runs the metrics, prints a summary, writes CSVs to `output/`. |
-| `agent.py` | The system under test. Runs `agent ask --format json` (or `POST /v1/ask` with `--transport http`) and reads the body of every cited chunk from `data/index.db`, so the metrics see exactly the excerpts the answer was allowed to cite. |
+| `agent.py` | The system under test. Runs `agent ask --format json` (or `POST /v1/ask` with `--transport http`) and takes the Ragas contexts straight from the response's `citations[].excerpt`, so the metrics see exactly the excerpts the model was shown - no second read of `data/index.db`, and no chunk id in the loop. |
 | `configs/answers.yaml` | 15 answerable questions with verified chunk ids and the facts a correct answer must state. |
 | `configs/refusals.yaml` | 14 questions the corpus cannot answer — off-corpus, adjacent-but-absent, and personal. |
 | `output/` | Generated datasets, experiment CSVs, and traces. Gitignored. |
@@ -69,7 +69,7 @@ excerpts is how a gold set quietly becomes fiction.
 
 ## Configuration
 
-The harness reads one endpoint, independent of the agent's `LOCALAI_*`
+The harness reads one endpoint, independent of the agent's `EMBED_*`/`CHAT_*`
 settings, so it can score with a different model than the one answering:
 
 | Variable | Default | Notes |

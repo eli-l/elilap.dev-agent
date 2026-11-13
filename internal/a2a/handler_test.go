@@ -70,8 +70,15 @@ func TestSendMessageReturnsAgentMessage(t *testing.T) {
 	loop := answererFunc(func(_ context.Context, q string) (agentloop.Answer, error) {
 		got = q
 		return agentloop.Answer{
-			Answer:         "Grounded answer.",
-			Citations:      []agentloop.Citation{{ChunkID: "c1", SourceURL: "https://read.elilap.dev/x"}},
+			Answer: "Grounded answer.",
+			Citations: []agentloop.Citation{{
+				SourceKind: "ghost_post", SourceURL: "https://read.elilap.dev/x",
+				Title: "A post", PublishedAt: "2026-11-02T13:21:35Z", Excerpt: "the excerpt",
+			}},
+			Sources: []agentloop.Source{{
+				Kind: "ghost_post", URL: "https://read.elilap.dev/x", Title: "A post",
+				Author: "Eli", PublishedAt: "2026-11-02T13:21:35Z",
+			}},
 			ToolIterations: 2,
 			ElapsedMS:      1234,
 		}, nil
@@ -108,8 +115,21 @@ func TestSendMessageReturnsAgentMessage(t *testing.T) {
 		t.Fatalf("metadata citations = %v", msg.Metadata["citations"])
 	}
 	citation := citations[0].(map[string]any)
-	if citation["chunk_id"] != "c1" || citation["source_url"] != "https://read.elilap.dev/x" {
+	if citation["source_url"] != "https://read.elilap.dev/x" || citation["excerpt"] != "the excerpt" {
 		t.Errorf("citation = %v", citation)
+	}
+	// The internal identifier never reaches a peer, in the metadata or anywhere
+	// else in the message.
+	if _, ok := citation["chunk_id"]; ok {
+		t.Errorf("citation exposes a chunk_id: %v", citation)
+	}
+	sources, ok := msg.Metadata["sources"].([]any)
+	if !ok || len(sources) != 1 {
+		t.Fatalf("metadata sources = %v", msg.Metadata["sources"])
+	}
+	if source := sources[0].(map[string]any); source["platform"] != nil ||
+		source["author"] != "Eli" || source["url"] != "https://read.elilap.dev/x" {
+		t.Errorf("source = %v", source)
 	}
 	if msg.Metadata["refused"] != false || msg.Metadata["tool_iterations"] != float64(2) {
 		t.Errorf("metadata = %v", msg.Metadata)
@@ -146,6 +166,9 @@ func TestSendMessageRefusal(t *testing.T) {
 	citations, ok := msg.Metadata["citations"].([]any)
 	if !ok || len(citations) != 0 {
 		t.Errorf("citations = %v, want []", msg.Metadata["citations"])
+	}
+	if sources, ok := msg.Metadata["sources"].([]any); !ok || len(sources) != 0 {
+		t.Errorf("sources = %v, want []", msg.Metadata["sources"])
 	}
 }
 

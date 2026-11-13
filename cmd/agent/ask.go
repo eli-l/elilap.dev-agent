@@ -71,24 +71,32 @@ func runAsk(args []string, rtCfg envcfg.Config, stdout, stderr io.Writer) int {
 	}
 	defer st.Close()
 
-	if err := verifyIndexModel(st, *model); err != nil {
+	if err := verifyIndexModel(st, *model, int(rtCfg.EmbedDims)); err != nil {
 		fmt.Fprintf(stderr, "agent ask: %v\n", err)
 		return 1
 	}
 
 	// One request must fit inside the overall budget, so a raised --timeout
 	// also extends a slow chat or embeddings call instead of failing at the
-	// embed transport's 120s ceiling.
-	client, err := llm.NewClient(rtCfg.LocalAIBaseURL, rtCfg.LocalAIAPIKey,
-		shared.NewHTTPClient(*timeout))
+	// embed transport's 120s ceiling. The two roles get their own endpoint and
+	// credential: embeddings can stay on the local host while the chat model
+	// is a cloud provider (or the other way round).
+	hc := shared.NewHTTPClient(*timeout)
+	embedClient, err := llm.NewClient(rtCfg.EmbedBaseURL, rtCfg.EmbedAPIKey, hc)
 	if err != nil {
 		fmt.Fprintf(stderr, "agent ask: %v\n", err)
 		return 1
 	}
-	searcher := &retrieval.Searcher{Store: st, Embedder: client, Model: *model}
+	chatClient, err := llm.NewClient(rtCfg.ChatBaseURL, rtCfg.ChatAPIKey, hc)
+	if err != nil {
+		fmt.Fprintf(stderr, "agent ask: %v\n", err)
+		return 1
+	}
+	chatClient.TokenParam = rtCfg.ChatTokenParam
+	searcher := &retrieval.Searcher{Store: st, Embedder: embedClient, Model: *model}
 	runner := &agentloop.Runner{
 		Searcher:      searcher,
-		Chat:          client,
+		Chat:          chatClient,
 		Model:         *chatModel,
 		MaxIterations: *maxIterations,
 		ExcerptTokens: *excerptTokens,
@@ -121,10 +129,24 @@ func printAnswer(w io.Writer, format string, answer agentloop.Answer) error {
 		fmt.Fprintf(w, "refused: %t\n", answer.Refused)
 		fmt.Fprintf(w, "tool iterations: %d\n", answer.ToolIterations)
 		fmt.Fprintf(w, "elapsed: %dms\n", answer.ElapsedMS)
+		if len(answer.Sources) > 0 {
+			fmt.Fprintln(w, "sources:")
+			for _, src := range answer.Sources {
+				label := src.Title
+				if label == "" {
+					label = src.URL
+				}
+				fmt.Fprintf(w, "  - %s  %s  %s\n", src.Kind, label, src.URL)
+			}
+		}
 		if len(answer.Citations) > 0 {
-			fmt.Fprintln(w, "citations:")
+			fmt.Fprintf(w, "citations: %d excerpt(s)\n", len(answer.Citations))
 			for _, c := range answer.Citations {
-				fmt.Fprintf(w, "  - %s  %s\n", c.ChunkID, c.SourceURL)
+				loc := c.Title
+				if c.Section != "" {
+					loc = strings.TrimSpace(loc + " / " + c.Section)
+				}
+				fmt.Fprintf(w, "  - %s  %s\n", loc, c.SourceURL)
 			}
 		}
 		return nil

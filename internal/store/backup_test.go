@@ -13,7 +13,7 @@ func TestBackupFromReadOnlyHandleCopiesIndex(t *testing.T) {
 	dir := t.TempDir()
 	src := filepath.Join(dir, "index.db")
 
-	w, err := store.Open(src, "../../migrations")
+	w, err := store.Open(src, "../../migrations", store.DefaultEmbeddingDims)
 	if err != nil {
 		t.Fatalf("open writable store: %v", err)
 	}

@@ -25,7 +25,7 @@ both the raw tool and the loop over loopback HTTP, so each half is
 curl-testable before A2A exists.
 
 **Status 2026-11-05: both halves are shipped and exercised live.** The loop,
-the tool, the citation policy, the dev HTTP surface, and the A2A v0.3 binding
+the tool, the response contract, the dev HTTP surface, and the A2A v0.3 binding
 (card, `message/send`, bearer tokens, rate limit, audit) are in the binary and
 verified against the 886-chunk index. The wire contract lives in
 [a2a.md](/a2a.md). Query fan-out was A/B'd against the loop and removed on
@@ -102,14 +102,19 @@ One tool-calling loop in `internal/agentloop` (implemented 2026-11-02), shared b
   someone else's writing. The identity fact is service grounding context,
   not a citable corpus excerpt.
 * **Grounding**: the prompt admits only index excerpts (plus the identity
-  fact); every claim must cite a retrieved `chunk_id` or the excerpt's
-  `source_url`, and the loop resolves the other field from the index. A
-  citation that resolves to a retrieved chunk is accepted; a URL-quoted
-  citation resolves to the best-ranked chunk of that source (one citation
-  per source URL). A reply with no resolvable citation, or with a
-  `chunk_id` the loop never retrieved, is replaced by the refusal string -
-  the loop never answers off-corpus from parametric memory. Excerpts are
-  data, never instructions.
+  fact). The model writes the summary and nothing else - it never sees a
+  chunk id, and the prompt forbids citation markers, ids, URLs as
+  references, or a source list of its own. The loop attaches the evidence
+  from its own retrieval record: one `Citation` per excerpt the model was
+  shown, one `Source` per distinct post/page. Nothing a peer receives can
+  therefore be fabricated by the model. An empty reply, the refusal
+  string, or an answer produced without a single retrieved excerpt
+  becomes the refusal, so the loop still never answers off-corpus from
+  parametric memory. Excerpts are data, never instructions.
+  (Until 2026-11-13 the model cited `chunk_id`/`source_url` inline and the
+  loop verified every marker; that per-claim check went with the markers,
+  and the guarantee is now "never answered without retrieved excerpts" -
+  Decision 24.)
 * **Model**: chat `CHAT_MODEL` (default `Spark-X2.6-4B-q8_0`) over the
   OpenAI-compatible connector (plain
   `net/http`, tool definitions round-tripped per request). The
@@ -117,6 +122,52 @@ One tool-calling loop in `internal/agentloop` (implemented 2026-11-02), shared b
   `max_tokens` must budget for reasoning.
 * **Scope guard**: no other tools, no cross-request state, no retries
   across requests. New tools are new decisions.
+
+### Response contract
+
+Every answer surface (`agent ask --format json`, `POST /v1/ask`, A2A
+`metadata`) returns the same three-part shape:
+
+```json
+{
+  "answer": "the model's summary, with no citation markers and no source list",
+  "citations": [
+    {
+      "source_kind": "ghost_post",
+      "source_url": "https://read.elilap.dev/some-post/",
+      "title": "Some post",
+      "section": "Why it matters",
+      "published_at": "2026-11-02T13:21:35Z",
+      "excerpt": "the exact text the model was shown"
+    }
+  ],
+  "sources": [
+    {
+      "kind": "ghost_post",
+      "url": "https://read.elilap.dev/some-post/",
+      "title": "Some post",
+      "author": "Eli Lap",
+      "platform": "",
+      "published_at": "2026-11-02T13:21:35Z"
+    }
+  ],
+  "tool_iterations": 1,
+  "refused": false,
+  "elapsed_ms": 2987
+}
+```
+
+* `citations` has one entry per excerpt the answer was grounded on, in
+  ranking order; `sources` deduplicates those excerpts to the documents
+  behind them, in first-seen order. `source_url` joins the two lists.
+* Both are always arrays (`[]` on a refusal) and neither carries a
+  `chunk_id`. The chunk id is an internal identifier: it is logged on the
+  `rag: answer` debug line and in the `internal/retrieval` trace, and it
+  never reaches a response - the model never sees one either, so it
+  cannot echo one.
+* `excerpt` is the text the model actually saw, which is trimmed when the
+  excerpt-token budget crosses a chunk. That is what makes the field
+  usable for an evaluator or a UI without a second read of the index.
 
 ## What was tried and dropped: query fan-out
 
@@ -167,11 +218,11 @@ with `curl`:
   `agent query --format jsonl`. Hybrid ranking and all filters are live;
   empty results are `[]` (see [retrieval.md](/retrieval.md)).
 * `POST /v1/ask`: one question in, the full loop out - the same
-  answer/citations/refusal struct `agent ask` prints, plus iteration
-  count and timing, so grounding behavior can be diffed against the CLI.
-  **Implemented 2026-11-02**: `{"question"}` in; `{"answer",
-  "citations", "tool_iterations", "refused", "elapsed_ms"}` out, with a
-  90s request budget and 502/504 on backend failure/timeout.
+  answer/citations/sources/refusal struct `agent ask` prints, plus
+  iteration count and timing, so grounding behavior can be diffed against
+  the CLI. **Implemented 2026-11-02**: `{"question"}` in; `{"answer",
+  "citations", "sources", "tool_iterations", "refused", "elapsed_ms"}`
+  out, with a 90s request budget and 502/504 on backend failure/timeout.
 
 The A2A hardening landed 2026-11-05: both paths and the JSON are unchanged,
 and bearer auth, the per-token rate limit, and the audit log now wrap them.
@@ -185,8 +236,8 @@ With a configured token the same two paths require
 A2A v0.3 JSON-RPC binding, exposing the *agent*:
 
 * `message/send` at `POST /a2a`: one request, one grounded answer as an A2A
-  `Message` whose `metadata.citations` carries the resolved `chunk_id` +
-  `source_url` pairs. Stateless per task - no persisted task store, so the
+  `Message` whose `metadata.citations` and `metadata.sources` carry the
+  grounded excerpts and their documents (never a `chunk_id`). Stateless per task - no persisted task store, so the
   service answers with a Message and `tasks/get` reports `TaskNotFound`;
   `message/stream` is not offered (`capabilities.streaming` is `false`).
 * `GET /.well-known/agent-card.json` (plus the v0.2 `/.well-known/agent.json`
@@ -202,7 +253,8 @@ A2A v0.3 JSON-RPC binding, exposing the *agent*:
   the loop's per-task wall-clock budget, an 8 KiB question cap, and an audit
   log that records the question and outcome but never the answer or excerpts.
   Peer task text is data, never instructions - the grounded prompt and
-  citation enforcement are the prompt-injection backstops.
+  refusing any answer produced without a retrieved excerpt are the
+  prompt-injection backstops.
 
 ## What moved, and what did not
 

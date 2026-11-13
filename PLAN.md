@@ -35,7 +35,8 @@ instead of the question text, and the rate limit covers `/v1/retrieve`.
 **Scope change
 (2026-10-27)**: this repo is an **agentic A2A connector** — the agent loop
 lives here. A remote peer sends a conversational task, and *our* service
-runs its own tool-using loop (retrieve → ground → answer with citations)
+runs its own tool-using loop (retrieve → ground → answer with the evidence
+attached)
 against the local index over the OpenAI-compatible chat model. The A2A
 surface exposes the
 **agent**, not a raw retriever; RAG is an internal tool of the service,
@@ -64,11 +65,12 @@ original schema.
 3. Single-host, single-file SQLite index; no long-lived vector DB service.
 4. Reproducible: `rm -rf data/index.db* && ./agent ingest && ./agent embed` rebuilds
    the whole thing from upstream sources.
-5. A grounded, citation-first answer loop: one internal tool-calling
-   agent (Decisions 15/16) turns a peer's conversational question into
-   hybrid retrieval calls over the local index and returns an answer
-   whose claims cite `chunk_id` + `source_url`; the OpenAI-compatible
-   connector keeps the model swappable.
+5. A grounded answer loop: one internal tool-calling agent
+   (Decisions 15/16) turns a peer's conversational question into hybrid
+   retrieval calls over the local index and returns the model's summary
+   plus the citations (grounded excerpts) and sources (documents) the
+   loop attached to it (Decision 24); the OpenAI-compatible connector
+   keeps the model swappable.
 6. An A2A server surface that exposes *this* agent to remote peers: they
    bring a question, our loop retrieves, grounds, and answers.
 7. Environment-independent: the app runs from one `docker compose up` on any
@@ -105,7 +107,7 @@ original schema.
 |---|---|---|---|
 | 1 | Language | Go 1.27 (language floor) | Single binary, no runtime, easy ops |
 | 2 | Index store | SQLite + `sqlite-vec` (one file) | Corpus ≤1,500 chunks — service overkill, file-portable, FTS5 free |
-| 3 | Embedder + chat model | Self-hosted **LocalAI** behind one OpenAI-compatible connector (`/v1/embeddings`, `/v1/chat/completions`); embed model **`embeddinggemma-300m`** (768d, verified 2026-10-23), chat model **`Spark-X2.6-4B-q8_0`** (re-pinned 2026-11-11; 8K context) | Self-hosted and environment-independent; swapping providers = changing `LOCALAI_BASE_URL` |
+| 3 | Embedder + chat model | Self-hosted **LocalAI** behind one OpenAI-compatible connector (`/v1/embeddings`, `/v1/chat/completions`); embed model **`embeddinggemma-300m`** (768d, verified 2026-10-23), chat model **`Spark-X2.6-4B-q8_0`** (re-pinned 2026-11-11; 8K context). The two roles became independently configurable on 2026-11-13 (Decision 23) | Self-hosted and environment-independent; swapping a provider = changing that role's `EMBED_BASE_URL` or `CHAT_BASE_URL` |
 | 4 | Retrieval | Hybrid: FTS5 BM25 + vec cosine, RRF merge | Neither alone is good enough on mixed prose+social |
 | 5 | Repos / sources | Ghost Admin API + Postiz HTTP API + the public website over HTML (Decision 22) | Live, queryable, idempotent on `(source_kind, source_id)` |
 | 2b | Go driver | CGO: `mattn/go-sqlite3` (`-tags sqlite_fts5`) + sqlite-vec Go bindings (asg017), pinned | FTS5 + vec0 in one DB handle; exact binding import path confirmed in the Phase 1 driver spike, not before |
@@ -118,14 +120,16 @@ original schema.
 | 12 | Import config file | One `sources.yaml` at the repo root (YAML, strict decode: `KnownFields(true)`, `version:` field) | Providers are declared in one place and can be enabled/disabled/reconfigured without a rebuild; TOML rejected — the repo already speaks YAML (`sources.yaml`) and YAML carries comments in a hand-edited file (decided 2026-10-23) |
 | 13 | Provider model | One `Provider` interface (`List` cheap → `Fetch` full) + a registry keyed by config `type`; unknown type or bad options = startup error | One code path for every source; the `List`/`Fetch` split is what makes incremental ingest cheap and fixtures-testable without credentials |
 | 14 | Ingest modes | Default = incremental against a state ledger (`source_state` + `source_items`); `--full` = re-fetch + re-chunk + **re-embed** (decided 2026-10-23) | On a full reindex the index is rebuilt exactly as the sources stand today, and the corpus is small enough (≤1,500 chunks) that the CPU cost is acceptable |
-| 15 | Agent locus | The agent loop lives **in this service** (decided 2026-10-27): one tool-calling loop over the OpenAI-compatible chat model, one internal tool `search_writing` bound to `internal/retrieval`, bounded iterations, citation-or-refusal | A2A peers ask; we answer grounded from the corpus — "generation is the caller's problem" is rescoped: the caller is remote, the loop is ours |
+| 15 | Agent locus | The agent loop lives **in this service** (decided 2026-10-27): one tool-calling loop over the OpenAI-compatible chat model, one internal tool `search_writing` bound to `internal/retrieval`, bounded iterations, retrieval-or-refusal (the evidence attachment changed 2026-11-13, Decision 24) | A2A peers ask; we answer grounded from the corpus — "generation is the caller's problem" is rescoped: the caller is remote, the loop is ours |
 | 16 | A2A surface | A2A v0.3 JSON-RPC (`message/send` at `/a2a`; agent card at `/.well-known/agent-card.json`, with the v0.2 `agent.json` alias; card fields `url` + `preferredTransport` + `additionalInterfaces`) exposing the **agent**, plus a plain `POST /v1/retrieve` for deterministic search clients; bearer-token, read-only, local-bind default. Shipped 2026-11-05 (`docs/a2a.md`) | Peers get answers, not bare search results; streaming and task resumability stay out until a peer actually needs them |
 | 17 | Embedding pass | **Separate resumable command after ingest** (decided 2026-11-02): `agent embed` pages over pending chunks, batches `/v1/embeddings`, and stamps `embedded_with = localai:<model>/text-v1`; `--full` re-embeds the corpus. Ingest never calls the model host | Keeps upstream sync independent of model availability, makes an interrupted run resume at the first unembedded chunk, and turns a model/template change into an explicit invalidation instead of a hidden side effect |
-| 18 | Answer path | **The tool-calling loop, only** (2026-11-05): one grounded tool `search_writing`, ≤3 iterations, citation-or-refusal. A second path — rewrite → fan-out retrieval → summed-RRF fuse → one answer call — was built behind `AGENT_SEARCH_MODE=fanout`, measured over three rounds, and removed | It never beat the loop on grounding (3/4, 3/4, 2/4, 1/5, 1/4) and was 2-3x slower (16-33s vs 5-12s), because one answer call over five excerpts at `low` effort spends 400-6,600 reasoning tokens; a switchable second path still had to be maintained, documented, and evaluated |
+| 18 | Answer path | **The tool-calling loop, only** (2026-11-05): one grounded tool `search_writing`, ≤3 iterations, retrieval-or-refusal. A second path — rewrite → fan-out retrieval → summed-RRF fuse → one answer call — was built behind `AGENT_SEARCH_MODE=fanout`, measured over three rounds, and removed | It never beat the loop on grounding (3/4, 3/4, 2/4, 1/5, 1/4) and was 2-3x slower (16-33s vs 5-12s), because one answer call over five excerpts at `low` effort spends 400-6,600 reasoning tokens; a switchable second path still had to be maintained, documented, and evaluated |
 | 19 | Reasoning budget | `reasoning_effort` pinned per call kind in the request (2026-11-03): `"none"` for the key-extraction call, `"low"` for every call made with excerpts in hand and for the forced no-tools answer | Unset means the backend's model config, which is unbounded on these templates: a two-sentence question burned all 4,096 completion tokens on `reasoning`, returned empty `content` with `finish_reason=length`, and the finalizer turned that into a refusal |
 | 20 | A2A statelessness | One synchronous agent `Message` per `message/send` (2026-11-05): no task store, no streaming, no resumption. `tasks/get`/`tasks/cancel` return `-32001 TaskNotFound`; `message/stream` is `-32004` | A peer gets a grounded answer in one round trip, and the service does not invent task state it cannot resume; the card advertises `streaming: false` so the contract is honest |
 | 21 | A2A credentials | Bearer tokens from `AGENT_A2A_TOKENS` (process-start pairs) plus a re-read `0600` `AGENT_A2A_TOKENS_FILE`; `agent tokens add`, `revoke`, and `list`; 30 model-touching requests/min per token via `--rate-limit`, failed auth capped via `--auth-limit`; the store latches secured once any token existed (2026-11-05) | Rotation without restart, a token id in the audit record, and a bucket that protects the single model host; a file-based store beats an env-only list for revocation |
 | 22 | Website source | A generic `web` provider (`internal/sources/web`) indexes public HTML pages: sitemap/feed/seed discovery with path filters, robots.txt + delay politeness, and a **named strategy** per source (`auto`, `article`, `selectors`, `body`, or a Go `Adapter`). Items are `source_kind = web_page` with id `host+path`; `elilap.dev` uses the `elilap` adapter and the Ghost source keeps owning `read.elilap.dev` posts. Shipped 2026-11-09 | One provider reads any server-rendered site; a layout the generic passes cannot read is one small Go adapter, and the strategy choice is made offline with `agent sources inspect` instead of by a model at ingest time, so every run stays deterministic |
+| 23 | Model roles | **Embeddings and chat are configured independently** (2026-11-13): `EMBED_BASE_URL`/`EMBED_API_KEY`/`EMBED_MODEL`/`EMBED_DIMS` and `CHAT_BASE_URL`/`CHAT_API_KEY`/`CHAT_MODEL`/`CHAT_TOKEN_PARAM`, each defaulting to the local host. `EMBED_DIMS` (default 768) is the schema width: a read-write open rebuilds `chunks_vec` when it changes and clears the stamps, so the corpus re-embeds; read-only commands fail with `ErrVecDims` instead. `CHAT_TOKEN_PARAM` selects `max_tokens` (default) or `max_completion_tokens`, which OpenAI reasoning models require | Either role can move to any OpenAI-compatible cloud provider (the first is OpenAI `gpt6-luna`) without touching the other, and the index is not silently wrong when the embedder's width changes |
+| 24 | Answer shape | **The model writes the summary only; the loop attaches the evidence** (2026-11-13). The prompt forbids citation markers, chunk ids, and the model's own source list, and the tool payload no longer carries `chunk_id`, so the identifier never enters the model's context. The response is `answer` + `citations` (one per grounded excerpt: kind, url, title, section, published_at, excerpt) + `sources` (one per distinct document: kind, url, title, author, platform, published_at). Refusal is the same string with both arrays empty; an answer produced without a retrieved excerpt is refused. `chunk_id` is logged on the debug `rag: answer` line and in the retrieval trace, never returned | A summary is what a peer can actually quote, and evidence the service derives from its own retrieval record cannot be fabricated by the model. The trade-off is explicit: the old marker check verified every claim; the new backstop is "never answered without retrieved excerpts" |
 
 ### 1.5 Verified environment (audited 2026-10-21; Go floor re-verified 2026-10-23; A2A path verified 2026-11-05)
 
@@ -199,7 +203,7 @@ elilap.dev-agent/
 │   ├── a2a/                          # A2A v0.3 wire types, agent card,
 │   │                                 # message/send handler
 │   ├── agentloop/                    # the grounded loop: tool schema, prompt,
-│   │                                 # budgets, citation-or-refusal
+│   │                                 # budgets, retrieval-or-refusal
 │   ├── audit/                        # one task record per A2A / /v1/ask request
 │   ├── auth/                         # bearer tokens: env list + re-read 0600 file
 │   ├── config/                       # sources.yaml loader + strict validation
@@ -257,8 +261,10 @@ services:
   agent:
     build: .
     environment:
-      LOCALAI_BASE_URL: http://192.168.78.243:8080/v1   # self-hosted LocalAI on host `dev`
+      EMBED_BASE_URL: http://192.168.78.243:8080/v1   # self-hosted LocalAI on host `dev`
       EMBED_MODEL: embeddinggemma-300m
+      EMBED_DIMS: "768"
+      CHAT_BASE_URL: http://192.168.78.243:8080/v1
       CHAT_MODEL: Spark-X2.6-4B-q8_0
       AGENT_DB_PATH: /data/index.db
       AGENT_A2A_TOKENS_FILE: /data/a2a-tokens.txt
@@ -286,7 +292,8 @@ another host, so the agent must probe `/readyz` itself and fail fast with
 a clear message; (b) there is no `depends_on` health gate any more, so the
 readiness probe moves into the agent's own startup path. If `dev` ever goes
 away, the fallback is to add a `localai` service back here (CPU image,
-pinned to a versioned tag) and point `LOCALAI_BASE_URL` at it.
+pinned to a versioned tag) and point `EMBED_BASE_URL` (and, if the same
+server answers chat, `CHAT_BASE_URL`) at it.
 
 **SQLite mapping contract** (the clean way):
 
@@ -485,8 +492,9 @@ actual response shapes before writing any schema.
       variable, defaults listed and secret values empty - and document load
       order (`.env` loaded at startup for humans, real env for cron/launchd
       and compose). The inventory: the four source credentials plus runtime
-      config - `LOCALAI_BASE_URL`, `LOCALAI_API_KEY` (optional), `EMBED_MODEL`,
-      `CHAT_MODEL`, `AGENT_DB_PATH`. Decode it with envconfig structs
+      config - `EMBED_*` and `CHAT_*` (base URL, optional key, model, plus
+      `EMBED_DIMS`/`CHAT_TOKEN_PARAM`; split per role on 2026-11-13, see
+      Decision 23) and `AGENT_DB_PATH`. Decode it with envconfig structs
       (`internal/envcfg`, `internal/logging`); empty means unset. Every new
       variable must be added to `example.env` in the same change
       (`docs/environment.md`). **Done 2026-11-02**; `TestExampleEnvIsComplete`
@@ -571,17 +579,21 @@ intentionally a separate command.
       driver); the in-container proof moved to Phase 3 with the container.
 - [x] `internal/llm` connector: one small OpenAI-compatible HTTP client
       (plain `net/http`, no SDK) — `POST /v1/embeddings`,
-      `POST /v1/chat/completions`, `GET /v1/models`. Config:
-      `LOCALAI_BASE_URL` (default `http://192.168.78.243:8080/v1` — the
-      verified self-hosted instance), `LOCALAI_API_KEY` (optional),
-      `EMBED_MODEL` (default `embeddinggemma-300m`), `CHAT_MODEL`
-      (default `Spark-X2.6-4B-q8_0`). LocalAI is the default; any
+      `POST /v1/chat/completions`, `GET /v1/models`. Config: two independent
+      roles - `EMBED_BASE_URL`/`EMBED_API_KEY`/`EMBED_MODEL`/`EMBED_DIMS`
+      (defaults `http://192.168.78.243:8080/v1`, empty,
+      `embeddinggemma-300m`, 768) and
+      `CHAT_BASE_URL`/`CHAT_API_KEY`/`CHAT_MODEL`/`CHAT_TOKEN_PARAM`
+      (defaults `http://192.168.78.243:8080/v1`, empty,
+      `Spark-X2.6-4B-q8_0`, `max_tokens`); the split landed 2026-11-13
+      (Decision 23). LocalAI is the default for both; any
       OpenAI-compatible server (llama.cpp server, vLLM, OpenAI itself)
       works by changing the base URL. The tool-calling loop (Decision 15)
       rides on the same connector: chat requests carry the
       `search_writing` tool definition, and the client must round-trip
       the model's tool calls. Two behaviours the client must
-      honour: embeddings are **768d** (the schema says `float[768]` —
+      honour: embeddings are **`EMBED_DIMS`d** (the schema default is
+      `float[768]`, and the store rebuilds at the configured width —
       assert the dimension before writing, or refuse to write), and
       `Spark-X2.6-4B-q8_0` is a **reasoning** model whose response carries a
       `reasoning` field — `max_tokens` must budget for reasoning or
@@ -589,7 +601,8 @@ intentionally a separate command.
 - [x] Containerize (§2.5) — moved to Phase 3 and **done 2026-11-11**:
       `Dockerfile`, `.dockerignore`, and `compose.yaml` with the agent
       service, a `./data:/data` bind mount, `AGENT_DB_PATH` wiring, and
-      `LOCALAI_BASE_URL` pointing at `http://192.168.78.243:8080/v1`.
+      `EMBED_BASE_URL`/`CHAT_BASE_URL` pointing at
+      `http://192.168.78.243:8080/v1`.
       No LocalAI service and no `/readyz` healthcheck in compose — the
       agent probes `/readyz` on the model host itself at startup and fails
       fast with a clear error. Embed model `embeddinggemma-300m` (768d,
@@ -810,9 +823,12 @@ they are unchanged contractually.
     iterations over the `internal/llm` connector (chat model
     `Spark-X2.6-4B-q8_0`; `max_iterations` default 3, a total excerpt-token
     budget, a per-request wall-clock cap);
-  - citation enforcement: every claim must cite `chunk_id` + `source_url`
-    from retrieved chunks; on grounding failure the answer is the refusal
-    string — the loop never answers off-corpus from parametric memory;
+  - grounding enforcement: the answer must be grounded on retrieved
+    chunks (2026-11-02: every claim had to cite `chunk_id` + `source_url`;
+    2026-11-13, Decision 24: the model writes prose only and the loop
+    attaches the evidence); on grounding failure the answer is the
+    refusal string — the loop never answers off-corpus from parametric
+    memory;
   - no retries across requests, no cross-request state, no host `codex`
     dependency.
   **Done 2026-11-02** (`internal/agentloop`): the tool schema, grounded
@@ -1160,7 +1176,7 @@ rate limits). Shipped in one pass on 2026-11-05.
 | Docker daemon unreachable from the agent sandbox (verified) | Certain in-sandbox | Slow dev loop for container steps | Run container commands with explicit permission or outside the sandbox; never bake keys into the image |
 | SQLite on a macOS bind mount (VirtioFS) is slow / has locking quirks | Low | Degraded perf when DB is host-visible | Named volume is the default; bind mount documented for export only |
 | Contentless-FTS5 trap (caught in refinement) | Fixed | Would have broken query join-back | Self-contained FTS5 in `0001_init.sql` |
-| Embedding quality too low | Low | Phase 2 eval falls short | Point `LOCALAI_BASE_URL` at a stronger server or change the model id; the `embedded_with` audit makes re-runs cheap |
+| Embedding quality too low | Low | Phase 2 eval falls short | Point `EMBED_BASE_URL` at a stronger server (and `EMBED_DIMS` at its width) or change the model id; the `embedded_with` tag plus the automatic `chunks_vec` rebuild make re-runs cheap |
 | Config typo silently disables a provider | Medium | A source goes dark without an error | Strict YAML decode (`KnownFields(true)`) + `agent sources validate`; the enabled set is printed before each run |
 | Full reindex re-embeds the whole corpus | Medium | CPU time on the model host | Deliberate (2026-10-23); ≤1,500 chunks at 768d; `--source` to scope; incremental stays the default |
 | Ledger and index disagree after a manual DB edit | Low | Silent wrong results | `source_state.config_hash` records the config that produced the index; a mismatch forces a full reindex |
@@ -1215,7 +1231,7 @@ rate limits). Shipped in one pass on 2026-11-05.
    `/v1/retrieve` remains for deterministic callers), and "generation is
    the caller's problem" is
    rescoped to "generation is ours — grounded in the index, read-only,
-   citation-or-refusal". Multi-tool autonomy and peer-side loop hosting
+   retrieval-or-refusal". Multi-tool autonomy and peer-side loop hosting
    stay out of scope.
 9. Should the Phase 2 dev `/v1/ask` stream partial tokens? **Default
    (2026-10-27)**: no — the dev surface exists to diff against

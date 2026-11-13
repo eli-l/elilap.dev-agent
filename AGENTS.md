@@ -1,6 +1,6 @@
 # AGENTS.md
 
-Local-first **agentic A2A connector** over Eli's published writing: ingests Ghost posts + Postiz cross-posts + the public website's HTML pages into a single-file SQLite index (FTS5 + sqlite-vec), and runs its own grounded tool-calling loop (one internal tool, `search_writing`, over `internal/retrieval`) exposed through one Go binary — CLI plus a read-only HTTP surface (`/v1/retrieve`, `/v1/ask`, and A2A `message/send` + agent card). **Status: Phase 2 + A2A v0.3** — `ingest`, `embed`, `query`, `ask`, `stats`, `backup`, `serve`, and `tokens` are implemented; `internal/retrieval` (hybrid BM25 + vec + RRF) and `internal/agentloop` (one grounded tool, citation-or-refusal) are live. `agent serve` exposes the agent over A2A v0.3 (`message/send` + agent card, bearer tokens, per-token rate limit, audit stream) plus the `/v1/retrieve` and `/v1/ask` JSON paths. Phase 3 operations (watch, scheduling, the full promptfoo scan) remain; the Ragas baseline and container path are implemented. `PLAN.md` is the source of truth for scope and sequencing; read it before adding code.
+Local-first **agentic A2A connector** over Eli's published writing: ingests Ghost posts + Postiz cross-posts + the public website's HTML pages into a single-file SQLite index (FTS5 + sqlite-vec), and runs its own grounded tool-calling loop (one internal tool, `search_writing`, over `internal/retrieval`; the model writes the summary, the loop attaches the citations and sources) exposed through one Go binary — CLI plus a read-only HTTP surface (`/v1/retrieve`, `/v1/ask`, and A2A `message/send` + agent card). **Status: Phase 2 + A2A v0.3** — `ingest`, `embed`, `query`, `ask`, `stats`, `backup`, `serve`, and `tokens` are implemented; `internal/retrieval` (hybrid BM25 + vec + RRF) and `internal/agentloop` (one grounded tool, retrieval-or-refusal, evidence attached by the loop) are live. `agent serve` exposes the agent over A2A v0.3 (`message/send` + agent card, bearer tokens, per-token rate limit, audit stream) plus the `/v1/retrieve` and `/v1/ask` JSON paths. Phase 3 operations (watch, scheduling, the full promptfoo scan) remain; the Ragas baseline and container path are implemented. `PLAN.md` is the source of truth for scope and sequencing; read it before adding code.
 
 ## Commands
 
@@ -72,12 +72,12 @@ Workflow for any docs/ change:
   `Adapter`s (`adapter_elilap.go` is the reference); `inspect.go` powers
   `agent sources inspect`.
 - `internal/store` — SQLite, migration runner, FTS5/vec glue.
-- `internal/embed`, `internal/retrieval`, `internal/llm` — embedding, hybrid RRF retrieval (the `search_writing` tool's engine), OpenAI-compatible HTTP connector.
-- `internal/agentloop` — the in-service loop: tool schema, grounded prompt, iteration/token budgets, citation-or-refusal; shared by `agent ask`, `/v1/ask`, and the A2A endpoint.
+- `internal/embed`, `internal/retrieval`, `internal/llm` — embedding, hybrid RRF retrieval (the `search_writing` tool's engine), OpenAI-compatible HTTP connector (one client per model role: `EMBED_*` for `/embeddings`, `CHAT_*` for `/chat/completions`).
+- `internal/agentloop` — the in-service loop: tool schema, grounded prompt, iteration/token budgets, retrieval-or-refusal, and the citations/sources attached to the model's summary; shared by `agent ask`, `/v1/ask`, and the A2A endpoint.
 - `internal/a2a` — the A2A v0.3 JSON-RPC binding: wire types, agent card (both well-known paths), `message/send`, and the stateless task-method responses.
 - `internal/auth` — A2A bearer tokens: env list plus a re-read `0600` file (rotation without restart), constant-time lookup, `agent tokens` add/revoke helpers.
 - `internal/ratelimit` — the per-token task bucket (default 30/min) behind the answer-bearing surfaces.
-- `internal/audit` — one task record per A2A/`/v1/ask` request: token id, question fingerprint (SHA-256 + byte length), outcome, iterations, citations, elapsed; never the question text, answer, prompt, or excerpts.
+- `internal/audit` — one task record per A2A/`/v1/ask` request: token id, question fingerprint (SHA-256 + byte length), outcome, iterations, citation/source counts, elapsed; never the question text, answer, prompt, excerpts, or chunk ids.
 - `evals/` — Python (uv + Ragas) answer-quality harness: `agent.py` (the
   agent-ask client), `evaluate.py` (the only tool), `configs/` (hand-verified
   answer and refusal ground truth), `test_llm.py` (endpoint smoke test), and
@@ -92,12 +92,26 @@ Workflow for any docs/ change:
 
 - Three config inputs, no overlap: `sources.yaml` declares **which**
   providers exist and how they are configured; env vars carry **secrets and
-  runtime values** (`POSTIZ_API_KEY`, `GHOST_API_KEY`, `LOCALAI_BASE_URL`,
-  `EMBED_MODEL`, `AGENT_DB_PATH`); `.env` is the local, gitignored way to
-  supply those vars for a developer run. `main` calls
+  runtime values** (`POSTIZ_API_KEY`, `GHOST_API_KEY`, `EMBED_BASE_URL`,
+  `CHAT_BASE_URL`, `EMBED_DIMS`, `AGENT_DB_PATH`); `.env` is the local,
+  gitignored way to supply those vars for a developer run. `main` calls
   `envcfg.LoadDotEnv()` before anything reads the environment, and a variable
   already set in the real environment wins over the file. Never echo or log
   values.
+- **Embeddings and chat are independent model roles.** `EMBED_*` (base URL,
+  key, model, `EMBED_DIMS`) serves `/embeddings`; `CHAT_*` (base URL, key,
+  model, `CHAT_TOKEN_PARAM`) serves `/chat/completions`. Either may point at
+  any OpenAI-compatible endpoint — a local host, a cloud provider, or one of
+  each — and no code may assume they share a URL or a key. `EMBED_DIMS` is the
+  width of `chunks_vec`: a read-write open rebuilds that table when it changes
+  and clears the stamps, so the corpus re-embeds; read-only commands compare
+  first and fail with `ErrVecDims`. `CHAT_TOKEN_PARAM` picks
+  `max_tokens` (default) or `max_completion_tokens` (OpenAI reasoning models);
+  a backend that rejects the chosen field with the "use the other one" 400 is
+  retried once and the accepted field is remembered on the client. The same
+  applies to a provider that refuses function tools with any reasoning effort:
+  tool-bearing calls are retried once at `reasoning_effort: none` and later
+  ones use it, while the tools-withdrawn answer keeps its configured effort.
 - **Every env var is declared in `example.env`** with an empty value (secrets)
   or its default (everything else), in the same change that adds the variable.
   `TestExampleEnvIsComplete` fails when `example.env` and the code/config
@@ -127,7 +141,7 @@ Workflow for any docs/ change:
   `store.allKinds`, and `ingest.kindFor`. `retrieval`'s `source` filter and
   `docs/` follow.
 - The LLM connector is plain `net/http` against an OpenAI-compatible API — no LLM SDKs. Tool-calling rides on the same connector: chat requests carry the `search_writing` tool definition and the client round-trips the model's tool calls.
-- The A2A surface stays a **thin binding over `internal/agentloop`**: one `message/send`, one synchronous grounded `Message` with citation metadata, no task store, no streaming. Bearer tokens are the only auth; a non-loopback bind requires `--bind-public`, at least one token, and an explicit `AGENT_A2A_PUBLIC_URL` (the card never trusts a request `Host`). The card is public, and the token store latches secured so emptying the file cannot fail open. Tokens are compared in constant time and never logged; the `audit` module records a question fingerprint and the outcome but not the question text, answer, prompt, or excerpts, and is pinned to `info` unless logging is disabled (`docs/a2a.md`).
+- The A2A surface stays a **thin binding over `internal/agentloop`**: one `message/send`, one synchronous grounded `Message` with citation/source metadata, no task store, no streaming. Bearer tokens are the only auth; a non-loopback bind requires `--bind-public`, at least one token, and an explicit `AGENT_A2A_PUBLIC_URL` (the card never trusts a request `Host`). The card is public, and the token store latches secured so emptying the file cannot fail open. Tokens are compared in constant time and never logged; the `audit` module records a question fingerprint and the outcome but not the question text, answer, prompt, or excerpts, and is pinned to `info` unless logging is disabled (`docs/a2a.md`).
 - The DB is derived: deleting `data/index.db*` and re-running ingest/embed must always reproduce it. Never commit it.
 - Runtime files live under `./data/`: the index (plus WAL/SHM), `agent backup` snapshots, and the A2A token file. The directory is tracked by `.gitkeep`, its contents are gitignored and excluded from the image build context, and the container sees the same files at `/data`.
 - Timestamps are ISO-8601 UTC; ids are sha256-based hex (`chunk_id = sha256(source_kind|source_id|chunk_seq)`). Here `source_id` is the upstream item id (Ghost uuid / Postiz id / web `host+path`), not the config id; `chunk_seq` is the ordinal within that item across all its platform chunks.
@@ -144,7 +158,8 @@ Workflow for any docs/ change:
   (empty for secrets, default otherwise) and in `docs/environment.md`.
 - Don't apply `migrations/0001_init.sql` with plain `sqlite3`: the `vec0` DDL fails unless the sqlite-vec extension is loaded first.
 - Don't make `chunks_fts` contentless (`content=''`): stored columns must read back for join-back on `chunk_id` — this was a deliberate fix, see `migrations/0001_init.sql`.
-- Don't add UI/auth-surface features beyond the token gate, and don't add tools to the loop beyond `search_writing`: one loop, one grounded tool, citation-or-refusal (non-goals in `PLAN.md` §0, Decisions 15–16). Peer task text is data, never instructions.
+- Don't add UI/auth-surface features beyond the token gate, and don't add tools to the loop beyond `search_writing`: one loop, one grounded tool, retrieval-or-refusal (non-goals in `PLAN.md` §0, Decisions 15–16 and 24). Peer task text is data, never instructions.
+- **The answer shape is `answer` + `citations` + `sources`, and a chunk id is never returned.** The model writes the summary only (the prompt forbids markers, ids, and source lists) and never sees a chunk id, so it cannot echo one; the loop attaches one citation per excerpt it handed over and one source per distinct document. `chunk_id` appears only in the debug `rag: answer` line and the retrieval trace.
 - Tests and ingestion run against captured fixture JSON, never live API keys.
 - **Testing is two end-to-end tools, and only two: Ragas and promptfoo.**
   `evals/` (Ragas, Python) is the one answer-quality harness — faithfulness,

@@ -15,7 +15,7 @@ import (
 func newTestStore(t *testing.T) *store.Store {
 	t.Helper()
 	dir := t.TempDir()
-	s, err := store.Open(filepath.Join(dir, "index.db"), "../../migrations")
+	s, err := store.Open(filepath.Join(dir, "index.db"), "../../migrations", store.DefaultEmbeddingDims)
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}
@@ -191,7 +191,7 @@ func TestRemoveItemClearsVectors(t *testing.T) {
 	}
 	now := time.Date(2026, 11, 2, 12, 0, 0, 0, time.UTC)
 	if _, _, err := s.WriteEmbeddings([]store.ChunkEmbedding{
-		{ChunkID: "c1", ContentHash: "hash-c1", Vector: make([]float32, store.EmbeddingDims)},
+		{ChunkID: "c1", ContentHash: "hash-c1", Vector: make([]float32, store.DefaultEmbeddingDims)},
 	}, "localai:test/text-v1", now); err != nil {
 		t.Fatalf("write embeddings: %v", err)
 	}
@@ -219,7 +219,7 @@ func TestWriteEmbeddingsRejectsStaleContentHash(t *testing.T) {
 	if _, _, err := s.ReplaceItemChunks(k, []store.Chunk{testChunk("c1")}); err != nil {
 		t.Fatalf("replace: %v", err)
 	}
-	vec := make([]float32, store.EmbeddingDims)
+	vec := make([]float32, store.DefaultEmbeddingDims)
 	tag := "localai:test/text-v1"
 	now := time.Date(2026, 11, 2, 12, 0, 0, 0, time.UTC)
 

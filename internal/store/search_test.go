@@ -13,7 +13,7 @@ import (
 // unitVector is a one-hot vector in the embedding space: distances between
 // different axes are exactly sqrt(2), which makes ordering assertions readable.
 func unitVector(axis int) []float32 {
-	v := make([]float32, store.EmbeddingDims)
+	v := make([]float32, store.DefaultEmbeddingDims)
 	v[axis] = 1
 	return v
 }
@@ -97,8 +97,8 @@ func TestSearchVectorsOrdersByDistance(t *testing.T) {
 	if !first.PublishedAt.Equal(time.Date(2026, 10, 25, 12, 0, 0, 0, time.UTC)) {
 		t.Errorf("published_at = %v", first.PublishedAt)
 	}
-	if len(first.Vector) != store.EmbeddingDims {
-		t.Errorf("stored vector has %d dimensions, want %d", len(first.Vector), store.EmbeddingDims)
+	if len(first.Vector) != store.DefaultEmbeddingDims {
+		t.Errorf("stored vector has %d dimensions, want %d", len(first.Vector), store.DefaultEmbeddingDims)
 	}
 }
 

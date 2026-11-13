@@ -56,7 +56,7 @@ Website (HTML)    ─┘        ▲                                (hybrid RRF)
 * **Models**: embeddings `embeddinggemma-300m` (768d), chat
   `Spark-X2.6-4B-q8_0`. Both self-hosted; no API keys, no cloud calls.
 * **Agentic**: the service runs the loop — one internal tool
-  (`search_writing`), bounded iterations, citation-or-refusal. `agent ask`
+  (`search_writing`), bounded iterations, retrieval-or-refusal. `agent ask`
   is the CLI form; `agent serve` exposes the same loop and the raw
   retriever over HTTP (`/v1/retrieve`, `/v1/ask`) and as an **A2A v0.3
   agent** (`message/send` at `/a2a`, card at
@@ -127,7 +127,7 @@ because they need a model host and a populated `data/index.db`.
 * The corpus itself — owned by Ghost and Postiz.
 * Generated embeddings — those live in `data/index.db` (gitignored).
 * Free-form generation beyond the grounded loop — answers come only from
-  the corpus (citation-or-refusal), never from open-domain chat; the loop
+  the corpus (retrieval-or-refusal), never from open-domain chat; the loop
   itself stays model-agnostic via the OpenAI-compatible connector.
 * Multi-agent orchestration — one loop, one internal tool; peer-side
   agents are the callers' systems.

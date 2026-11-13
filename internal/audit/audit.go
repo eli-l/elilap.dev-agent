@@ -39,8 +39,10 @@ type Entry struct {
 	Question string
 	// ToolIterations is how many search_writing rounds the loop ran.
 	ToolIterations int
-	// Citations is the number of resolved citations.
+	// Citations is the number of excerpts behind the answer.
 	Citations int
+	// Sources is the number of distinct documents those excerpts came from.
+	Sources int
 	// Refused says the loop returned the refusal string.
 	Refused bool
 	// Elapsed is the task wall-clock time.
@@ -63,6 +65,7 @@ func Answer(e Entry) {
 		Str("outcome", e.Outcome).
 		Int("tool_iterations", e.ToolIterations).
 		Int("citations", e.Citations).
+		Int("sources", e.Sources).
 		Bool("refused", e.Refused).
 		Int64("elapsed_ms", e.Elapsed.Milliseconds()).
 		Msg("task")

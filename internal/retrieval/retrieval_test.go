@@ -15,14 +15,14 @@ import (
 
 // unitVector is a one-hot vector in the embedding space.
 func unitVector(axis int) []float32 {
-	v := make([]float32, store.EmbeddingDims)
+	v := make([]float32, store.DefaultEmbeddingDims)
 	v[axis] = 1
 	return v
 }
 
 func newTestStore(t *testing.T) *store.Store {
 	t.Helper()
-	s, err := store.Open(filepath.Join(t.TempDir(), "index.db"), filepath.Join("..", "..", "migrations"))
+	s, err := store.Open(filepath.Join(t.TempDir(), "index.db"), filepath.Join("..", "..", "migrations"), store.DefaultEmbeddingDims)
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}

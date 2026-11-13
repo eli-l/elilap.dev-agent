@@ -18,10 +18,11 @@ sources: ["../PLAN.md", "../AGENTS.md", "../Dockerfile", "../compose.yaml", "../
 * A populated `.env` (start from `example.env`; credentials live only there).
 * A writable `./data/` directory; the committed `.gitkeep` keeps it present.
   It holds the index, WAL/SHM, backups, and the A2A token file.
-* The model host in `LOCALAI_BASE_URL` reachable:
-  `curl "${LOCALAI_BASE_URL%/v1}/readyz"` (the default is
-  `http://192.168.78.243:8080`). It serves both embeddings (`EMBED_MODEL`)
-  and chat (`CHAT_MODEL`).
+* The model endpoint in `EMBED_BASE_URL` / `CHAT_BASE_URL` reachable. Both
+  default to the local host, so
+  `curl "${EMBED_BASE_URL%/v1}/readyz"` (the default is
+  `http://192.168.78.243:8080`) covers a local run; a cloud chat model only
+  needs `CHAT_BASE_URL` and `CHAT_API_KEY` (see [Model backends](/models.md)).
 
 ## Build
 
@@ -301,6 +302,7 @@ work is:
 | `no index at ...; run agent ingest and agent embed first` | The index is missing or empty. Run ingest, then embed. |
 | `index has no embeddings` | `./agent embed` has not run or wrote no rows; run it, then check `agent stats`. |
 | `index vectors are stamped X, but EMBED_MODEL=Y expects Z` | The index was embedded by another model/text template. Run `./agent embed` (the tag makes every chunk pending) or point `EMBED_MODEL` at the model that built it. |
+| `index vector dimensions do not match EMBED_DIMS` | `EMBED_DIMS` changed (or the index came from another embedder). A read-write run rebuilds `chunks_vec` at the new width; run `./agent embed` to re-embed the corpus. |
 | `--addr ... is not loopback` | Use `127.0.0.1:<port>`, or `--bind-public` with a configured token. |
 | `--bind-public requires an A2A token` | Issue one with `./agent tokens add --id <id>`; the server will not expose an unauthenticated endpoint. |
 | `--bind-public requires AGENT_A2A_PUBLIC_URL` | Set the absolute `https://…` URL peers should use; the card will not trust a request `Host` header. |
@@ -308,7 +310,7 @@ work is:
 | `401 unauthorized` from `/a2a` or `/v1/*` | Send `Authorization: Bearer <token>`; confirm the id is listed by `agent tokens list`. |
 | `auth: token file ... must not be group/world-accessible` | `chmod 600` the token file; `agent tokens add` creates it correctly. |
 | `429 rate limit exceeded` | Wait for `Retry-After`; raise `--rate-limit` only if the model host can take it. |
-| `llm: embeddings returned ...` / `chat returned 503` | The model host is down or the model is not loaded. Check `/readyz` and `curl $LOCALAI_BASE_URL/models`. |
+| `llm: embeddings returned ...` / `chat returned 503` | The model host is down or the model is not loaded. Check `/readyz` and `curl $CHAT_BASE_URL/models` (or `$EMBED_BASE_URL/models`). |
 | Answers are refusals for answerable questions | Model non-determinism on a small chat model; retry once, then inspect `./agent query` for the same wording. If retrieval misses, improve the query or the index. |
 | `agent query` says `provider is not enabled`-style config errors | `sources.yaml` scope: run `./agent sources validate`. |
 

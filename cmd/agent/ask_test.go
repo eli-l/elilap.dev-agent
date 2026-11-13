@@ -16,10 +16,10 @@ func runAskTest(t *testing.T, args ...string) (int, string, string) {
 	t.Helper()
 	var stdout, stderr bytes.Buffer
 	code := runAsk(args, envcfg.Config{
-		DBPath:         filepath.Join(t.TempDir(), "unused.db"),
-		LocalAIBaseURL: envcfg.DefaultLocalAIBaseURL,
-		EmbedModel:     envcfg.DefaultEmbedModel,
-		ChatModel:      envcfg.DefaultChatModel,
+		DBPath:       filepath.Join(t.TempDir(), "unused.db"),
+		EmbedBaseURL: envcfg.DefaultModelBaseURL, ChatBaseURL: envcfg.DefaultModelBaseURL,
+		EmbedModel: envcfg.DefaultEmbedModel,
+		ChatModel:  envcfg.DefaultChatModel,
 	}, &stdout, &stderr)
 	return code, stdout.String(), stderr.String()
 }
@@ -54,7 +54,7 @@ func TestRunAskRequiresIndex(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "missing.db")
 	var stdout, stderr bytes.Buffer
 	code := runAsk([]string{"--db", dbPath, "q"}, envcfg.Config{
-		DBPath: dbPath, LocalAIBaseURL: envcfg.DefaultLocalAIBaseURL,
+		DBPath: dbPath, EmbedBaseURL: envcfg.DefaultModelBaseURL, ChatBaseURL: envcfg.DefaultModelBaseURL,
 		EmbedModel: envcfg.DefaultEmbedModel, ChatModel: envcfg.DefaultChatModel,
 	}, &stdout, &stderr)
 	if code != 1 {
@@ -69,8 +69,12 @@ func fixtureAnswer() agentloop.Answer {
 	return agentloop.Answer{
 		Answer: "Harnesses are a form of vendor lock-in.", ToolIterations: 2, ElapsedMS: 1234,
 		Citations: []agentloop.Citation{
-			{ChunkID: "c1", SourceURL: "https://x/1"},
-			{ChunkID: "c2", SourceURL: "https://x/2"},
+			{SourceKind: "ghost_post", SourceURL: "https://x/1", Title: "One", Excerpt: "first excerpt"},
+			{SourceKind: "web_page", SourceURL: "https://x/2", Title: "Two", Section: "Body", Excerpt: "second excerpt"},
+		},
+		Sources: []agentloop.Source{
+			{Kind: "ghost_post", URL: "https://x/1", Title: "One", Author: "Eli"},
+			{Kind: "web_page", URL: "https://x/2", Title: "Two"},
 		},
 	}
 }
@@ -98,11 +102,16 @@ func TestPrintAnswerText(t *testing.T) {
 	for _, want := range []string{
 		"answer: Harnesses are a form of vendor lock-in.",
 		"refused: false", "tool iterations: 2", "elapsed: 1234ms",
-		"citations:", "c1  https://x/1", "c2  https://x/2",
+		"sources:", "ghost_post  One  https://x/1", "web_page  Two  https://x/2",
+		"citations: 2 excerpt(s)", "One  https://x/1", "Two / Body  https://x/2",
 	} {
 		if !strings.Contains(buf.String(), want) {
 			t.Errorf("text output missing %q:\n%s", want, buf.String())
 		}
+	}
+	// The CLI text view is a response surface too: no chunk id, ever.
+	if strings.Contains(buf.String(), "chunk_id") {
+		t.Errorf("text output exposes a chunk id:\n%s", buf.String())
 	}
 }
 

@@ -20,9 +20,9 @@ func runQueryTest(t *testing.T, args ...string) (int, string, string) {
 	t.Helper()
 	var stdout, stderr bytes.Buffer
 	code := runQuery(args, envcfg.Config{
-		DBPath:         filepath.Join(t.TempDir(), "unused.db"),
-		LocalAIBaseURL: envcfg.DefaultLocalAIBaseURL,
-		EmbedModel:     envcfg.DefaultEmbedModel,
+		DBPath:       filepath.Join(t.TempDir(), "unused.db"),
+		EmbedBaseURL: envcfg.DefaultModelBaseURL, ChatBaseURL: envcfg.DefaultModelBaseURL,
+		EmbedModel: envcfg.DefaultEmbedModel,
 	}, &stdout, &stderr)
 	return code, stdout.String(), stderr.String()
 }
@@ -73,7 +73,7 @@ func TestRunQueryInvalidFilterIsUsageError(t *testing.T) {
 	dbPath := seedServeIndex(t, embed.Tag(envcfg.DefaultEmbedModel))
 	var stdout, stderr bytes.Buffer
 	code := runQuery([]string{"--db", dbPath, "--source", "twitter", "q"}, envcfg.Config{
-		DBPath: dbPath, LocalAIBaseURL: envcfg.DefaultLocalAIBaseURL,
+		DBPath: dbPath, EmbedBaseURL: envcfg.DefaultModelBaseURL, ChatBaseURL: envcfg.DefaultModelBaseURL,
 		EmbedModel: envcfg.DefaultEmbedModel,
 	}, &stdout, &stderr)
 	if code != 2 {

@@ -77,7 +77,7 @@ func runEmbed(args []string, rtCfg envcfg.Config, stdout, stderr io.Writer) int 
 			return 1
 		}
 	} else {
-		st, err = store.Open(*dbFlag, *migrationsDir)
+		st, err = store.Open(*dbFlag, *migrationsDir, int(rtCfg.EmbedDims))
 	}
 	if err != nil {
 		fmt.Fprintf(stderr, "agent embed: %v\n", err)
@@ -87,7 +87,16 @@ func runEmbed(args []string, rtCfg envcfg.Config, stdout, stderr io.Writer) int 
 
 	tag := embed.Tag(*model)
 	if *dryRun {
-		pending, err := st.CountPendingEmbeddings(tag, *full)
+		// A width change makes the next real run rebuild chunks_vec, which
+		// drops every stored vector. Count the whole corpus then, so a
+		// dry-run after an EMBED_DIMS change does not report "nothing
+		// pending" for a run that will re-embed everything.
+		rebuild := st.Dims() != int(rtCfg.EmbedDims)
+		if rebuild {
+			fmt.Fprintf(stderr, "agent embed: EMBED_DIMS=%d differs from the index (%d); the next run rebuilds chunks_vec and re-embeds every chunk\n",
+				int(rtCfg.EmbedDims), st.Dims())
+		}
+		pending, err := st.CountPendingEmbeddings(tag, *full || rebuild)
 		if err != nil {
 			fmt.Fprintf(stderr, "agent embed: %v\n", err)
 			return 1
@@ -101,7 +110,7 @@ func runEmbed(args []string, rtCfg envcfg.Config, stdout, stderr io.Writer) int 
 		return 0
 	}
 
-	client, err := llm.NewClient(rtCfg.LocalAIBaseURL, rtCfg.LocalAIAPIKey,
+	client, err := llm.NewClient(rtCfg.EmbedBaseURL, rtCfg.EmbedAPIKey,
 		shared.NewHTTPClient(embedHTTPTimeout))
 	if err != nil {
 		fmt.Fprintf(stderr, "agent embed: %v\n", err)

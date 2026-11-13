@@ -213,6 +213,7 @@ func (h *Handler) sendMessage(r *http.Request, raw json.RawMessage) (*Message, *
 
 	entry.ToolIterations = answer.ToolIterations
 	entry.Citations = len(answer.Citations)
+	entry.Sources = len(answer.Sources)
 	entry.Refused = answer.Refused
 	if answer.Refused {
 		entry.Outcome = audit.OutcomeRefused
@@ -221,9 +222,16 @@ func (h *Handler) sendMessage(r *http.Request, raw json.RawMessage) (*Message, *
 	}
 	audit.Answer(entry)
 
+	// Both reference lists are always arrays, even on a refusal, and neither
+	// carries a chunk id: the id is an internal identifier that is logged but
+	// never returned on any surface.
 	citations := answer.Citations
 	if citations == nil {
 		citations = []agentloop.Citation{}
+	}
+	sources := answer.Sources
+	if sources == nil {
+		sources = []agentloop.Source{}
 	}
 	contextID := strings.TrimSpace(msg.ContextID)
 	if contextID == "" {
@@ -237,6 +245,7 @@ func (h *Handler) sendMessage(r *http.Request, raw json.RawMessage) (*Message, *
 		Parts:     []Part{{Kind: "text", Text: answer.Answer}},
 		Metadata: map[string]any{
 			"citations":       citations,
+			"sources":         sources,
 			"refused":         answer.Refused,
 			"tool_iterations": answer.ToolIterations,
 			"elapsed_ms":      answer.ElapsedMS,

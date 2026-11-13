@@ -20,18 +20,21 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
+	"strconv"
 	"strings"
 
 	"github.com/joho/godotenv"
 	"github.com/kelseyhightower/envconfig"
+
+	"github.com/eli-l/elilap.dev-agent/internal/llm"
 )
 
 // DotEnvPath is the file LoadDotEnv reads, relative to the working directory.
 const DotEnvPath = ".env"
 
 // EnvPrefix prefixes the knobs this service owns. The model-backend and
-// credential variables keep their upstream-style names (LOCALAI_*, EMBED_MODEL,
-// CHAT_MODEL, GHOST_*, POSTIZ_*) instead of growing an AGENT_ prefix.
+// credential variables keep upstream-style names (EMBED_*, CHAT_*, GHOST_*,
+// POSTIZ_*) instead of growing an AGENT_ prefix.
 const EnvPrefix = "AGENT"
 
 // Environment variable names. Credential names are not listed here: they are
@@ -39,14 +42,28 @@ const EnvPrefix = "AGENT"
 const (
 	// EnvDBPath is the single-file SQLite index location.
 	EnvDBPath = EnvPrefix + "_DB_PATH"
-	// EnvLocalAIBaseURL is the OpenAI-compatible base URL, with /v1.
-	EnvLocalAIBaseURL = "LOCALAI_BASE_URL"
-	// EnvLocalAIAPIKey is the optional bearer token for that backend.
-	EnvLocalAIAPIKey = "LOCALAI_API_KEY"
+	// EnvEmbedBaseURL is the OpenAI-compatible base URL that serves
+	// /embeddings, with the /v1 suffix. It is independent of EnvChatBaseURL:
+	// embeddings may stay local while the chat model is a cloud provider.
+	EnvEmbedBaseURL = "EMBED_BASE_URL"
+	// EnvEmbedAPIKey is the optional bearer token for the embeddings endpoint.
+	EnvEmbedAPIKey = "EMBED_API_KEY"
 	// EnvEmbedModel is the embedding model id.
 	EnvEmbedModel = "EMBED_MODEL"
+	// EnvEmbedDims is the vector width that model returns (chunks_vec width).
+	EnvEmbedDims = "EMBED_DIMS"
+	// EnvChatBaseURL is the OpenAI-compatible base URL that serves
+	// /chat/completions, with the /v1 suffix. Independent of the embeddings
+	// endpoint, so a local embedder can pair with a cloud chat model.
+	EnvChatBaseURL = "CHAT_BASE_URL"
+	// EnvChatAPIKey is the optional bearer token for the chat endpoint.
+	EnvChatAPIKey = "CHAT_API_KEY"
 	// EnvChatModel is the chat model id used by the agent loop.
 	EnvChatModel = "CHAT_MODEL"
+	// EnvChatTokenParam selects the completion-budget field: max_tokens for
+	// LocalAI and most compatible servers, max_completion_tokens for OpenAI's
+	// reasoning models, which reject max_tokens.
+	EnvChatTokenParam = "CHAT_TOKEN_PARAM"
 	// EnvA2ATokens is the optional comma-separated `id:token` bearer list for
 	// the A2A surface. Empty means the loopback dev server is token-less.
 	EnvA2ATokens = EnvPrefix + "_A2A_TOKENS"
@@ -65,18 +82,48 @@ const (
 	// sets /data/index.db explicitly (PLAN.md Decision 11); both paths keep
 	// the DB and its WAL/SHM siblings inside the runtime data directory.
 	DefaultDBPath = "./data/index.db"
-	// DefaultLocalAIBaseURL is the verified self-hosted instance (Decision 10).
-	DefaultLocalAIBaseURL = "http://192.168.78.243:8080/v1"
+	// DefaultModelBaseURL is the verified self-hosted instance that serves both
+	// roles (Decision 10). An empty EMBED_BASE_URL or CHAT_BASE_URL falls back
+	// to it, so one variable can still move both without naming each.
+	DefaultModelBaseURL = "http://192.168.78.243:8080/v1"
 	// DefaultEmbedModel produces the 768-dim vectors chunks_vec stores.
 	DefaultEmbedModel = "embeddinggemma-300m"
+	// DefaultEmbedDims is the vector width of the default embedder, and the
+	// width migrations/0001_init.sql declares.
+	DefaultEmbedDims = 768
 	// DefaultChatModel is the reasoning model the agent loop calls. The 4B q8
 	// model is the current host baseline; see docs/localai.md.
 	DefaultChatModel = "Spark-X2.6-4B-q8_0"
+	// DefaultChatTokenParam is the OpenAI-compatible completion-budget field;
+	// only an OpenAI reasoning endpoint needs max_completion_tokens.
+	DefaultChatTokenParam = llm.FieldMaxTokens
 	// DefaultA2ATokensFile is the local token file `agent tokens` edits. It
 	// lives with the other runtime data and is gitignored; a missing file
 	// simply means no tokens are configured.
 	DefaultA2ATokensFile = "./data/a2a-tokens.txt"
 )
+
+// EmbedWidth is the vector width of the embeddings model (EMBED_DIMS). It
+// decodes from a string so a blank value behaves like an unset variable:
+// envconfig cannot turn "" into an int, and a .env copied from example.env
+// ships the variable blank. Load normalizes zero to DefaultEmbedDims.
+type EmbedWidth int
+
+// Decode implements envconfig.Decoder. Values that are not whole numbers are
+// rejected here, which keeps the failure at startup and names the variable.
+func (w *EmbedWidth) Decode(value string) error {
+	v := strings.TrimSpace(value)
+	if v == "" {
+		*w = 0
+		return nil
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil {
+		return fmt.Errorf("must be a whole number")
+	}
+	*w = EmbedWidth(n)
+	return nil
+}
 
 // Config is every static runtime setting, decoded by envconfig from the
 // environment (and therefore, once main has run, from .env as well).
@@ -87,14 +134,24 @@ const (
 type Config struct {
 	// DBPath is the SQLite index file (migrations are applied to it on open).
 	DBPath string `envconfig:"AGENT_DB_PATH"`
-	// LocalAIBaseURL is the OpenAI-compatible endpoint, including /v1.
-	LocalAIBaseURL string `envconfig:"LOCALAI_BASE_URL"`
-	// LocalAIAPIKey is optional; empty means the backend needs no token.
-	LocalAIAPIKey string `envconfig:"LOCALAI_API_KEY"`
-	// EmbedModel is the model id behind /v1/embeddings.
+	// EmbedBaseURL is the OpenAI-compatible endpoint serving /embeddings.
+	EmbedBaseURL string `envconfig:"EMBED_BASE_URL"`
+	// EmbedAPIKey is optional; empty means the endpoint needs no token.
+	EmbedAPIKey string `envconfig:"EMBED_API_KEY"`
+	// EmbedModel is the model id behind /embeddings.
 	EmbedModel string `envconfig:"EMBED_MODEL"`
-	// ChatModel is the model id behind /v1/chat/completions.
+	// EmbedDims is the vector width that model returns; chunks_vec is rebuilt
+	// when it changes.
+	EmbedDims EmbedWidth `envconfig:"EMBED_DIMS"`
+	// ChatBaseURL is the OpenAI-compatible endpoint serving /chat/completions.
+	ChatBaseURL string `envconfig:"CHAT_BASE_URL"`
+	// ChatAPIKey is optional; empty means the endpoint needs no token.
+	ChatAPIKey string `envconfig:"CHAT_API_KEY"`
+	// ChatModel is the model id behind /chat/completions.
 	ChatModel string `envconfig:"CHAT_MODEL"`
+	// ChatTokenParam is the completion-budget field the chat endpoint accepts
+	// (llm.FieldMaxTokens or llm.FieldMaxCompletionTokens).
+	ChatTokenParam string `envconfig:"CHAT_TOKEN_PARAM"`
 	// A2ATokens is the comma-separated `id:token` list for the A2A surface.
 	A2ATokens string `envconfig:"AGENT_A2A_TOKENS"`
 	// A2ATokensFile is the 0600 token file the store re-reads on change.
@@ -108,8 +165,10 @@ type Config struct {
 // empty* variables. An empty value is treated as unset so seeding .env from
 // example.env is always safe; the placeholder itself carries the defaults.
 //
-// The returned error never contains a value, only the variable name envconfig
-// failed on.
+// The error names the variable it failed on. Decode failures can quote the
+// offending value, which is safe here: every field on this struct is a
+// non-secret setting. Credentials are not fields - sources.yaml references
+// them by name and Lookup reads them (see Lookup).
 func Load() (Config, error) {
 	var cfg Config
 	if err := envconfig.Process("", &cfg); err != nil {
@@ -117,16 +176,29 @@ func Load() (Config, error) {
 	}
 
 	cfg.DBPath = DefaultOr(cfg.DBPath, DefaultDBPath)
-	cfg.LocalAIBaseURL = DefaultOr(cfg.LocalAIBaseURL, DefaultLocalAIBaseURL)
+	cfg.EmbedBaseURL = DefaultOr(cfg.EmbedBaseURL, DefaultModelBaseURL)
+	cfg.ChatBaseURL = DefaultOr(cfg.ChatBaseURL, DefaultModelBaseURL)
 	cfg.EmbedModel = DefaultOr(cfg.EmbedModel, DefaultEmbedModel)
 	cfg.ChatModel = DefaultOr(cfg.ChatModel, DefaultChatModel)
+	cfg.ChatTokenParam = DefaultOr(cfg.ChatTokenParam, DefaultChatTokenParam)
+	if cfg.EmbedDims <= 0 {
+		cfg.EmbedDims = DefaultEmbedDims
+	}
 	cfg.A2ATokensFile = DefaultOr(cfg.A2ATokensFile, DefaultA2ATokensFile)
 	// The token list and public URL are legitimately empty; trimming keeps a
 	// stray space out of the pair syntax and the advertised URL.
 	cfg.A2ATokens = strings.TrimSpace(cfg.A2ATokens)
 	cfg.A2APublicURL = strings.TrimRight(strings.TrimSpace(cfg.A2APublicURL), "/")
-	// An empty token is a legitimate value, not a missing one.
-	cfg.LocalAIAPIKey = strings.TrimSpace(cfg.LocalAIAPIKey)
+	// An empty API key or token param value is a legitimate value, not a
+	// missing one.
+	cfg.EmbedAPIKey = strings.TrimSpace(cfg.EmbedAPIKey)
+	cfg.ChatAPIKey = strings.TrimSpace(cfg.ChatAPIKey)
+	// A typo here would otherwise surface as a 400 from the model backend in
+	// the middle of a run, so it fails at startup instead.
+	if cfg.ChatTokenParam != llm.FieldMaxTokens && cfg.ChatTokenParam != llm.FieldMaxCompletionTokens {
+		return Config{}, fmt.Errorf("environment configuration: %s must be %q or %q",
+			EnvChatTokenParam, llm.FieldMaxTokens, llm.FieldMaxCompletionTokens)
+	}
 	return cfg, nil
 }
 

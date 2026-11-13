@@ -46,7 +46,7 @@ func TestDebugLogsTheWholeRAGTrace(t *testing.T) {
 	buf := debugLog(t, "debug")
 	chatter := &scriptedChatter{responses: []llm.ChatResponse{
 		toolCallResponse(call("call_1", agentloop.ToolName, `{"query":"harness lock-in"}`)),
-		answerResponse("Harness lock-in (" + idA + ")."),
+		answerResponse("Harness lock-in is the theme."),
 	}}
 	searcher := &fakeSearcher{hits: []retrieval.Hit{hit(idA, "harnesses are vendor lock-in")}}
 	if _, err := newRunner(chatter, searcher).Run(context.Background(), "What is the harness take?"); err != nil {
@@ -86,8 +86,7 @@ func TestDebugLogsTheWholeRAGTrace(t *testing.T) {
 		if rec["role"] == "user" && strings.Contains(content, "What is the harness take?") {
 			sawQuestion = true
 		}
-		if rec["role"] == "tool" && strings.Contains(content, idA) &&
-			strings.Contains(content, "vendor lock-in") {
+		if rec["role"] == "tool" && strings.Contains(content, "vendor lock-in") {
 			sawToolResult = true
 		}
 	}
@@ -106,8 +105,8 @@ func TestDebugLogsTheWholeRAGTrace(t *testing.T) {
 	if first := stringOf(responses[0]["finish_reason"]); first != "tool_calls" && first != "" {
 		t.Errorf("first finish_reason = %q", first)
 	}
-	if !strings.Contains(stringOf(responses[1]["content"]), idA) {
-		t.Errorf("second response content = %v, want the cited answer", responses[1]["content"])
+	if !strings.Contains(stringOf(responses[1]["content"]), "Harness lock-in is the theme.") {
+		t.Errorf("second response content = %v, want the summary", responses[1]["content"])
 	}
 
 	// The tool result line is the retrieval-to-prompt boundary.
@@ -120,6 +119,10 @@ func TestDebugLogsTheWholeRAGTrace(t *testing.T) {
 				t.Errorf("tool result carries ranking field %s: %v", field, tool)
 			}
 		}
+		// The model writes prose only; the identifier stays inside the loop.
+		if strings.Contains(tool, idA) || strings.Contains(tool, "chunk_id") {
+			t.Errorf("tool result exposes the chunk id: %v", tool)
+		}
 	}
 
 	// The closing line reports the enforced outcome.
@@ -127,8 +130,13 @@ func TestDebugLogsTheWholeRAGTrace(t *testing.T) {
 	if answer["refused"] != false || answer["tool_iterations"] != float64(1) {
 		t.Errorf("answer line = %v, want a grounded answer after one iteration", answer)
 	}
-	if ids, _ := answer["citations"].([]any); len(ids) != 1 || ids[0] != idA {
-		t.Errorf("citations = %v, want [%s]", answer["citations"], idA)
+	// The chunk ids are logged here and nowhere else on the response path.
+	if ids, _ := answer["chunk_ids"].([]any); len(ids) != 1 || ids[0] != idA {
+		t.Errorf("chunk_ids = %v, want [%s]", answer["chunk_ids"], idA)
+	}
+	if answer["citations"] != float64(1) || answer["sources"] != float64(1) {
+		t.Errorf("citation/source counts = %v/%v, want 1/1",
+			answer["citations"], answer["sources"])
 	}
 }
 
@@ -136,7 +144,7 @@ func TestInfoLevelLogsNoRAGPayloads(t *testing.T) {
 	buf := debugLog(t, "info")
 	chatter := &scriptedChatter{responses: []llm.ChatResponse{
 		toolCallResponse(call("call_1", agentloop.ToolName, `{"query":"harness"}`)),
-		answerResponse("Grounded (" + idA + ")."),
+		answerResponse("Grounded answer."),
 	}}
 	searcher := &fakeSearcher{hits: []retrieval.Hit{hit(idA, "an excerpt body")}}
 	if _, err := newRunner(chatter, searcher).Run(context.Background(), "q"); err != nil {

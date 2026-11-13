@@ -128,15 +128,18 @@ FROM chunks_fts
 JOIN chunks c ON c.chunk_id = chunks_fts.chunk_id`
 
 // SearchVectors returns the k chunks nearest to vector, closest first. The
-// vector must have exactly EmbeddingDims values; k must be positive.
+// vector must have exactly the index's embedding width; k must be positive.
 //
 // A non-empty filter widens k to the whole corpus before filtering: vec0
 // applies outer WHERE conditions after the KNN, so asking for only k rows
 // would silently drop matches that rank behind non-matching chunks.
 func (s *Store) SearchVectors(vector []float32, k int, filter Filter) ([]SearchHit, error) {
-	if len(vector) != EmbeddingDims {
-		return nil, fmt.Errorf("vector search: query has %d dimensions, schema wants %d",
-			len(vector), EmbeddingDims)
+	if s.dims <= 0 {
+		return nil, fmt.Errorf("vector search: index has no chunks_vec table")
+	}
+	if len(vector) != s.dims {
+		return nil, fmt.Errorf("vector search: query has %d dimensions, index wants %d",
+			len(vector), s.dims)
 	}
 	if k <= 0 {
 		return nil, fmt.Errorf("vector search: k must be positive, got %d", k)

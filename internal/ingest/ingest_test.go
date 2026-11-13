@@ -35,7 +35,7 @@ func (f *fakeProvider) Fetch(_ context.Context, it shared.Item) (shared.Document
 
 func newTestStore(t *testing.T) *store.Store {
 	t.Helper()
-	s, err := store.Open(filepath.Join(t.TempDir(), "index.db"), "../../migrations")
+	s, err := store.Open(filepath.Join(t.TempDir(), "index.db"), "../../migrations", store.DefaultEmbeddingDims)
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}

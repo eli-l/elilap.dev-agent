@@ -249,7 +249,7 @@ func TestRetrieveTimeoutIsBounded(t *testing.T) {
 func seedServeIndex(t *testing.T, tag string) string {
 	t.Helper()
 	dbPath := filepath.Join(t.TempDir(), "index.db")
-	st, err := store.Open(dbPath, filepath.Join("..", "..", "migrations"))
+	st, err := store.Open(dbPath, filepath.Join("..", "..", "migrations"), store.DefaultEmbeddingDims)
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}
@@ -267,7 +267,7 @@ func seedServeIndex(t *testing.T, tag string) string {
 	if tag == "" {
 		return dbPath
 	}
-	vector := make([]float32, store.EmbeddingDims)
+	vector := make([]float32, store.DefaultEmbeddingDims)
 	vector[0] = 1
 	if _, _, err := st.WriteEmbeddings([]store.ChunkEmbedding{{
 		ChunkID: "c1", ContentHash: "hash-c1", Vector: vector,
@@ -334,7 +334,8 @@ func postAsk(t *testing.T, h http.Handler, body string) *httptest.ResponseRecord
 func TestAskHandlerReturnsAnswer(t *testing.T) {
 	stub := &stubAnswerer{answer: agentloop.Answer{
 		Answer: "Grounded answer.", ToolIterations: 1, ElapsedMS: 1234,
-		Citations: []agentloop.Citation{{ChunkID: "c1", SourceURL: "https://x"}},
+		Citations: []agentloop.Citation{{SourceKind: "ghost_post", SourceURL: "https://x", Excerpt: "e"}},
+		Sources:   []agentloop.Source{{Kind: "ghost_post", URL: "https://x"}},
 	}}
 	rec := postAsk(t, newAskHandler(stub), `{"question":" what about harnesses? "}`)
 	if rec.Code != http.StatusOK {
@@ -347,7 +348,8 @@ func TestAskHandlerReturnsAnswer(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	if got.Answer != "Grounded answer." || len(got.Citations) != 1 || got.ToolIterations != 1 {
+	if got.Answer != "Grounded answer." || len(got.Citations) != 1 ||
+		len(got.Sources) != 1 || got.ToolIterations != 1 {
 		t.Errorf("answer = %+v", got)
 	}
 }

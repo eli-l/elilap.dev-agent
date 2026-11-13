@@ -168,9 +168,9 @@ func (s *Searcher) Search(ctx context.Context, q Query) ([]Hit, error) {
 	if len(vectors) != 1 {
 		return nil, fmt.Errorf("retrieval: embeddings returned %d vectors for one query", len(vectors))
 	}
-	if len(vectors[0]) != store.EmbeddingDims {
-		return nil, fmt.Errorf("retrieval: query vector has %d dimensions, schema wants %d",
-			len(vectors[0]), store.EmbeddingDims)
+	if len(vectors[0]) != s.Store.Dims() {
+		return nil, fmt.Errorf("retrieval: query vector has %d dimensions, the index stores %d (EMBED_DIMS)",
+			len(vectors[0]), s.Store.Dims())
 	}
 
 	vectorHits, err := s.Store.SearchVectors(vectors[0], depth, filter)

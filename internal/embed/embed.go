@@ -209,9 +209,9 @@ func (r *Runner) Run(ctx context.Context, opts Options) (Result, error) {
 		}
 		rows := make([]store.ChunkEmbedding, len(chunks))
 		for i, c := range chunks {
-			if len(vectors[i]) != store.EmbeddingDims {
-				return fail(fmt.Errorf("embed chunk %s: %d dimensions, schema wants %d",
-					c.ChunkID, len(vectors[i]), store.EmbeddingDims))
+			if len(vectors[i]) != r.Store.Dims() {
+				return fail(fmt.Errorf("embed chunk %s: %d dimensions, the index stores %d (EMBED_DIMS)",
+					c.ChunkID, len(vectors[i]), r.Store.Dims()))
 			}
 			rows[i] = store.ChunkEmbedding{
 				ChunkID:     c.ChunkID,

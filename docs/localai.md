@@ -26,7 +26,7 @@ this repo deploys. `PLAN.md` Decision 10 records the decision.
 * Base URL: `http://192.168.78.243:8080` (LAN host `dev`; the AI Node is
   `192.168.78.242`).
 * OpenAI-compatible base for the Go client: `http://192.168.78.243:8080/v1`
-  -> `LOCALAI_BASE_URL`.
+  -> the default for both `EMBED_BASE_URL` and `CHAT_BASE_URL`.
 * `GET /readyz` -> `200` (liveness).
 * `GET /version` -> `v4.12.0 (15e37df9a468c798a5a511624f054057da4380a1)`.
 
@@ -99,12 +99,17 @@ prompt and the `search_writing` tool, 3 runs each):
 ## Usage
 
 ```bash
-export LOCALAI_BASE_URL=http://192.168.78.243:8080/v1
+export EMBED_BASE_URL=http://192.168.78.243:8080/v1
 export EMBED_MODEL=embeddinggemma-300m
+export EMBED_DIMS=768
+export CHAT_BASE_URL=http://192.168.78.243:8080/v1
 export CHAT_MODEL=Spark-X2.6-4B-q8_0
 ```
 
 `CHAT_MODEL` must name a model the host can currently load. On 2026-11-11 the
 4B q8 id is the baseline; the Q4 ids are listed but fail with CUDA OOM.
 
-No API key is required for this instance (`LOCALAI_API_KEY` stays unset).
+No API key is required for this instance (`EMBED_API_KEY` and `CHAT_API_KEY`
+stay unset). The two endpoints are independent: keep embeddings here and point
+only `CHAT_BASE_URL` at a cloud provider if that is all you want to move; see
+[Model backends - embeddings and chat configured independently](/models.md).

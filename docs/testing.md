@@ -47,8 +47,8 @@ live upstream APIs.
 | `8000` | the local judge model | `EVAL_BASE_URL=http://localhost:8000/v1`, model `mtplx-qwen36-35b-a3b-optimized-speed`. Used by Ragas and by promptfoo. |
 | `15500` | promptfoo report UI | `npm run redteam:report`, reads the local database. |
 
-The agent's own model backend (`LOCALAI_*`, default
-`http://192.168.78.243:8080/v1`) is independent of the judge endpoint. The
+The agent's own model backends (`EMBED_*` and `CHAT_*`, both defaulting to
+`http://192.168.78.243:8080/v1`) are independent of the judge endpoint. The
 suites use the judge for scoring (and promptfoo for attack generation), not
 for answering.
 

@@ -56,10 +56,14 @@ func run(args []string, stdout, stderr io.Writer) int {
 	// use them are still placeholders.
 	log.Debug().
 		Str("db_path", rtCfg.DBPath).
-		Str("localai_base_url", rtCfg.LocalAIBaseURL).
-		Bool("localai_api_key_set", rtCfg.LocalAIAPIKey != "").
+		Str("embed_base_url", rtCfg.EmbedBaseURL).
+		Bool("embed_api_key_set", rtCfg.EmbedAPIKey != "").
 		Str("embed_model", rtCfg.EmbedModel).
+		Int("embed_dims", int(rtCfg.EmbedDims)).
+		Str("chat_base_url", rtCfg.ChatBaseURL).
+		Bool("chat_api_key_set", rtCfg.ChatAPIKey != "").
 		Str("chat_model", rtCfg.ChatModel).
+		Str("chat_token_param", rtCfg.ChatTokenParam).
 		Msg("environment configuration decoded")
 
 	if len(args) == 0 {
@@ -76,7 +80,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	case "sources":
 		code = runSources(args[1:], stdout, stderr)
 	case "ingest":
-		code = runIngest(args[1:], rtCfg.DBPath, stdout, stderr)
+		code = runIngest(args[1:], rtCfg, stdout, stderr)
 	case "embed":
 		code = runEmbed(args[1:], rtCfg, stdout, stderr)
 	case "stats":

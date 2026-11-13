@@ -41,13 +41,13 @@ codebase reads variables with ad-hoc `os.Getenv` chains.
 
 | Struct | Package | Prefix | Variables |
 |---|---|---|---|
-| `envcfg.Config` | `internal/envcfg` | mixed by design | `AGENT_DB_PATH`, `LOCALAI_*`, `EMBED_MODEL`, `CHAT_MODEL`, `AGENT_A2A_*` |
+| `envcfg.Config` | `internal/envcfg` | mixed by design | `AGENT_DB_PATH`, `EMBED_*`, `CHAT_*`, `AGENT_A2A_*` |
 | `logging.Config` | `internal/logging` | `AGENT_LOG` | `AGENT_LOG_LEVEL`, `AGENT_LOG_FORMAT` |
 
 The `envconfig` struct tag is always the **full variable name**, because the
 surface mixes prefixes: `AGENT_*` for knobs this service owns and
-upstream-style names (`LOCALAI_*`, `EMBED_MODEL`, `CHAT_MODEL`, `GHOST_*`,
-`POSTIZ_*`) for everything else. Exported `Env*` constants are the source of
+upstream-style names (`EMBED_*`, `CHAT_*`, `GHOST_*`, `POSTIZ_*`) for
+everything else. Exported `Env*` constants are the source of
 truth for the names and a test pins the struct tags to them.
 
 `envconfig.Process` cannot distinguish an unset variable from one set to the
@@ -62,14 +62,18 @@ constants, not in struct tags, so there is exactly one definition.
 | `AGENT_LOG_LEVEL` | `internal/logging` | `info` | `trace`…`disabled`; `--log-level` wins over it |
 | `AGENT_LOG_FORMAT` | `internal/logging` | `text` | `text` or `json`; `--log-format` wins over it |
 | `AGENT_DB_PATH` | `internal/envcfg` | `./data/index.db` | `/data/index.db` in the container, where `./data` is bind-mounted at `/data` (PLAN.md Decision 11) |
-| `LOCALAI_BASE_URL` | `internal/envcfg` | `http://192.168.78.243:8080/v1` | Any OpenAI-compatible server |
-| `LOCALAI_API_KEY` | `internal/envcfg` | empty | Optional bearer token |
-| `EMBED_MODEL` | `internal/envcfg` | `embeddinggemma-300m` | Must produce 768 dims |
+| `EMBED_BASE_URL` | `internal/envcfg` | `http://192.168.78.243:8080/v1` | OpenAI-compatible `/embeddings` endpoint; independent of the chat endpoint |
+| `EMBED_API_KEY` | `internal/envcfg` | empty | Optional bearer token for that endpoint |
+| `EMBED_MODEL` | `internal/envcfg` | `embeddinggemma-300m` | Model id behind `/embeddings`; must return `EMBED_DIMS` values |
+| `EMBED_DIMS` | `internal/envcfg` | `768` | Vector width of `chunks_vec`; a change rebuilds the table and re-embeds the corpus |
+| `CHAT_BASE_URL` | `internal/envcfg` | `http://192.168.78.243:8080/v1` | OpenAI-compatible `/chat/completions` endpoint; independent of the embeddings endpoint |
+| `CHAT_API_KEY` | `internal/envcfg` | empty | Secret; optional bearer token for the chat endpoint |
 | `CHAT_MODEL` | `internal/envcfg` | `Spark-X2.6-4B-q8_0` | Reasoning model, used by the loop; the host's 8K-context 4B q8 baseline |
+| `CHAT_TOKEN_PARAM` | `internal/envcfg` | `max_tokens` | Completion-budget field: `max_tokens`, or `max_completion_tokens` for OpenAI reasoning models |
 | `AGENT_A2A_TOKENS` | `internal/envcfg` | empty | Comma-separated `id:token` bearer list for the A2A surface; empty and loopback = token-less dev |
 | `AGENT_A2A_TOKENS_FILE` | `internal/envcfg` | `./data/a2a-tokens.txt` | `0600` token file, re-read on change (rotation without restart); gitignored, missing = no tokens |
 | `AGENT_A2A_PUBLIC_URL` | `internal/envcfg` | empty | Absolute service root advertised in the agent card; required with `--bind-public`, otherwise a loopback bind derives `http://<addr>` |
-| `EVAL_BASE_URL` | `evals/` (Python) | `http://localhost:8000/v1` | Judge endpoint for the Ragas harness; the promptfoo `redteam.provider` mirrors it. Independent of `LOCALAI_*` |
+| `EVAL_BASE_URL` | `evals/` (Python) | `http://localhost:8000/v1` | Judge endpoint for the Ragas harness; the promptfoo `redteam.provider` mirrors it. Independent of `EMBED_*`/`CHAT_*` |
 | `EVAL_MODEL` | `evals/` (Python) | `mtplx-qwen36-35b-a3b-optimized-speed` | Model the harness scores; promptfoo generates (local-capable plugins) and grades with it |
 | `EVAL_API_KEY` | `evals/` (Python) | empty → `local` | Secret; local servers ignore its value. promptfoo's config uses the literal `local` |
 | `GHOST_API_URL` | `sources.yaml` ref | — | Credential reference, value required |
@@ -149,6 +153,9 @@ the two files move together. See
    in `internal/envcfg` or `internal/logging`.
 2. Add the struct field with the full name in its `envconfig` tag.
 3. Normalize with `envcfg.DefaultOr` in the loader so `VAR=` behaves as unset.
+   A numeric setting needs a string-decoding type instead (`envcfg.EmbedWidth`
+   is the model): envconfig cannot turn `""` into an `int`, so `DefaultOr`
+   never runs.
 4. Add the entry to `example.env` with the default or an empty secret value.
 5. Add the row to the table above; update `docs/log.md`.
 
@@ -163,5 +170,5 @@ that no allowlist entry or struct tag knows is a test failure.
 * Not required: a container passes variables via `compose.yaml`, cron and
   launchd via their own environment. A missing `.env` is not an error.
 * Never echoed or logged: startup logs variable *names* and whether a secret
-  is set, never values (`db_path` and `localai_base_url` are the only values
-  that reach a debug line).
+  is set, never values (`db_path`, `embed_base_url`, `chat_base_url`, and the
+  model ids are the only values that reach a debug line).

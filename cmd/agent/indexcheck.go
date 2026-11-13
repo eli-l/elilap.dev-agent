@@ -9,12 +9,16 @@ import (
 	"github.com/eli-l/elilap.dev-agent/internal/store"
 )
 
-// verifyIndexModel checks that the index's vectors were produced by the
-// configured model and text template. A query vector only means something in
-// the space its model produced, and the embedded_with stamp is the index's own
+// verifyIndexModel checks that the index is usable by the configured models:
+// its vectors were produced by that embedding model and text template, and
+// they have the configured width. A query vector only means something in the
+// space its model produced, and the embedded_with stamp is the index's own
 // record of that space, so a mismatch fails before any request is served
 // instead of returning plausible-looking noise.
-func verifyIndexModel(st *store.Store, model string) error {
+func verifyIndexModel(st *store.Store, model string, dims int) error {
+	if err := st.CheckDims(dims); err != nil {
+		return err
+	}
 	tag := embed.Tag(model)
 	tags, err := st.EmbeddingTags()
 	if err != nil {

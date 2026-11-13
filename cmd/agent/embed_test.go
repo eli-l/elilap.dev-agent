@@ -67,7 +67,7 @@ func TestRunEmbedDryRunRequiresIndex(t *testing.T) {
 
 func TestRunEmbedDryRunLimitCapsPending(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "index.db")
-	st, err := store.Open(dbPath, filepath.Join("..", "..", "migrations"))
+	st, err := store.Open(dbPath, filepath.Join("..", "..", "migrations"), store.DefaultEmbeddingDims)
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}

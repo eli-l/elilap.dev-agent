@@ -36,7 +36,7 @@ func TestSchemaDDL(t *testing.T) {
 
 	// Open through the real path: it registers sqlite-vec, creates the file,
 	// and applies migrations/0001_init.sql + 0002_state.sql.
-	s, err := store.Open(path, "../../migrations")
+	s, err := store.Open(path, "../../migrations", store.DefaultEmbeddingDims)
 	if err != nil {
 		t.Fatalf("apply migrations: %v", err)
 	}
@@ -137,11 +137,11 @@ WHERE chunks_fts MATCH ?`, "sqlitevec").Scan(&id)
 			Scan(&ddl); err != nil {
 			t.Fatalf("read chunks_vec DDL: %v", err)
 		}
-		if want := fmt.Sprintf("float[%d]", store.EmbeddingDims); !strings.Contains(ddl, want) {
+		if want := fmt.Sprintf("float[%d]", store.DefaultEmbeddingDims); !strings.Contains(ddl, want) {
 			t.Errorf("chunks_vec DDL does not declare %s: %s", want, ddl)
 		}
 
-		vector := make([]float32, store.EmbeddingDims)
+		vector := make([]float32, store.DefaultEmbeddingDims)
 		vector[0] = 1
 		written, skipped, err := s.WriteEmbeddings([]store.ChunkEmbedding{{
 			ChunkID:     "ddl-chunk-1",
@@ -166,7 +166,7 @@ WHERE chunks_fts MATCH ?`, "sqlitevec").Scan(&id)
 		// The vec0 table, not just the Go writer, must enforce the declared
 		// width: a shorter vector is how a model switch would corrupt the
 		// index silently.
-		blob, err := vec.SerializeFloat32(make([]float32, store.EmbeddingDims-1))
+		blob, err := vec.SerializeFloat32(make([]float32, store.DefaultEmbeddingDims-1))
 		if err != nil {
 			t.Fatalf("serialize short vector: %v", err)
 		}

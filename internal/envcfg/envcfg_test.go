@@ -37,7 +37,8 @@ func writeEnvFile(t *testing.T, content string) string {
 }
 
 func TestLoadDefaults(t *testing.T) {
-	unsetFor(t, EnvDBPath, EnvLocalAIBaseURL, EnvLocalAIAPIKey, EnvEmbedModel, EnvChatModel,
+	unsetFor(t, EnvDBPath, EnvEmbedBaseURL, EnvEmbedAPIKey, EnvEmbedModel, EnvEmbedDims,
+		EnvChatBaseURL, EnvChatAPIKey, EnvChatModel, EnvChatTokenParam,
 		EnvA2ATokens, EnvA2ATokensFile, EnvA2APublicURL)
 
 	cfg, err := Load()
@@ -46,10 +47,12 @@ func TestLoadDefaults(t *testing.T) {
 	}
 	want := Config{
 		DBPath:         DefaultDBPath,
-		LocalAIBaseURL: DefaultLocalAIBaseURL,
-		LocalAIAPIKey:  "",
+		EmbedBaseURL:   DefaultModelBaseURL,
 		EmbedModel:     DefaultEmbedModel,
+		EmbedDims:      DefaultEmbedDims,
+		ChatBaseURL:    DefaultModelBaseURL,
 		ChatModel:      DefaultChatModel,
+		ChatTokenParam: DefaultChatTokenParam,
 		A2ATokensFile:  DefaultA2ATokensFile,
 	}
 	if cfg != want {
@@ -57,12 +60,18 @@ func TestLoadDefaults(t *testing.T) {
 	}
 }
 
+// TestLoadReadsEnvironment pins the independent endpoints: one role may live
+// on a cloud provider while the other stays on the local host.
 func TestLoadReadsEnvironment(t *testing.T) {
 	t.Setenv(EnvDBPath, "/data/index.db")
-	t.Setenv(EnvLocalAIBaseURL, "http://localhost:9999/v1")
-	t.Setenv(EnvLocalAIAPIKey, "token")
+	t.Setenv(EnvEmbedBaseURL, "http://localhost:9999/v1")
+	t.Setenv(EnvEmbedAPIKey, "embed-token")
 	t.Setenv(EnvEmbedModel, "other-embed")
-	t.Setenv(EnvChatModel, "other-chat")
+	t.Setenv(EnvEmbedDims, "1536")
+	t.Setenv(EnvChatBaseURL, "https://api.example/v1")
+	t.Setenv(EnvChatAPIKey, "chat-token")
+	t.Setenv(EnvChatModel, "gpt6-luna")
+	t.Setenv(EnvChatTokenParam, "max_completion_tokens")
 	t.Setenv(EnvA2ATokens, "alice:"+strings.Repeat("a", 32))
 	t.Setenv(EnvA2ATokensFile, "./tokens.txt")
 	t.Setenv(EnvA2APublicURL, "https://agent.example/")
@@ -73,10 +82,14 @@ func TestLoadReadsEnvironment(t *testing.T) {
 	}
 	want := Config{
 		DBPath:         "/data/index.db",
-		LocalAIBaseURL: "http://localhost:9999/v1",
-		LocalAIAPIKey:  "token",
+		EmbedBaseURL:   "http://localhost:9999/v1",
+		EmbedAPIKey:    "embed-token",
 		EmbedModel:     "other-embed",
-		ChatModel:      "other-chat",
+		EmbedDims:      1536,
+		ChatBaseURL:    "https://api.example/v1",
+		ChatAPIKey:     "chat-token",
+		ChatModel:      "gpt6-luna",
+		ChatTokenParam: "max_completion_tokens",
 		A2ATokens:      "alice:" + strings.Repeat("a", 32),
 		A2ATokensFile:  "./tokens.txt",
 		A2APublicURL:   "https://agent.example",
@@ -90,10 +103,14 @@ func TestLoadReadsEnvironment(t *testing.T) {
 // example.env leaves defaults untouched even when values are blank.
 func TestLoadTreatsEmptyAsUnset(t *testing.T) {
 	t.Setenv(EnvDBPath, "")
-	t.Setenv(EnvLocalAIBaseURL, "")
-	t.Setenv(EnvLocalAIAPIKey, "")
+	t.Setenv(EnvEmbedBaseURL, "")
+	t.Setenv(EnvEmbedAPIKey, "")
 	t.Setenv(EnvEmbedModel, "")
+	t.Setenv(EnvEmbedDims, "")
+	t.Setenv(EnvChatBaseURL, "")
+	t.Setenv(EnvChatAPIKey, "")
 	t.Setenv(EnvChatModel, "")
+	t.Setenv(EnvChatTokenParam, "")
 	t.Setenv(EnvA2ATokens, "")
 	t.Setenv(EnvA2ATokensFile, "")
 	t.Setenv(EnvA2APublicURL, "")
@@ -102,16 +119,32 @@ func TestLoadTreatsEmptyAsUnset(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
 	}
-	if cfg.DBPath != DefaultDBPath || cfg.LocalAIBaseURL != DefaultLocalAIBaseURL ||
-		cfg.EmbedModel != DefaultEmbedModel || cfg.ChatModel != DefaultChatModel ||
-		cfg.A2ATokensFile != DefaultA2ATokensFile {
-		t.Errorf("Load() with empty variables = %+v, want the defaults", cfg)
+	if cfg.DBPath != DefaultDBPath || cfg.EmbedBaseURL != DefaultModelBaseURL ||
+		cfg.EmbedModel != DefaultEmbedModel || cfg.EmbedDims != DefaultEmbedDims {
+		t.Errorf("Load() with empty variables = %+v, want the model defaults", cfg)
+	}
+	if cfg.ChatBaseURL != DefaultModelBaseURL || cfg.ChatModel != DefaultChatModel ||
+		cfg.ChatTokenParam != DefaultChatTokenParam {
+		t.Errorf("Load() with empty variables = %+v, want the chat defaults", cfg)
 	}
 	if cfg.A2ATokens != "" || cfg.A2APublicURL != "" {
 		t.Errorf("A2ATokens/A2APublicURL = %q/%q, want empty", cfg.A2ATokens, cfg.A2APublicURL)
 	}
-	if cfg.LocalAIAPIKey != "" {
-		t.Errorf("LocalAIAPIKey = %q, want empty", cfg.LocalAIAPIKey)
+	if cfg.EmbedAPIKey != "" || cfg.ChatAPIKey != "" {
+		t.Errorf("EmbedAPIKey/ChatAPIKey = %q/%q, want empty", cfg.EmbedAPIKey, cfg.ChatAPIKey)
+	}
+}
+
+// TestLoadRejectsBadTokenParam keeps a typo from reaching the model backend,
+// where it would surface as a 400 in the middle of an answer.
+func TestLoadRejectsBadTokenParam(t *testing.T) {
+	unsetFor(t, EnvChatTokenParam)
+	t.Setenv(EnvChatTokenParam, "max-tokens")
+
+	if _, err := Load(); err == nil {
+		t.Fatal("Load() accepted an unknown CHAT_TOKEN_PARAM")
+	} else if !strings.Contains(err.Error(), EnvChatTokenParam) {
+		t.Errorf("error = %q, want it to name %s", err, EnvChatTokenParam)
 	}
 }
 
@@ -120,10 +153,14 @@ func TestLoadTreatsEmptyAsUnset(t *testing.T) {
 func TestConfigTagsMatchConstants(t *testing.T) {
 	want := map[string]string{
 		"DBPath":         EnvDBPath,
-		"LocalAIBaseURL": EnvLocalAIBaseURL,
-		"LocalAIAPIKey":  EnvLocalAIAPIKey,
+		"EmbedBaseURL":   EnvEmbedBaseURL,
+		"EmbedAPIKey":    EnvEmbedAPIKey,
 		"EmbedModel":     EnvEmbedModel,
+		"EmbedDims":      EnvEmbedDims,
+		"ChatBaseURL":    EnvChatBaseURL,
+		"ChatAPIKey":     EnvChatAPIKey,
 		"ChatModel":      EnvChatModel,
+		"ChatTokenParam": EnvChatTokenParam,
 		"A2ATokens":      EnvA2ATokens,
 		"A2ATokensFile":  EnvA2ATokensFile,
 		"A2APublicURL":   EnvA2APublicURL,
@@ -145,10 +182,14 @@ func TestConfigTagsMatchConstants(t *testing.T) {
 // DefaultOr is the single normalization point.
 func TestLoadTrimsValues(t *testing.T) {
 	t.Setenv(EnvDBPath, "  /data/index.db  ")
-	t.Setenv(EnvLocalAIBaseURL, "\thttp://localhost:9999/v1\n")
-	t.Setenv(EnvLocalAIAPIKey, "  token  ")
+	t.Setenv(EnvEmbedBaseURL, "\thttp://localhost:9999/v1\n")
+	t.Setenv(EnvEmbedAPIKey, "  embed-token  ")
 	t.Setenv(EnvEmbedModel, " other-embed ")
-	t.Setenv(EnvChatModel, " other-chat ")
+	t.Setenv(EnvEmbedDims, " 1536 ")
+	t.Setenv(EnvChatBaseURL, "\thttps://api.example/v1\n")
+	t.Setenv(EnvChatAPIKey, "  chat-token  ")
+	t.Setenv(EnvChatModel, " gpt6-luna ")
+	t.Setenv(EnvChatTokenParam, " max_completion_tokens ")
 	t.Setenv(EnvA2ATokens, "  ")
 	t.Setenv(EnvA2ATokensFile, "  ./tokens.txt  ")
 	t.Setenv(EnvA2APublicURL, "  https://agent.example///  ")
@@ -159,10 +200,14 @@ func TestLoadTrimsValues(t *testing.T) {
 	}
 	want := Config{
 		DBPath:         "/data/index.db",
-		LocalAIBaseURL: "http://localhost:9999/v1",
-		LocalAIAPIKey:  "token",
+		EmbedBaseURL:   "http://localhost:9999/v1",
+		EmbedAPIKey:    "embed-token",
 		EmbedModel:     "other-embed",
-		ChatModel:      "other-chat",
+		EmbedDims:      1536,
+		ChatBaseURL:    "https://api.example/v1",
+		ChatAPIKey:     "chat-token",
+		ChatModel:      "gpt6-luna",
+		ChatTokenParam: "max_completion_tokens",
 		A2ATokensFile:  "./tokens.txt",
 		A2APublicURL:   "https://agent.example",
 	}

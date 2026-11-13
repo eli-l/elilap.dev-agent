@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/eli-l/elilap.dev-agent/internal/config"
+	"github.com/eli-l/elilap.dev-agent/internal/envcfg"
 	"github.com/eli-l/elilap.dev-agent/internal/ingest"
 	"github.com/eli-l/elilap.dev-agent/internal/logging"
 	"github.com/eli-l/elilap.dev-agent/internal/sources/shared"
@@ -24,7 +25,7 @@ const defaultMigrationsDir = "migrations"
 // runIngest implements `agent ingest`: incremental by default, --full to
 // re-fetch everything, --source to scope one provider, --dry-run to report
 // the plan, and --since to index a bounded window (for example 7d).
-func runIngest(args []string, dbPath string, stdout, stderr io.Writer) int {
+func runIngest(args []string, rtCfg envcfg.Config, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("agent ingest", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	configPath := fs.String("config", defaultConfigPath, "path to sources.yaml")
@@ -35,7 +36,7 @@ func runIngest(args []string, dbPath string, stdout, stderr io.Writer) int {
 	overlap := fs.Duration("overlap", ingest.DefaultOverlap, "incremental list overlap before the last run")
 	migrationsDir := fs.String("migrations", defaultMigrationsDir, "directory holding the SQL migrations")
 	timeout := fs.Duration("timeout", 15*time.Minute, "overall run timeout")
-	dbFlag := fs.String("db", dbPath, "path to the SQLite index")
+	dbFlag := fs.String("db", rtCfg.DBPath, "path to the SQLite index")
 	if err := fs.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return 0
@@ -88,7 +89,7 @@ func runIngest(args []string, dbPath string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "agent ingest: %v\n", err)
 		return 1
 	}
-	st, err := openIngestStore(*dbFlag, *migrationsDir, *dryRun)
+	st, err := openIngestStore(*dbFlag, *migrationsDir, int(rtCfg.EmbedDims), *dryRun)
 	if err != nil {
 		fmt.Fprintf(stderr, "agent ingest: %v\n", err)
 		return 1
@@ -116,7 +117,9 @@ func runIngest(args []string, dbPath string, stdout, stderr io.Writer) int {
 
 // openIngestStore opens the index for a run. A dry run must not create or
 // migrate the database, so it opens read-only and requires an existing index.
-func openIngestStore(dbPath, migrationsDir string, dryRun bool) (*store.Store, error) {
+// The vector width only matters for the read-write path: ingest never writes
+// vectors, but it does create the database that chunks_vec lives in.
+func openIngestStore(dbPath, migrationsDir string, dims int, dryRun bool) (*store.Store, error) {
 	if dryRun {
 		st, err := store.OpenReadOnly(dbPath)
 		if errors.Is(err, store.ErrNoDatabase) {
@@ -124,7 +127,7 @@ func openIngestStore(dbPath, migrationsDir string, dryRun bool) (*store.Store, e
 		}
 		return st, err
 	}
-	return store.Open(dbPath, migrationsDir)
+	return store.Open(dbPath, migrationsDir, dims)
 }
 
 // printIngestResults writes the per-source summary to stdout in the

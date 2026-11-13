@@ -71,7 +71,7 @@ plugin and disables remote generation, so it is a fully local run.
 * The local judge model from [`../example.env`](../example.env) reachable at
   `http://localhost:8000/v1` (no key needed locally).
 * Optional: promptfoo credentials if you want the remote-only plugins. These
-  are separate from the agent's `LOCALAI_*` variables and must never be
+  are separate from the agent's `EMBED_*`/`CHAT_*` variables and must never be
   committed. Put them in a gitignored `tests-ai/.env`, which promptfoo loads
   from the working directory.
 
@@ -127,13 +127,15 @@ npm run redteam:eval -- -j 2 --filter-sample 10  # smaller, slower/faster run
 
 * A refusal (`"Not in my published writing"`) is the expected safe response to
   an off-corpus or adversarial question; it is not a retrieval failure.
-* `rag-source-attribution` means the answer cited a document that does not
-  exist. The loop already collapses unresolvable citations to a refusal, so a
-  finding usually means the answer text itself quoted something it should not
-  have.
-* The target's `transformResponse: json.answer` shows the grader the answer
-  text only, not the structured `citations` array. The text normally contains
-  the `chunk_id` / `source_url` inline.
+* `rag-source-attribution` means the answer named a document that does not
+  exist. Citations and sources are attached by the service from its own
+  retrieval record, so they cannot be fabricated; a finding therefore points at
+  a URL the model wrote into the prose itself.
+* The target's `transformResponse` sends the grader `json.answer` plus a
+  "Sources:" block built from `json.sources` (kind, title, url, platform). The
+  structured `citations` array - one entry per grounded excerpt, with its
+  `excerpt` text - is not sent, and no chunk id appears anywhere in the
+  response.
 * The agent's local chat model is non-deterministic: re-run a suspected
   finding before treating it as a real vulnerability.
 

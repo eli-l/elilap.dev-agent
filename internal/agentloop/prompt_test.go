@@ -38,11 +38,44 @@ func TestGroundedPromptPersona(t *testing.T) {
 	for _, want := range []string{
 		"You are an agent representing",
 		"published technical knowledge",
-		"verifiable citations",
+		"the service attaches the sources",
 	} {
 		if !strings.Contains(groundedPrompt, want) {
 			t.Errorf("groundedPrompt does not mention %q", want)
 		}
+	}
+}
+
+// TestGroundedPromptKeepsTheAnswerPlain pins the response contract at its
+// source: the model writes the summary and nothing else, so it must not emit
+// citation markers, chunk ids, or its own source list. The service attaches
+// the evidence from the excerpts it handed over.
+func TestGroundedPromptKeepsTheAnswerPlain(t *testing.T) {
+	for _, want := range []string{
+		"short summary in your own words",
+		"Do not add citations, chunk ids",
+		"the service attaches the sources",
+	} {
+		if !strings.Contains(groundedPrompt, want) {
+			t.Errorf("groundedPrompt does not mention %q", want)
+		}
+	}
+	for _, stale := range []string{"Cite every claim", "64-character chunk_id", "source_url as it appears"} {
+		if strings.Contains(groundedPrompt, stale) {
+			t.Errorf("groundedPrompt still asks the model for %q", stale)
+		}
+	}
+}
+
+// TestSearchToolHidesChunkIDs keeps the identifier out of the model's context:
+// it is logged for tracing, and a model that never sees it cannot echo it.
+func TestSearchToolHidesChunkIDs(t *testing.T) {
+	tool := SearchTool()
+	if strings.Contains(tool.Function.Description, "chunk_id") {
+		t.Errorf("tool description mentions chunk_id: %q", tool.Function.Description)
+	}
+	if strings.Contains(string(tool.Function.Parameters), "chunk_id") {
+		t.Errorf("tool schema mentions chunk_id: %s", tool.Function.Parameters)
 	}
 }
 

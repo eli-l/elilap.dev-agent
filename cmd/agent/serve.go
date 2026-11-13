@@ -142,21 +142,29 @@ func runServe(args []string, rtCfg envcfg.Config, stderr io.Writer) int {
 	}
 	defer st.Close()
 
-	if err := verifyIndexModel(st, rtCfg.EmbedModel); err != nil {
+	if err := verifyIndexModel(st, rtCfg.EmbedModel, int(rtCfg.EmbedDims)); err != nil {
 		fmt.Fprintf(stderr, "agent serve: %v\n", err)
 		return 1
 	}
 
-	client, err := llm.NewClient(rtCfg.LocalAIBaseURL, rtCfg.LocalAIAPIKey,
-		shared.NewHTTPClient(embedHTTPTimeout))
+	// Embeddings and chat each get their own endpoint and credential: the
+	// embedding model may stay local while the chat model is a cloud provider.
+	hc := shared.NewHTTPClient(embedHTTPTimeout)
+	embedClient, err := llm.NewClient(rtCfg.EmbedBaseURL, rtCfg.EmbedAPIKey, hc)
 	if err != nil {
 		fmt.Fprintf(stderr, "agent serve: %v\n", err)
 		return 1
 	}
-	searcher := &retrieval.Searcher{Store: st, Embedder: client, Model: rtCfg.EmbedModel}
+	chatClient, err := llm.NewClient(rtCfg.ChatBaseURL, rtCfg.ChatAPIKey, hc)
+	if err != nil {
+		fmt.Fprintf(stderr, "agent serve: %v\n", err)
+		return 1
+	}
+	chatClient.TokenParam = rtCfg.ChatTokenParam
+	searcher := &retrieval.Searcher{Store: st, Embedder: embedClient, Model: rtCfg.EmbedModel}
 	loop := &agentloop.Runner{
 		Searcher:   searcher,
-		Chat:       client,
+		Chat:       chatClient,
 		Model:      rtCfg.ChatModel,
 		MaxElapsed: askTimeout,
 	}
@@ -196,6 +204,8 @@ func runServe(args []string, rtCfg envcfg.Config, stderr io.Writer) int {
 		Str("addr", *addr).
 		Str("db", *dbFlag).
 		Str("embed_model", rtCfg.EmbedModel).
+		Int("embed_dims", st.Dims()).
+		Str("chat_model", rtCfg.ChatModel).
 		Bool("public_bind", *bindPublic).
 		Bool("auth", secured).
 		Int("tokens", tokens.Len()).
@@ -668,6 +678,7 @@ func (h *askHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	entry.ToolIterations = answer.ToolIterations
 	entry.Citations = len(answer.Citations)
+	entry.Sources = len(answer.Sources)
 	entry.Refused = answer.Refused
 	if answer.Refused {
 		entry.Outcome = audit.OutcomeRefused
@@ -678,6 +689,9 @@ func (h *askHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	if answer.Citations == nil {
 		answer.Citations = []agentloop.Citation{}
+	}
+	if answer.Sources == nil {
+		answer.Sources = []agentloop.Source{}
 	}
 
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")

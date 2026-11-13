@@ -132,9 +132,12 @@ func (s *Store) WriteEmbeddings(rows []ChunkEmbedding, tag string, at time.Time)
 		if row.ContentHash == "" {
 			return 0, 0, fmt.Errorf("write embeddings: chunk %s has no content hash", row.ChunkID)
 		}
-		if len(row.Vector) != EmbeddingDims {
-			return 0, 0, fmt.Errorf("write embeddings: chunk %s has %d dimensions, want %d",
-				row.ChunkID, len(row.Vector), EmbeddingDims)
+		if s.dims <= 0 {
+			return 0, 0, fmt.Errorf("write embeddings: index has no chunks_vec table")
+		}
+		if len(row.Vector) != s.dims {
+			return 0, 0, fmt.Errorf("write embeddings: chunk %s has %d dimensions, index wants %d",
+				row.ChunkID, len(row.Vector), s.dims)
 		}
 		b, err := vec.SerializeFloat32(row.Vector)
 		if err != nil {

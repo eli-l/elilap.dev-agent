@@ -11,6 +11,7 @@ sources:
   - internal/embed/embed.go
   - internal/llm/client.go
   - internal/store/vectors.go
+  - internal/store/vecschema.go
   - internal/store/chunks.go
   - cmd/agent/embed.go
   - cmd/agent/progress.go
@@ -70,10 +71,19 @@ holds:
 * `embedded_with` is `NULL` (new chunk, or a rewritten item — see below);
 * `embedded_with` differs from the current tag (model or template changed);
 * there is no row in `chunks_vec` for the chunk (manually cleared, or the
-  vec table was rebuilt).
+  vec table was rebuilt by an `EMBED_DIMS` change).
 
 The `LEFT JOIN chunks_vec` in the pending query makes the vec table, not just
 the bookkeeping column, the authority on "has a vector".
+
+Changing `EMBED_DIMS` (a model with another vector width) makes the next
+read-write open rebuild `chunks_vec` at the configured width, drop the old
+vectors, and clear the tags, so the whole corpus becomes pending and
+`agent embed` re-embeds it. Read-only commands compare the index width with
+`EMBED_DIMS` first and fail with `index vector dimensions do not match
+EMBED_DIMS` instead of querying a space they cannot compare against. The tag
+keeps its `localai:` prefix; it names the embedding space, not the host, and
+the width is what actually changes it.
 
 ## Store invariants
 
@@ -91,8 +101,10 @@ the bookkeeping column, the authority on "has a vector".
 * **vec0 has no `INSERT OR REPLACE` on its primary key.** Each row is an
   explicit `DELETE` followed by an `INSERT`.
 * **Dimensions are enforced twice.** The runner rejects any vector whose
-  length differs from `store.EmbeddingDims` (768), and the store refuses the
-  same before opening its transaction.
+  length differs from the index's width (`store.Store.Dims()`, set from
+  `EMBED_DIMS` when the store opens), and the store refuses the same before
+  opening its transaction. `EMBED_DIMS` defaults to 768, the width
+  `migrations/0001_init.sql` declares.
 
 ## CLI
 

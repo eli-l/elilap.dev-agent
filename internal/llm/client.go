@@ -15,6 +15,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"sync/atomic"
 	"time"
 )
 
@@ -23,6 +24,23 @@ const DefaultTimeout = 120 * time.Second
 
 // maxErrorBody caps how much of a non-2xx response is quoted in an error.
 const maxErrorBody = 512
+
+// Completion-budget request fields. The OpenAI wire format has two: the
+// legacy max_tokens that LocalAI and most compatible servers accept, and
+// max_completion_tokens, which OpenAI's reasoning models require (a request
+// carrying max_tokens is rejected with a 400). CHAT_TOKEN_PARAM selects the
+// one Client.Chat sends.
+const (
+	// FieldMaxTokens is the OpenAI-compatible default.
+	FieldMaxTokens = "max_tokens"
+	// FieldMaxCompletionTokens is what OpenAI reasoning models accept.
+	FieldMaxCompletionTokens = "max_completion_tokens"
+	// ReasoningNone is the flat reasoning_effort value that switches reasoning
+	// off. Some providers accept it as the only effort with function tools
+	// ("Function tools with reasoning_effort are not supported ... set
+	// reasoning_effort to 'none'"), which Chat honors automatically.
+	ReasoningNone = "none"
+)
 
 // Client talks to an OpenAI-compatible endpoint rooted at BaseURL, including
 // the /v1 suffix (for example http://host:8080/v1).
@@ -33,6 +51,18 @@ type Client struct {
 	APIKey string
 	// HTTP is the underlying client; nil means a client with DefaultTimeout.
 	HTTP *http.Client
+	// TokenParam names the completion-budget field Chat emits: FieldMaxTokens
+	// (the zero value, and what LocalAI takes) or FieldMaxCompletionTokens for
+	// an OpenAI reasoning endpoint. Embeddings ignore it.
+	TokenParam string
+	// learnedTokenField records the field this backend accepted after an
+	// automatic switch (see Chat), so later requests skip the rejected one.
+	// It is an atomic.Value because agent serve answers concurrently.
+	learnedTokenField atomic.Value
+	// learnedToolsReasoningNone records that this backend refuses function
+	// tools with any reasoning effort but "none"; tool-bearing requests are
+	// then sent at ReasoningNone without a rejected attempt.
+	learnedToolsReasoningNone atomic.Bool
 }
 
 // NewClient normalizes the endpoint and returns a connector. An empty API key
