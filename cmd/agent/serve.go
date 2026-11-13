@@ -13,9 +13,9 @@ import (
 	"net/url"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strconv"
 	"strings"
-	"sync"
 	"syscall"
 	"time"
 
@@ -23,6 +23,7 @@ import (
 	"github.com/eli-l/elilap.dev-agent/internal/agentloop"
 	"github.com/eli-l/elilap.dev-agent/internal/audit"
 	"github.com/eli-l/elilap.dev-agent/internal/auth"
+	"github.com/eli-l/elilap.dev-agent/internal/budget"
 	"github.com/eli-l/elilap.dev-agent/internal/envcfg"
 	"github.com/eli-l/elilap.dev-agent/internal/llm"
 	"github.com/eli-l/elilap.dev-agent/internal/logging"
@@ -43,9 +44,24 @@ const (
 	retrieveRoute = "/v1/retrieve"
 	// askRoute runs the full grounded loop.
 	askRoute = "/v1/ask"
-	// defaultRateLimit is the per-token task budget per minute (PLAN.md
-	// Phase 4): one peer must not be able to pin the single chat-model host.
+	// defaultRateLimit is the /v1/retrieve embedding bucket per minute. The
+	// answer surfaces use the smaller defaultAskRate below, because a minute
+	// rate cannot bound a model bill and the daily budget gates do.
 	defaultRateLimit = 30
+	// defaultAskRate is the answers allowed per minute per identity.
+	defaultAskRate = 3
+	// defaultAskQuota is the answers allowed per day per identity: one leaked
+	// or rotated id cannot drain the day.
+	defaultAskQuota = 20
+	// defaultAddressQuota is the answers allowed per day per peer address. It
+	// is the backstop for a peer that rotates its self-asserted identity.
+	defaultAddressQuota = 20
+	// defaultGlobalQuota is the answers allowed per day across every peer: the
+	// spend ceiling a public bind must declare.
+	defaultGlobalQuota = 60
+	// defaultMaxInflight caps concurrent answers so a queue cannot outlive the
+	// server's write timeout.
+	defaultMaxInflight = 2
 	// defaultAuthAttemptLimit caps failed bearer-auth attempts per address
 	// per minute. A successful lookup is not charged; failures are charged
 	// only after the lookup, so a valid token is never throttled behind NAT.
@@ -75,10 +91,19 @@ func runServe(args []string, rtCfg envcfg.Config, stderr io.Writer) int {
 	fs := flag.NewFlagSet("agent serve", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	addr := fs.String("addr", defaultServeAddr, "bind address (host:port)")
-	bindPublic := fs.Bool("bind-public", false, "bind a non-loopback address; requires at least one A2A token")
+	bindPublic := fs.Bool("bind-public", false, "bind a non-loopback address; requires AGENT_A2A_PUBLIC_URL and non-zero daily quotas")
 	dbFlag := fs.String("db", rtCfg.DBPath, "path to the SQLite index")
-	rateLimit := fs.Int("rate-limit", defaultRateLimit, "model-touching requests per minute per token (0 disables)")
+	rateLimit := fs.Int("rate-limit", defaultRateLimit, "embedding requests per minute for /v1/retrieve (0 disables)")
 	authLimit := fs.Int("auth-limit", defaultAuthAttemptLimit, "failed bearer-auth attempts per minute per address (0 disables)")
+	askRate := fs.Int("ask-rate", defaultAskRate, "answers per minute per identity (0 disables)")
+	askQuota := fs.Int("ask-quota", defaultAskQuota, "answers per day per identity (0 disables; required with --bind-public)")
+	addressQuota := fs.Int("address-quota", defaultAddressQuota, "answers per day per peer address (0 disables; required with --bind-public)")
+	globalQuota := fs.Int("quota-global", defaultGlobalQuota, "answers per day across all peers: the spend ceiling (0 disables; required with --bind-public)")
+	maxInflight := fs.Int("max-inflight", defaultMaxInflight, "concurrent answers (0 disables)")
+	quotaFile := fs.String("quota-file", "", "budget counter file (default <db dir>/quota.json; used when the budget is on)")
+	allowPublicRetrieve := fs.Bool("allow-public-retrieve", false, "serve /v1/retrieve on a public bind (private debug path by default)")
+	maxTokens := fs.Int("max-tokens", agentloop.DefaultMaxTokens, "completion token budget per chat request")
+	excerptTokens := fs.Int("excerpt-tokens", agentloop.DefaultExcerptTokens, "total excerpt token budget")
 	if err := fs.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return 0
@@ -89,6 +114,7 @@ func runServe(args []string, rtCfg envcfg.Config, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "agent serve: unexpected argument %q\n", fs.Arg(0))
 		return 2
 	}
+	budgetOn := budgetActive(*bindPublic, fs)
 	if *bindPublic {
 		if err := validatePublicAddr(*addr); err != nil {
 			fmt.Fprintf(stderr, "agent serve: %v\n", err)
@@ -98,16 +124,41 @@ func runServe(args []string, rtCfg envcfg.Config, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "agent serve: %v\n", err)
 		return 2
 	}
-	if *rateLimit < 0 {
-		fmt.Fprintf(stderr, "agent serve: --rate-limit must be >= 0 (0 disables)\n")
+	for _, limit := range []struct {
+		flag  string
+		value int
+	}{
+		{"--rate-limit", *rateLimit},
+		{"--auth-limit", *authLimit},
+		{"--ask-rate", *askRate},
+		{"--ask-quota", *askQuota},
+		{"--address-quota", *addressQuota},
+		{"--quota-global", *globalQuota},
+		{"--max-inflight", *maxInflight},
+	} {
+		if limit.value < 0 {
+			fmt.Fprintf(stderr, "agent serve: %s must be >= 0 (0 disables)\n", limit.flag)
+			return 2
+		}
+	}
+	if *maxTokens <= 0 {
+		fmt.Fprintf(stderr, "agent serve: --max-tokens must be > 0\n")
 		return 2
 	}
-	if *authLimit < 0 {
-		fmt.Fprintf(stderr, "agent serve: --auth-limit must be >= 0 (0 disables)\n")
+	if *excerptTokens < 0 {
+		fmt.Fprintf(stderr, "agent serve: --excerpt-tokens must be >= 0 (0 uses the default)\n")
 		return 2
 	}
-	// Tokens are the only auth input. A missing token file and an empty env
-	// list mean the token-less loopback dev deployment; a malformed file is a
+	// A public agent is a spending surface: a peer with a URL and a question
+	// can move real money on a cloud chat model. Refusing a bind without a
+	// daily ceiling is the one configuration this service will not run.
+	if *bindPublic && (*askQuota <= 0 || *addressQuota <= 0 || *globalQuota <= 0) {
+		fmt.Fprintf(stderr, "agent serve: --bind-public requires --ask-quota, --address-quota, and --quota-global (a public agent needs a spend ceiling)\n")
+		return 2
+	}
+	// Tokens are optional: a token-less loopback bind is the dev deployment and a
+	// token-less public bind is the budgeted public one (Decision 25). A missing
+	// token file and an empty env list mean no tokens; a malformed file is a
 	// startup error, never a silent fallback.
 	tokens, err := auth.NewStore(rtCfg.A2ATokens, rtCfg.A2ATokensFile)
 	if err != nil {
@@ -115,10 +166,6 @@ func runServe(args []string, rtCfg envcfg.Config, stderr io.Writer) int {
 		return 2
 	}
 	secured := tokens.Secured()
-	if *bindPublic && !secured {
-		fmt.Fprintf(stderr, "agent serve: --bind-public requires an A2A token; issue one with `agent tokens add --id <id>` or set %s\n", envcfg.EnvA2ATokens)
-		return 2
-	}
 
 	// The card must never advertise an endpoint derived from an untrusted
 	// Host header. Public exposure therefore requires an explicit root;
@@ -147,6 +194,33 @@ func runServe(args []string, rtCfg envcfg.Config, stderr io.Writer) int {
 		return 1
 	}
 
+	// The spend budget lives beside the index because the index itself is opened
+	// read-only: a public answer must be counted somewhere that survives a
+	// restart, and the index is derived data the operator may delete. A loopback
+	// bind with no budget flag gets no limiter and no counter file at all.
+	var spend *budget.Limiter
+	quotaPath := ""
+	if budgetOn {
+		quotaPath = strings.TrimSpace(*quotaFile)
+		if quotaPath == "" {
+			quotaPath = filepath.Join(filepath.Dir(*dbFlag), "quota.json")
+		}
+		spend, err = budget.New(budget.Config{
+			Bounds: budget.Bounds{
+				PerMinute:        *askRate,
+				PerDay:           *askQuota,
+				PerAddressPerDay: *addressQuota,
+				GlobalPerDay:     *globalQuota,
+				MaxInflight:      *maxInflight,
+			},
+			Path: quotaPath,
+		})
+		if err != nil {
+			fmt.Fprintf(stderr, "agent serve: %v\n", err)
+			return 1
+		}
+	}
+
 	// Embeddings and chat each get their own endpoint and credential: the
 	// embedding model may stay local while the chat model is a cloud provider.
 	hc := shared.NewHTTPClient(embedHTTPTimeout)
@@ -163,11 +237,14 @@ func runServe(args []string, rtCfg envcfg.Config, stderr io.Writer) int {
 	chatClient.TokenParam = rtCfg.ChatTokenParam
 	searcher := &retrieval.Searcher{Store: st, Embedder: embedClient, Model: rtCfg.EmbedModel}
 	loop := &agentloop.Runner{
-		Searcher:   searcher,
-		Chat:       chatClient,
-		Model:      rtCfg.ChatModel,
-		MaxElapsed: askTimeout,
+		Searcher:      searcher,
+		Chat:          chatClient,
+		Model:         rtCfg.ChatModel,
+		MaxElapsed:    askTimeout,
+		MaxTokens:     *maxTokens,
+		ExcerptTokens: *excerptTokens,
 	}
+	// The embedding bucket covers /v1/retrieve; answers are limited by spend.
 	limiter := ratelimit.New(*rateLimit)
 	authAttempts := ratelimit.New(*authLimit)
 
@@ -176,15 +253,23 @@ func runServe(args []string, rtCfg envcfg.Config, stderr io.Writer) int {
 	for _, path := range a2a.CardPaths {
 		mux.Handle("GET "+path, logging.RequestMiddleware(path, card))
 	}
+	a2aHandler := a2a.NewHandler(loop)
+	if spend != nil {
+		a2aHandler.Budget = spend
+	}
 	mux.Handle(a2a.CardURLPath, logging.RequestMiddleware(a2a.CardURLPath,
-		requireToken(tokens, surfaceRPC, authAttempts,
-			limitTasks(limiter, surfaceRPC, a2a.NewHandler(loop)))))
-	mux.Handle(retrieveRoute, logging.RequestMiddleware(retrieveRoute,
-		requireToken(tokens, surfaceJSON, authAttempts,
-			limitTasks(limiter, surfaceJSON, newRetrieveHandler(searcher)))))
+		requireToken(tokens, surfaceRPC, authAttempts, a2aHandler)))
+	// /v1/retrieve is a private debugging path: the loop already retrieves
+	// internally, so a public bind must not expose an embedding endpoint that
+	// only spends money and invites abuse.
+	if !*bindPublic || *allowPublicRetrieve {
+		mux.Handle(retrieveRoute, logging.RequestMiddleware(retrieveRoute,
+			requireToken(tokens, surfaceJSON, authAttempts,
+				limitRetrieval(limiter, surfaceJSON, newRetrieveHandler(searcher)))))
+	}
 	mux.Handle(askRoute, logging.RequestMiddleware(askRoute,
 		requireToken(tokens, surfaceJSON, authAttempts,
-			limitTasks(limiter, surfaceJSON, newAskHandler(loop)))))
+			newAskHandler(loop, spend))))
 
 	srv := &http.Server{
 		Addr:              *addr,
@@ -209,6 +294,16 @@ func runServe(args []string, rtCfg envcfg.Config, stderr io.Writer) int {
 		Bool("public_bind", *bindPublic).
 		Bool("auth", secured).
 		Int("tokens", tokens.Len()).
+		Str("quota_file", quotaPath).
+		Bool("budget_enabled", spend != nil).
+		Int("ask_rate_per_min", *askRate).
+		Int("ask_quota_per_day", *askQuota).
+		Int("address_quota_per_day", *addressQuota).
+		Int("quota_global_per_day", *globalQuota).
+		Int("max_inflight", *maxInflight).
+		Bool("public_retrieve", !*bindPublic || *allowPublicRetrieve).
+		Int("max_tokens", *maxTokens).
+		Int("excerpt_tokens", *excerptTokens).
 		Int("rate_limit_per_min", *rateLimit).
 		Int("auth_limit_per_min", *authLimit).
 		Msg("server listening")
@@ -256,6 +351,33 @@ func serveAgentCard(secured func() bool, baseURL string) http.Handler {
 			log.Error().Err(err).Msg("write agent card failed")
 		}
 	})
+}
+
+// budgetFlags are the flags that turn the spend budget on for a loopback bind.
+// `--quota-file` alone does not: it only relocates the counters.
+var budgetFlags = map[string]bool{
+	"ask-rate":      true,
+	"ask-quota":     true,
+	"address-quota": true,
+	"quota-global":  true,
+	"max-inflight":  true,
+}
+
+// budgetActive reports whether the spend budget applies to this bind. A public
+// bind is always budgeted; a loopback bind is the dev/eval surface (evals/ and
+// tests-ai/ run their whole suite against it) and stays uncapped unless the
+// operator asks for a budget explicitly.
+func budgetActive(bindPublic bool, fs *flag.FlagSet) bool {
+	if bindPublic {
+		return true
+	}
+	active := false
+	fs.Visit(func(f *flag.Flag) {
+		if budgetFlags[f.Name] {
+			active = true
+		}
+	})
+	return active
 }
 
 // cardBaseURL resolves the service root the agent card advertises. Public
@@ -392,16 +514,14 @@ func writeAuthError(w http.ResponseWriter, surface string) {
 	writeJSONError(w, http.StatusUnauthorized, "unauthorized")
 }
 
-// limitTasks applies the per-token task budget to the answer-bearing routes.
-// An unauthenticated (dev) request is keyed by peer address so a local caller
-// cannot monopolize the model host either.
-func limitTasks(limiter *ratelimit.Limiter, surface string, next http.Handler) http.Handler {
+// limitRetrieval applies the embedding bucket to the private /v1/retrieve
+// route. Answers are bounded by spend in internal/budget instead, because a
+// minute rate cannot cap a model bill.
+func limitRetrieval(limiter *ratelimit.Limiter, surface string, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		key := ""
+		key := "ip:" + remoteHost(r.RemoteAddr)
 		if token, ok := auth.TokenFrom(r.Context()); ok {
-			key = token.ID
-		} else {
-			key = "ip:" + remoteHost(r.RemoteAddr)
+			key = "token:" + token.ID
 		}
 		if retry, ok := allowKey(limiter, key); !ok {
 			writeRateLimitError(w, surface, key, retry)
@@ -420,19 +540,29 @@ func allowKey(limiter *ratelimit.Limiter, key string) (time.Duration, bool) {
 	return limiter.Allow(key)
 }
 
-// writeRateLimitError writes the 429 both surfaces use, with Retry-After and a
-// JSON-RPC -32000 body on /a2a.
+// writeRateLimitError is the minute-bucket refusal (the embedding bucket and
+// failed auth); it is a budget refusal with the rate scope.
 func writeRateLimitError(w http.ResponseWriter, surface, key string, retry time.Duration) {
-	seconds := int(math.Ceil(retry.Seconds()))
+	writeBudgetError(w, surface, key, &budget.Refusal{Scope: budget.ScopeRate, RetryAfter: retry})
+}
+
+// writeBudgetError writes the 429 both surfaces use, with Retry-After and a
+// JSON-RPC -32000 body carrying the scope on /a2a.
+func writeBudgetError(w http.ResponseWriter, surface, key string, refusal *budget.Refusal) {
+	seconds := int(math.Ceil(refusal.RetryAfter.Seconds()))
 	if seconds < 1 {
 		seconds = 1
 	}
 	w.Header().Set("Retry-After", strconv.Itoa(seconds))
 	// Log at most once per key per minute: this path is reachable without
 	// credentials, and an unbounded warning stream is its own DoS.
-	if rateLimitLog.allow(surface + "|" + key) {
+	if rateLimitLog.Allow(surface + "|" + key) {
 		log := logging.HTTP()
-		log.Warn().Str("key", key).Int("retry_after_s", seconds).Msg("rate limit exceeded")
+		log.Warn().
+			Str("key", key).
+			Str("scope", string(refusal.Scope)).
+			Int("retry_after_s", seconds).
+			Msg("budget refused")
 	}
 	if surface == surfaceRPC {
 		w.Header().Set("Content-Type", "application/json; charset=utf-8")
@@ -442,47 +572,21 @@ func writeRateLimitError(w http.ResponseWriter, surface, key string, retry time.
 			ID:      json.RawMessage("null"),
 			Error: &a2a.Error{
 				Code:    a2a.CodeServerError,
-				Message: "rate limit exceeded",
-				Data:    map[string]any{"retry_after_seconds": seconds},
+				Message: refusal.Message(),
+				Data: map[string]any{
+					"reason":              "quota_exceeded",
+					"scope":               string(refusal.Scope),
+					"retry_after_seconds": seconds,
+				},
 			},
 		})
 		return
 	}
-	writeJSONError(w, http.StatusTooManyRequests, "rate limit exceeded")
-}
-
-// keyedThrottle allows one log line per key per window.
-type keyedThrottle struct {
-	mu     sync.Mutex
-	window time.Duration
-	last   map[string]time.Time
-}
-
-func newKeyedThrottle(window time.Duration) *keyedThrottle {
-	return &keyedThrottle{window: window, last: make(map[string]time.Time)}
-}
-
-// allow reports whether key may log now, and records the attempt.
-func (t *keyedThrottle) allow(key string) bool {
-	now := time.Now()
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	if last, ok := t.last[key]; ok && now.Sub(last) < t.window {
-		return false
-	}
-	t.last[key] = now
-	if len(t.last) > 4096 {
-		for k, seen := range t.last {
-			if now.Sub(seen) >= t.window {
-				delete(t.last, k)
-			}
-		}
-	}
-	return true
+	writeJSONError(w, http.StatusTooManyRequests, refusal.Message())
 }
 
 // rateLimitLog bounds rate-limit warning lines per key.
-var rateLimitLog = newKeyedThrottle(time.Minute)
+var rateLimitLog = logging.NewThrottle(time.Minute)
 
 // remoteHost strips the port from a RemoteAddr.
 func remoteHost(addr string) string {
@@ -491,6 +595,23 @@ func remoteHost(addr string) string {
 		return addr
 	}
 	return host
+}
+
+// askCaller resolves who a /v1/ask call is charged to: a configured bearer
+// token is the only verified identity, then the self-asserted X-User-Id, then
+// the peer address. The address is charged alongside the principal, so
+// rotating an id cannot escape the per-address gate.
+func askCaller(r *http.Request) (budget.Caller, error) {
+	principal := budget.Principal{Kind: budget.KindAddr, ID: budget.PeerAddress(r)}
+	if token, ok := auth.TokenFrom(r.Context()); ok {
+		principal = budget.Principal{Kind: budget.KindToken, ID: token.ID}
+	} else if id := strings.TrimSpace(r.Header.Get("X-User-Id")); id != "" {
+		if !budget.ValidID(id) {
+			return budget.Caller{}, fmt.Errorf("X-User-Id must match [A-Za-z0-9._-]{1,64}")
+		}
+		principal = budget.Principal{Kind: budget.KindUser, ID: id}
+	}
+	return budget.Caller{Principal: principal, Address: budget.PeerAddress(r)}, nil
 }
 
 // retriever is the slice of retrieval.Searcher the HTTP handler needs, so
@@ -601,10 +722,12 @@ type askRequest struct {
 
 type askHandler struct {
 	loop answerer
+	// spend charges one answer to the caller; nil disables the budget.
+	spend *budget.Limiter
 }
 
-func newAskHandler(loop answerer) http.Handler {
-	return &askHandler{loop: loop}
+func newAskHandler(loop answerer, spend *budget.Limiter) http.Handler {
+	return &askHandler{loop: loop, spend: spend}
 }
 
 func (h *askHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -636,6 +759,27 @@ func (h *askHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	caller, err := askCaller(r)
+	if err != nil {
+		writeJSONError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	release, err := h.spend.Acquire(caller)
+	if err != nil {
+		if refusal, ok := budget.AsRefusal(err); ok {
+			// Throttle by the peer address, not the self-asserted principal: a
+			// peer rotating X-User-Id would otherwise mint a fresh log key per
+			// request and defeat the throttle.
+			writeBudgetError(w, surfaceJSON, "ip:"+budget.PeerAddress(r), refusal)
+			return
+		}
+		log := logging.HTTP()
+		log.Error().Err(err).Msg("ask budget unavailable")
+		writeJSONError(w, http.StatusBadGateway, "answer failed")
+		return
+	}
+	defer release()
+
 	ctx, cancel := context.WithTimeout(r.Context(), askTimeout)
 	defer cancel()
 
@@ -646,10 +790,11 @@ func (h *askHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		tokenID = token.ID
 	}
 	entry := audit.Entry{
-		TokenID:  tokenID,
-		Method:   "v1/ask",
-		Question: req.Question,
-		Elapsed:  time.Since(start),
+		Principal: caller.Principal.String(),
+		TokenID:   tokenID,
+		Method:    "v1/ask",
+		Question:  req.Question,
+		Elapsed:   time.Since(start),
 	}
 	log := logging.HTTP()
 	if err != nil {

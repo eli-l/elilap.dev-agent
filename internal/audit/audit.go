@@ -29,8 +29,12 @@ const (
 // Entry is one task record. Question is hashed before it reaches the log; it
 // is never serialized.
 type Entry struct {
-	// TokenID is the authenticated token id, or empty for the token-less
-	// loopback dev surface.
+	// Principal is the identity the budget charged: agent:<id>, user:<id>,
+	// token:<id>, or ip:<addr>. It is self-asserted on a token-less public
+	// bind, so it labels the caller without proving anything about it.
+	Principal string
+	// TokenID is the authenticated token id, or empty when no token gated the
+	// request (the token-less dev and public surfaces).
 	TokenID string
 	// Method is the surface that handled the task, e.g. "a2a/message/send".
 	Method string
@@ -58,6 +62,7 @@ func Answer(e Entry) {
 	sum := sha256.Sum256([]byte(e.Question))
 	log := logging.Audit()
 	log.Info().
+		Str("principal", e.Principal).
 		Str("token_id", e.TokenID).
 		Str("method", e.Method).
 		Str("question_sha256", hex.EncodeToString(sum[:])).

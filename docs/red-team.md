@@ -130,7 +130,8 @@ cd tests-ai && npm run redteam:generate -- --force
 
 The suite sends deliberately harmful and manipulative prompts. Keep the target
 on `127.0.0.1` (a token-less server refuses non-loopback binds; a public bind
-needs `--bind-public` plus a token), and never point it at an exposed
+needs `--bind-public` plus non-zero daily quotas, and optionally a token), and
+never point it at an exposed
 deployment. Generated probes (`tests-ai/redteam.yaml`), `tests-ai/reports/*`,
 and `tests-ai/.promptfoo/` are local evidence only - generated attacks can
 contain offensive text - so they are gitignored; only the configs, the

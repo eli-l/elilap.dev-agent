@@ -13,7 +13,9 @@ import (
 
 	"github.com/eli-l/elilap.dev-agent/internal/a2a"
 	"github.com/eli-l/elilap.dev-agent/internal/auth"
+	"github.com/eli-l/elilap.dev-agent/internal/budget"
 	"github.com/eli-l/elilap.dev-agent/internal/envcfg"
+	"github.com/eli-l/elilap.dev-agent/internal/logging"
 	"github.com/eli-l/elilap.dev-agent/internal/ratelimit"
 )
 
@@ -96,30 +98,42 @@ func TestRequireTokenAttachesTokenID(t *testing.T) {
 	}
 }
 
-func TestLimitTasksReturns429(t *testing.T) {
-	limiter := ratelimit.New(1)
-	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusOK) })
-	h := limitTasks(limiter, surfaceRPC, next)
-
-	first := httptest.NewRecorder()
-	h.ServeHTTP(first, httptest.NewRequest(http.MethodPost, "/a2a", nil))
-	if first.Code != http.StatusOK {
-		t.Fatalf("first status = %d", first.Code)
-	}
-	second := httptest.NewRecorder()
-	h.ServeHTTP(second, httptest.NewRequest(http.MethodPost, "/a2a", nil))
-	if second.Code != http.StatusTooManyRequests {
-		t.Fatalf("second status = %d, want 429", second.Code)
-	}
-	if second.Header().Get("Retry-After") == "" {
-		t.Error("429 response has no Retry-After")
-	}
-	var resp a2a.Response
-	if err := json.Unmarshal(second.Body.Bytes(), &resp); err != nil {
-		t.Fatalf("decode: %v", err)
-	}
-	if resp.Error == nil || resp.Error.Code != a2a.CodeServerError {
-		t.Errorf("error = %+v, want the documented server error code", resp.Error)
+func TestWriteBudgetErrorReturns429(t *testing.T) {
+	for _, surface := range []string{surfaceRPC, surfaceJSON} {
+		t.Run(surface, func(t *testing.T) {
+			rec := httptest.NewRecorder()
+			writeBudgetError(rec, surface, "peer", &budget.Refusal{
+				Scope:      budget.ScopeGlobalDaily,
+				RetryAfter: 90 * time.Second,
+			})
+			if rec.Code != http.StatusTooManyRequests {
+				t.Fatalf("status = %d, want 429", rec.Code)
+			}
+			if got, want := rec.Header().Get("Retry-After"), "90"; got != want {
+				t.Errorf("Retry-After = %q, want %q", got, want)
+			}
+			if surface == surfaceRPC {
+				var resp a2a.Response
+				if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+					t.Fatalf("decode: %v", err)
+				}
+				if resp.Error == nil || resp.Error.Code != a2a.CodeServerError {
+					t.Errorf("error = %+v, want the documented server error code", resp.Error)
+				}
+				data, _ := resp.Error.Data.(map[string]any)
+				if data["scope"] != string(budget.ScopeGlobalDaily) {
+					t.Errorf("scope = %v, want global_daily", data["scope"])
+				}
+				return
+			}
+			var body map[string]string
+			if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+				t.Fatalf("decode: %v", err)
+			}
+			if body["error"] != "daily quota exhausted" {
+				t.Errorf("error = %q, want the quota message", body["error"])
+			}
+		})
 	}
 }
 
@@ -228,10 +242,10 @@ func TestRequireTokenStaysSecuredAfterFileRemoval(t *testing.T) {
 	}
 }
 
-func TestRunServeRejectsPublicBindWithoutToken(t *testing.T) {
+func TestRunServeRejectsPublicBindWithoutQuotas(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "missing.db")
 	var stderr bytes.Buffer
-	code := runServe([]string{"--addr", "0.0.0.0:8080", "--bind-public", "--db", dbPath},
+	code := runServe([]string{"--addr", "0.0.0.0:8080", "--bind-public", "--db", dbPath, "--ask-quota", "0"},
 		envcfg.Config{
 			DBPath:        dbPath,
 			EmbedModel:    envcfg.DefaultEmbedModel,
@@ -240,8 +254,30 @@ func TestRunServeRejectsPublicBindWithoutToken(t *testing.T) {
 	if code != 2 {
 		t.Errorf("exit = %d, want 2", code)
 	}
-	if !strings.Contains(stderr.String(), "requires an A2A token") {
-		t.Errorf("stderr = %q, want the token requirement", stderr.String())
+	if !strings.Contains(stderr.String(), "--ask-quota, --address-quota, and --quota-global") {
+		t.Errorf("stderr = %q, want the spend-ceiling requirement", stderr.String())
+	}
+}
+
+// TestRunServePublicBindDoesNotRequireToken pins the token-less public mode:
+// with quotas set and no token, startup gets past the bind checks and fails on
+// the missing index instead of on auth.
+func TestRunServePublicBindDoesNotRequireToken(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "missing.db")
+	var stderr bytes.Buffer
+	code := runServe([]string{"--addr", "0.0.0.0:8080", "--bind-public", "--db", dbPath},
+		envcfg.Config{
+			DBPath:        dbPath,
+			EmbedModel:    envcfg.DefaultEmbedModel,
+			A2ATokensFile: filepath.Join(dir, "absent"),
+			A2APublicURL:  "https://agent.example",
+		}, &stderr)
+	if code != 1 {
+		t.Errorf("exit = %d, want 1 (missing index), stderr = %q", code, stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "no index at") {
+		t.Errorf("stderr = %q, want the missing-index error, not a token requirement", stderr.String())
 	}
 }
 
@@ -269,7 +305,8 @@ func TestRunServeRejectsPublicBindWithoutPublicURL(t *testing.T) {
 		t.Fatalf("write token file: %v", err)
 	}
 	var stderr bytes.Buffer
-	code := runServe([]string{"--addr", "0.0.0.0:8080", "--bind-public", "--db", filepath.Join(dir, "missing.db")},
+	code := runServe([]string{"--addr", "0.0.0.0:8080", "--bind-public", "--db", filepath.Join(dir, "missing.db"),
+		"--ask-quota", "5", "--address-quota", "5", "--quota-global", "10"},
 		envcfg.Config{
 			DBPath:        filepath.Join(dir, "missing.db"),
 			EmbedModel:    envcfg.DefaultEmbedModel,
@@ -380,15 +417,31 @@ func TestRunServeRejectsNegativeAuthLimit(t *testing.T) {
 	}
 }
 
-func TestKeyedThrottleBoundsLogs(t *testing.T) {
-	throttle := newKeyedThrottle(time.Minute)
-	if !throttle.allow("alice") {
+func TestThrottleBoundsLogs(t *testing.T) {
+	throttle := logging.NewThrottle(time.Minute)
+	if !throttle.Allow("alice") {
 		t.Fatal("first log was suppressed")
 	}
-	if throttle.allow("alice") {
+	if throttle.Allow("alice") {
 		t.Fatal("second log in the same window was allowed")
 	}
-	if !throttle.allow("bob") {
+	if !throttle.Allow("bob") {
 		t.Fatal("another key was suppressed")
+	}
+}
+
+func TestRunServeRejectsNegativeQuota(t *testing.T) {
+	var stderr bytes.Buffer
+	code := runServe([]string{"--ask-quota", "-1", "--db", filepath.Join(t.TempDir(), "missing.db")},
+		envcfg.Config{
+			DBPath:        filepath.Join(t.TempDir(), "missing.db"),
+			EmbedModel:    envcfg.DefaultEmbedModel,
+			A2ATokensFile: filepath.Join(t.TempDir(), "absent"),
+		}, &stderr)
+	if code != 2 {
+		t.Errorf("exit = %d, want 2", code)
+	}
+	if !strings.Contains(stderr.String(), "--ask-quota must be >= 0") {
+		t.Errorf("stderr = %q, want the quota validation", stderr.String())
 	}
 }

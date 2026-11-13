@@ -149,7 +149,10 @@ A server with no configured token refuses to start unless `--addr` names a
 loopback host: `:8080`, `0.0.0.0`, and LAN addresses are startup errors.
 Default is `127.0.0.1:8080`. Since 2026-11-05 a configured bearer token gates
 `/v1/retrieve`, `/v1/ask`, and `/a2a`; exposing the server needs
-`--bind-public` plus a token. The path and JSON are unchanged from Phase 2
+`--bind-public` plus non-zero daily quotas, and a token gates every path when
+one is configured. `/v1/retrieve` is a private debug path and is not registered
+on a public bind unless `--allow-public-retrieve` is given. The path and JSON
+are unchanged from Phase 2
 (see [a2a.md](/a2a.md) and [agent-architecture.md](/agent-architecture.md)).
 
 ## How it is tested

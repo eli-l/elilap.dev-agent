@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"flag"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -15,6 +16,7 @@ import (
 	"time"
 
 	"github.com/eli-l/elilap.dev-agent/internal/agentloop"
+	"github.com/eli-l/elilap.dev-agent/internal/budget"
 	"github.com/eli-l/elilap.dev-agent/internal/envcfg"
 	"github.com/eli-l/elilap.dev-agent/internal/retrieval"
 	"github.com/eli-l/elilap.dev-agent/internal/store"
@@ -337,7 +339,7 @@ func TestAskHandlerReturnsAnswer(t *testing.T) {
 		Citations: []agentloop.Citation{{SourceKind: "ghost_post", SourceURL: "https://x", Excerpt: "e"}},
 		Sources:   []agentloop.Source{{Kind: "ghost_post", URL: "https://x"}},
 	}}
-	rec := postAsk(t, newAskHandler(stub), `{"question":" what about harnesses? "}`)
+	rec := postAsk(t, newAskHandler(stub, nil), `{"question":" what about harnesses? "}`)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200: %s", rec.Code, rec.Body.String())
 	}
@@ -358,7 +360,7 @@ func TestAskHandlerEmptyCitationsIsArray(t *testing.T) {
 	stub := &stubAnswerer{answer: agentloop.Answer{
 		Answer: agentloop.Refusal, Refused: true,
 	}}
-	rec := postAsk(t, newAskHandler(stub), `{"question":"off corpus"}`)
+	rec := postAsk(t, newAskHandler(stub, nil), `{"question":"off corpus"}`)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d", rec.Code)
 	}
@@ -389,7 +391,7 @@ func TestAskHandlerRejectsBadRequests(t *testing.T) {
 			stub := &stubAnswerer{}
 			req := httptest.NewRequest(tc.method, askRoute, strings.NewReader(tc.body))
 			rec := httptest.NewRecorder()
-			newAskHandler(stub).ServeHTTP(rec, req)
+			newAskHandler(stub, nil).ServeHTTP(rec, req)
 			if rec.Code != tc.status {
 				t.Fatalf("status = %d, want %d: %s", rec.Code, tc.status, rec.Body.String())
 			}
@@ -416,7 +418,7 @@ func TestAskHandlerMapsErrors(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			rec := postAsk(t, newAskHandler(&stubAnswerer{err: tc.err}), `{"question":"q"}`)
+			rec := postAsk(t, newAskHandler(&stubAnswerer{err: tc.err}, nil), `{"question":"q"}`)
 			if rec.Code != tc.status {
 				t.Fatalf("status = %d, want %d", rec.Code, tc.status)
 			}
@@ -425,6 +427,127 @@ func TestAskHandlerMapsErrors(t *testing.T) {
 			}
 			if strings.Contains(rec.Body.String(), "chat returned") {
 				t.Errorf("body leaks the backend error: %s", rec.Body.String())
+			}
+		})
+	}
+}
+
+func TestAskHandlerChargesTheBudgetAndRefuses(t *testing.T) {
+	spend, err := budget.New(budget.Config{Bounds: budget.Bounds{PerDay: 1}})
+	if err != nil {
+		t.Fatalf("budget: %v", err)
+	}
+	stub := &stubAnswerer{answer: agentloop.Answer{Answer: "ok"}}
+	h := newAskHandler(stub, spend)
+
+	first := postAsk(t, h, `{"question":"q"}`)
+	if first.Code != http.StatusOK {
+		t.Fatalf("first status = %d, want 200: %s", first.Code, first.Body.String())
+	}
+	second := postAsk(t, h, `{"question":"q"}`)
+	if second.Code != http.StatusTooManyRequests {
+		t.Fatalf("second status = %d, want 429: %s", second.Code, second.Body.String())
+	}
+	if second.Header().Get("Retry-After") == "" {
+		t.Error("429 response has no Retry-After")
+	}
+	var body map[string]string
+	if err := json.Unmarshal(second.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if body["error"] != "daily quota exhausted" {
+		t.Errorf("error = %q, want the quota message", body["error"])
+	}
+	if stub.calls != 1 {
+		t.Errorf("loop calls = %d, want 1: a refused answer must not run the loop", stub.calls)
+	}
+}
+
+// TestAskHandlerKeysTheQuotaByUserID proves the self-asserted identity is what
+// the per-identity gate is keyed by, not the socket address both requests
+// share.
+func TestAskHandlerKeysTheQuotaByUserID(t *testing.T) {
+	spend, err := budget.New(budget.Config{Bounds: budget.Bounds{PerDay: 1}})
+	if err != nil {
+		t.Fatalf("budget: %v", err)
+	}
+	stub := &stubAnswerer{answer: agentloop.Answer{Answer: "ok"}}
+	h := newAskHandler(stub, spend)
+
+	post := func(user string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodPost, askRoute, strings.NewReader(`{"question":"q"}`))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("X-User-Id", user)
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		return rec
+	}
+
+	if rec := post("alice"); rec.Code != http.StatusOK {
+		t.Fatalf("alice status = %d: %s", rec.Code, rec.Body.String())
+	}
+	if rec := post("bob"); rec.Code != http.StatusOK {
+		t.Fatalf("bob status = %d, want 200: bob has his own share: %s", rec.Code, rec.Body.String())
+	}
+	if rec := post("alice"); rec.Code != http.StatusTooManyRequests {
+		t.Fatalf("alice's second status = %d, want 429", rec.Code)
+	}
+}
+
+func TestAskHandlerRejectsInvalidUserID(t *testing.T) {
+	stub := &stubAnswerer{answer: agentloop.Answer{Answer: "ok"}}
+	h := newAskHandler(stub, nil)
+
+	req := httptest.NewRequest(http.MethodPost, askRoute, strings.NewReader(`{"question":"q"}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-User-Id", "not a valid id")
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400", rec.Code)
+	}
+	if stub.calls != 0 {
+		t.Errorf("loop calls = %d, want 0", stub.calls)
+	}
+}
+
+// TestBudgetActive pins when the spend budget applies: always on a public bind,
+// and on a loopback bind only when the operator asked for it. The eval
+// harnesses run `agent serve --addr 127.0.0.1:18080` with no budget flags, so a
+// default cap there would silently fail their suites.
+func TestBudgetActive(t *testing.T) {
+	newFlags := func() *flag.FlagSet {
+		fs := flag.NewFlagSet("agent serve", flag.ContinueOnError)
+		for name := range budgetFlags {
+			fs.Int(name, 0, "")
+		}
+		fs.String("quota-file", "", "")
+		fs.Int("auth-limit", 0, "")
+		return fs
+	}
+	cases := []struct {
+		name   string
+		public bool
+		args   []string
+		want   bool
+	}{
+		{name: "loopback default", public: false, want: false},
+		{name: "public default", public: true, want: true},
+		{name: "loopback explicit quota", public: false, args: []string{"--ask-quota", "5"}, want: true},
+		{name: "loopback explicit rate", public: false, args: []string{"--ask-rate", "2"}, want: true},
+		{name: "loopback explicit inflight", public: false, args: []string{"--max-inflight", "1"}, want: true},
+		{name: "loopback quota file alone", public: false, args: []string{"--quota-file", "/tmp/q.json"}, want: false},
+		{name: "loopback auth limit alone", public: false, args: []string{"--auth-limit", "5"}, want: false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			fs := newFlags()
+			if err := fs.Parse(tc.args); err != nil {
+				t.Fatalf("parse: %v", err)
+			}
+			if got := budgetActive(tc.public, fs); got != tc.want {
+				t.Errorf("budgetActive(public=%v, %v) = %v, want %v", tc.public, tc.args, got, tc.want)
 			}
 		})
 	}

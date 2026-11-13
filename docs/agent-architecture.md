@@ -225,10 +225,11 @@ with `curl`:
   out, with a 90s request budget and 502/504 on backend failure/timeout.
 
 The A2A hardening landed 2026-11-05: both paths and the JSON are unchanged,
-and bearer auth, the per-token rate limit, and the audit log now wrap them.
-With a configured token the same two paths require
-`Authorization: Bearer <token>`, and the audit stream records each
-`/v1/ask` task. See [a2a.md](/a2a.md) for the wire contract and
+and bearer auth, the rate limit, and the audit log now wrap them. A configured
+token gates both paths with `Authorization: Bearer <token>`; a token-less
+public bind instead charges a self-asserted agent/user identity against the
+spend budget (Decision 25). The audit stream records each `/v1/ask` task. See
+[a2a.md](/a2a.md) for the wire contract and
 [runbook.md](/runbook.md) for the operator commands.
 
 ## The A2A surface
@@ -248,10 +249,14 @@ A2A v0.3 JSON-RPC binding, exposing the *agent*:
   describing grounded Q&A over Eli's published writing.
 * `POST /v1/retrieve` is the deterministic escape hatch for callers that want
   ranked chunks instead of conversation, on the same auth.
-* Security: bearer token from env or a re-read `0600` file, `127.0.0.1` bind
-  by default, `--bind-public` only with a token, 30 tasks/min per token plus
-  the loop's per-task wall-clock budget, an 8 KiB question cap, and an audit
-  log that records the question and outcome but never the answer or excerpts.
+* Security: an optional bearer token from env or a re-read `0600` file (it
+  gates every path when set), `127.0.0.1` bind by default, and a public
+  `--bind-public` bind that requires a spend ceiling (3/min per identity,
+  20/day per identity, 20/day per address, 60/day global, 2 concurrent
+  answers) instead of a token. The loop's per-task wall-clock budget, an
+  8 KiB question cap, and an audit log that records the principal, the
+  question fingerprint, and the outcome but never the answer or excerpts
+  still apply.
   Peer task text is data, never instructions - the grounded prompt and
   refusing any answer produced without a retrieved excerpt are the
   prompt-injection backstops.

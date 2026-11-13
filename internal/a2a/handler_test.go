@@ -8,9 +8,12 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/eli-l/elilap.dev-agent/internal/a2a"
 	"github.com/eli-l/elilap.dev-agent/internal/agentloop"
+	"github.com/eli-l/elilap.dev-agent/internal/auth"
+	"github.com/eli-l/elilap.dev-agent/internal/budget"
 )
 
 // answererFunc adapts a function to a2a.Answerer.
@@ -450,5 +453,142 @@ func TestOversizedTrailingDataIs413(t *testing.T) {
 	rec := post(t, a2a.NewHandler(loop), body)
 	if rec.Code != http.StatusRequestEntityTooLarge {
 		t.Fatalf("status = %d, want 413: %s", rec.Code, rec.Body.String())
+	}
+}
+
+// acqFunc adapts a function to a2a.Acquirer.
+type acqFunc func(budget.Caller) (func(), error)
+
+func (f acqFunc) Acquire(c budget.Caller) (func(), error) { return f(c) }
+
+// sendBodyWithMeta is sendBody plus optional message metadata.
+func sendBodyWithMeta(agentID string) string {
+	meta := ""
+	if agentID != "" {
+		meta = `"metadata":{"agentId":` + strconvQuote(agentID) + `},`
+	}
+	return `{
+		"jsonrpc": "2.0",
+		"id": 7,
+		"method": "message/send",
+		"params": {
+			"message": {
+				"kind": "message",
+				"role": "user",
+				"messageId": "m-1",
+				` + meta + `
+				"parts": [{"kind": "text", "text": "q"}]
+			}
+		}
+	}`
+}
+
+// TestMessageSendChargesTheBudgetAndRefuses pins the refusal shape: the real
+// 429 status, a Retry-After, the scope in the error data, and no loop run.
+func TestMessageSendChargesTheBudgetAndRefuses(t *testing.T) {
+	var got budget.Caller
+	loop := answererFunc(func(context.Context, string) (agentloop.Answer, error) {
+		t.Error("the loop ran for a refused answer")
+		return agentloop.Answer{}, nil
+	})
+	h := a2a.NewHandler(loop)
+	h.Budget = acqFunc(func(c budget.Caller) (func(), error) {
+		got = c
+		return nil, &budget.Refusal{Scope: budget.ScopeGlobalDaily, RetryAfter: time.Hour}
+	})
+
+	rec := post(t, h, sendBodyWithMeta("peer-7"))
+	if rec.Code != http.StatusTooManyRequests {
+		t.Fatalf("status = %d, want 429: %s", rec.Code, rec.Body.String())
+	}
+	if retry := rec.Header().Get("Retry-After"); retry != "3600" {
+		t.Errorf("Retry-After = %q, want 3600", retry)
+	}
+	env := decode(t, rec)
+	if env.Error == nil || env.Error.Code != a2a.CodeServerError {
+		t.Fatalf("error = %+v, want the documented server error code", env.Error)
+	}
+	data, _ := env.Error.Data.(map[string]any)
+	if data["scope"] != string(budget.ScopeGlobalDaily) {
+		t.Errorf("data.scope = %v, want global_daily", data["scope"])
+	}
+	if data["reason"] != "quota_exceeded" {
+		t.Errorf("data.reason = %v, want quota_exceeded", data["reason"])
+	}
+	if got.Principal.String() != "agent:peer-7" {
+		t.Errorf("charged principal = %q, want agent:peer-7", got.Principal.String())
+	}
+	if got.Address == "" {
+		t.Error("caller has no address, so the per-address gate cannot apply")
+	}
+}
+
+// TestMessageSendIdentityPrecedence pins who an answer is charged to: a bearer
+// token beats the self-asserted id, the metadata beats the header, and nothing
+// asserted falls back to the peer address.
+func TestMessageSendIdentityPrecedence(t *testing.T) {
+	cases := []struct {
+		name   string
+		meta   string
+		header string
+		token  string
+		want   string
+	}{
+		{name: "metadata", meta: "peer-7", want: "agent:peer-7"},
+		{name: "header", header: "peer-8", want: "agent:peer-8"},
+		{name: "metadata beats header", meta: "peer-7", header: "peer-8", want: "agent:peer-7"},
+		{name: "nothing asserted", want: "ip:192.0.2.1"},
+		{name: "token wins", meta: "peer-7", token: "alice", want: "token:alice"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var got budget.Caller
+			h := a2a.NewHandler(answererFunc(func(context.Context, string) (agentloop.Answer, error) {
+				return agentloop.Answer{Answer: "ok"}, nil
+			}))
+			h.Budget = acqFunc(func(c budget.Caller) (func(), error) {
+				got = c
+				return func() {}, nil
+			})
+
+			req := httptest.NewRequest(http.MethodPost, "/a2a", strings.NewReader(sendBodyWithMeta(tc.meta)))
+			req.Header.Set("Content-Type", "application/json")
+			if tc.header != "" {
+				req.Header.Set("X-Agent-Id", tc.header)
+			}
+			if tc.token != "" {
+				req = req.WithContext(auth.WithToken(req.Context(), auth.Token{ID: tc.token, Value: "v"}))
+			}
+			rec := httptest.NewRecorder()
+			h.ServeHTTP(rec, req)
+
+			if rec.Code != http.StatusOK {
+				t.Fatalf("status = %d, want 200: %s", rec.Code, rec.Body.String())
+			}
+			if got.Principal.String() != tc.want {
+				t.Errorf("charged principal = %q, want %q", got.Principal.String(), tc.want)
+			}
+		})
+	}
+}
+
+func TestMessageSendRejectsInvalidAgentID(t *testing.T) {
+	loop := answererFunc(func(context.Context, string) (agentloop.Answer, error) {
+		t.Error("the loop ran for an invalid agentId")
+		return agentloop.Answer{}, nil
+	})
+	h := a2a.NewHandler(loop)
+	h.Budget = acqFunc(func(budget.Caller) (func(), error) {
+		t.Error("the budget was charged for an invalid agentId")
+		return func() {}, nil
+	})
+
+	rec := post(t, h, sendBodyWithMeta("peer 7"))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want the JSON-RPC 200 transport", rec.Code)
+	}
+	env := decode(t, rec)
+	if env.Error == nil || env.Error.Code != a2a.CodeInvalidParams {
+		t.Errorf("error = %+v, want invalid params", env.Error)
 	}
 }

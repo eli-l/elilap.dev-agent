@@ -123,7 +123,7 @@ func TestAskJSONMatchesHandler(t *testing.T) {
 	if err := printAnswer(&cli, "json", want); err != nil {
 		t.Fatalf("json: %v", err)
 	}
-	rec := postAsk(t, newAskHandler(&stubAnswerer{answer: want}), `{"question":"q"}`)
+	rec := postAsk(t, newAskHandler(&stubAnswerer{answer: want}, nil), `{"question":"q"}`)
 	var fromCLI, fromHTTP agentloop.Answer
 	if err := json.Unmarshal(cli.Bytes(), &fromCLI); err != nil {
 		t.Fatalf("decode cli: %v", err)

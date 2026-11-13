@@ -1,21 +1,22 @@
 ---
 type: Reference
-title: A2A surface - agent card, message/send, tokens, and audit
-description: "The A2A v0.3 JSON-RPC binding served by `agent serve`: agent-card discovery at the well-known paths, the message/send request and response contract with citation metadata, why the service answers with a Message instead of a Task, bearer-token issuance and rotation, the per-token rate limit, and the audit record that never carries the question, answer, or excerpts."
+title: A2A surface - agent card, message/send, tokens, and budget
+description: "The A2A v0.3 JSON-RPC binding served by `agent serve`: agent-card discovery at the well-known paths, the message/send request and response contract with citation metadata, why the service answers with a Message instead of a Task, the three access modes (dev, public token-less, bearer token), the caller identity the spend budget charges, the four daily/in-flight gates that bound a public deployment's model bill, and the audit record that never carries the question, answer, or excerpts."
 status: stable
 generated:
   by: process:agent-a2a
-  at: 2026-11-05T10:50:00Z
+  at: 2026-11-13T18:00:00Z
 verified:
   - by: process:localai-probe
     at: 2026-11-05T10:49:40Z
-tags: [a2a, protocol, agent-card, jsonrpc, auth, rate-limit, audit, serve]
+tags: [a2a, protocol, agent-card, jsonrpc, auth, rate-limit, budget, identity, audit, serve]
 sources:
   - internal/a2a/types.go
   - internal/a2a/card.go
   - internal/a2a/handler.go
   - internal/auth/tokens.go
   - internal/ratelimit/limiter.go
+  - internal/budget/budget.go
   - internal/audit/audit.go
   - cmd/agent/serve.go
   - cmd/agent/tokens.go
@@ -36,7 +37,8 @@ contract.
 
 A2A is the peer-facing surface; `/v1/retrieve` and `/v1/ask` are the JSON
 equivalents the CLI and the Ragas/promptfoo suites use. All three are served
-by the same binary, read the same index, and pass through the same auth.
+by the same binary and read the same index; `/v1/ask` and `/a2a` share one
+budget, while `/v1/retrieve` is a private debugging path.
 
 ## Discovery
 
@@ -169,19 +171,42 @@ methods return `-32003`; `agent/getAuthenticatedExtendedCard` returns
 `-32601`. This is the honest subset: the card advertises no capability the
 server will not honor.
 
-## Authentication
+## Access modes
 
-Two modes, decided by whether any token is configured:
+Three modes, decided by the bind and by whether any token is configured:
 
 | Mode | When | Behaviour |
 |---|---|---|
-| Dev (token-less) | No tokens and a loopback bind | `/a2a`, `/v1/retrieve`, `/v1/ask` are open; the card advertises no security |
-| Token-gated | At least one token, or any `--bind-public` | `Authorization: Bearer <token>` is required on `/a2a` and the `/v1/*` paths |
+| Dev | Loopback bind, no tokens | Every path is open; the card advertises no security |
+| Public, token-less | `--bind-public`, no tokens | `/a2a` and `/v1/ask` are open to any peer; a self-asserted identity keys the spend budget. The card advertises no security |
+| Token-gated | At least one token | `Authorization: Bearer <token>` is required on `/a2a`, `/v1/ask`, and (when served) `/v1/retrieve` |
 
-`--bind-public` is the only way to bind a non-loopback address, and it
-requires at least one token; a public bind without one is a startup error.
+`--bind-public` is the only way to bind a non-loopback address. It requires
+an explicit `AGENT_A2A_PUBLIC_URL` and non-zero daily quotas
+(`--ask-quota`, `--address-quota`, `--quota-global`); it does **not** require a
+token. A public bind with quotas disabled is a startup error — a public agent
+without a spend ceiling is the one configuration this service refuses.
 A 401 carries `WWW-Authenticate: Bearer realm="elilap.dev-agent"`; on `/a2a`
 the body is a JSON-RPC `-32600` error.
+
+### Caller identity
+
+A token is optional, so a public answer is charged to an identity the caller
+asserts. It is an **accounting key, not an authorization decision**: it cannot
+unlock data, and anyone can claim any id.
+
+| Surface | Identity | Source |
+|---|---|---|
+| A2A `message/send` | `agent:<id>` | `params.message.metadata.agentId`, else the `X-Agent-Id` header |
+| `/v1/ask` | `user:<id>` | the `X-User-Id` header |
+| fallback | `ip:<peer>` | the remote address |
+| token present | `token:<id>` | the bearer credential (wins over all of the above) |
+
+An id must match `[A-Za-z0-9._-]{1,64}`; anything else is rejected (`400` on
+`/v1/ask`, `-32602` on `/a2a`). Absent or empty means the peer address. Because
+an id is unauthenticated, the **global daily cap** and the **per-address cap**
+are the boundary that protects the model bill; the per-identity quota is
+fairness between honest callers.
 
 Tokens come from two sources, both declared in `example.env`:
 
@@ -214,20 +239,62 @@ auth on the next request; disabling it requires a restart with no tokens.
 refuses to edit a file with looser permissions. Revoking an id that only
 exists in `AGENT_A2A_TOKENS` is an error: edit the environment instead.
 
-## Rate limit
+## Budget
 
-`--rate-limit` (default 30, `0` disables) is a per-token bucket refilled
-evenly over a minute, applied to every model-touching path: `message/send`,
-`/v1/ask`, and `/v1/retrieve` (retrieval embeds the query on the same model
-host). A token-less dev request is keyed by peer address so a local caller
-cannot pin the model host either. Failed bearer-auth attempts have a separate
-`--auth-limit` budget (default 120/min per address, `0` disables); a successful
-lookup is not charged. The lookup happens before the charge, so one peer
-cannot lock out valid tokens behind the same NAT.
+`agent serve` enforces four gates on every answer-bearing request (`/a2a`
+`message/send` and `/v1/ask`), in `internal/budget`. All of them must pass:
 
-Over-limit requests get HTTP 429 with `Retry-After`; `/a2a` returns JSON-RPC
-error `-32000` with `data.retry_after_seconds`. `-32000` is the documented
-implementation-defined server code for budget problems.
+| Gate | Flag | Default | Key | Purpose |
+|---|---|---|---|---|
+| minute rate | `--ask-rate` | 3/min | identity | burst |
+| identity quota | `--ask-quota` | 20/day | identity | a leaked id cannot drain the day |
+| address quota | `--address-quota` | 20/day | peer address | backstop for rotating ids |
+| global quota | `--quota-global` | 60/day | process | **the spend ceiling** |
+| in-flight | `--max-inflight` | 2 | process | one host cannot be queued into the ground |
+
+`0` disables a gate on a loopback bind and is rejected with `--bind-public`;
+negative values are startup errors. The budget is **on for every public bind**
+and **off for a bare loopback bind**: a loopback server is the dev/eval surface
+(`evals/` and `tests-ai/` run their whole suite against
+`agent serve --addr 127.0.0.1:18080` with no budget flags), so a cap there
+would silently fail those runs. Passing any budget flag (`--ask-rate`,
+`--ask-quota`, `--address-quota`, `--quota-global`, `--max-inflight`) turns the
+whole budget on for a loopback bind, with the defaults above for the gates you
+did not name (`--ask-quota 0` therefore enables the budget with the daily
+identity gate off). `--quota-file` alone does not enable it. A large budget is
+deliberately *not* the
+shape of the protection: `--ask-rate` alone would allow 43,200 requests a day,
+so the daily global quota is the number that bounds a chat-model bill. At the
+loop's own ceilings (3 iterations, 2,048 completion tokens) one answer costs
+roughly $0.005–0.014 on a mid-priced cloud model, so 60/day is tens of dollars a
+month, not hundreds.
+
+Daily counters live in `<db dir>/quota.json` (`--quota-file` overrides; default
+`./data/quota.json`), mode `0600`, written atomically and keyed by UTC day,
+because `serve` opens the index read-only. A restart does not refund the day.
+An unreadable or unparsable file is a startup error (it fails closed rather
+than silently resetting to zero); a failure to write is logged and the counters
+stay enforced in memory. Counters reset at 00:00 UTC, and a daily refusal's
+`Retry-After` is the number of seconds until then.
+
+A request is charged **after** body validation and immediately before the loop
+runs, so a malformed body or a rejected question costs nothing. A refusal is
+HTTP 429 with `Retry-After`; `/a2a` returns JSON-RPC `-32000` with
+`data.reason: "quota_exceeded"`, `data.scope` (one of `rate`, `identity_daily`,
+`address_daily`, `global_daily`, `busy`), and `data.retry_after_seconds`.
+`-32000` is the documented implementation-defined server code for budget
+problems. Refusals are logged with their scope, throttled by peer address
+so a refusal flood and a rotating self-asserted id cannot become their own log
+DoS; the line never carries the question.
+
+`/v1/retrieve` is **private**: it is not registered on a public bind unless
+`--allow-public-retrieve` is given, since the loop already retrieves internally
+and a public embedding endpoint is only an abuse surface. When served, it has
+its own bucket (`--rate-limit`, default 30/min per token or peer address) and
+is not charged against the answer quota. Failed bearer-auth attempts have a
+separate `--auth-limit` budget (default 120/min per address, `0` disables); a
+successful lookup is not charged. The lookup happens before the charge, so one
+peer cannot lock out valid tokens behind the same NAT.
 
 ## Audit log
 
@@ -235,10 +302,12 @@ Every completed task writes one line on the `audit` module (see
 [logging.md](/logging.md)):
 
 ```json
-{"level":"info","module":"audit","token_id":"smoke","method":"a2a/message/send","question_sha256":"<64 hex>","question_bytes":45,"outcome":"answered","tool_iterations":1,"citations":1,"sources":1,"refused":false,"elapsed_ms":2987,"message":"task"}
+{"level":"info","module":"audit","token_id":"","principal":"agent:peer-7","method":"a2a/message/send","question_sha256":"<64 hex>","question_bytes":45,"outcome":"answered","tool_iterations":1,"citations":1,"sources":1,"refused":false,"elapsed_ms":2987,"message":"task"}
 ```
 
-`outcome` is `answered`, `refused`, `timeout`, `canceled`, or `error`. The
+`principal` is the identity the budget charged (`agent:<id>`, `user:<id>`,
+`token:<id>`, or `ip:<addr>`); `token_id` is set only when a bearer token
+gated the request. `outcome` is `answered`, `refused`, `timeout`, `canceled`, or `error`. The
 question is identified by its SHA-256 and byte length, so repeated questions
 can be correlated without storing peer text. The record deliberately excludes
 the question, the answer, the prompt, and excerpts. The audit
@@ -255,8 +324,12 @@ same record with `method: "v1/ask"`.
 * Chunk ids never leave the service. They are logged on the `rag: answer`
   debug line and in the retrieval trace; the peer sees `source_url`,
   `title`, `section`, and the excerpt text instead.
-* Loopback bind by default; public exposure requires `--bind-public` **and**
-  a token.
+* Loopback bind by default; public exposure requires `--bind-public`, an
+  explicit `AGENT_A2A_PUBLIC_URL`, and non-zero daily quotas. A token is
+  optional and, when set, gates every path.
+* A self-asserted identity never authorizes anything: it only shares a
+  global spend ceiling the operator fixed. Rotating it cannot exceed the
+  per-address cap.
 * Tokens are high-entropy, rotatable without restart, and never logged.
 * The question (≤8 KiB) and the whole body (≤64 KiB, `413` when exceeded) are
   bounded; the audit stream records only the question fingerprint.

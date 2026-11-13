@@ -47,9 +47,9 @@ const (
 	// ModuleAgent logs the grounded agent loop: the chat requests sent to the
 	// model and the replies it returns, at debug level.
 	ModuleAgent = "agent"
-	// ModuleAudit logs the A2A task record: token id, question fingerprint,
-	// outcome, iterations, citations, and elapsed time - never the question
-	// text, answer, prompt, or excerpts.
+	// ModuleAudit logs the A2A task record: principal, token id, question
+	// fingerprint, outcome, iterations, citations, and elapsed time - never
+	// the question text, answer, prompt, or excerpts.
 	ModuleAudit = "audit"
 )
 

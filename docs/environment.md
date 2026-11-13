@@ -82,10 +82,10 @@ constants, not in struct tags, so there is exactly one definition.
 | `POSTIZ_API_KEY` | `sources.yaml` ref | — | Secret |
 
 Runtime files (the SQLite index and its WAL/SHM siblings, `agent backup`
-snapshots, and the A2A token file) live under `./data/` on the host and
-`/data` in the container. `.gitkeep` keeps the directory; its contents are
-gitignored and excluded from the image build context, and compose bind-mounts
-`./data:/data`.
+snapshots, the A2A token file, and the public-budget counters in
+`quota.json`) live under `./data/` on the host and `/data` in the container.
+`.gitkeep` keeps the directory; its contents are gitignored and excluded from
+the image build context, and compose bind-mounts `./data:/data`.
 
 Credentials are the one **dynamic** case: `sources.yaml` declares
 `{ env: VAR }` references, so the names are configuration data, not Go
@@ -132,9 +132,14 @@ a startup error rather than a silent downgrade to token-less serving. Once a
 token has been configured the store stays secured: deleting the file or
 revoking the last entry yields `401`, never an unauthenticated server. With no
 tokens and a loopback bind the server stays token-less for development; a
-non-loopback bind (`--bind-public`) requires at least one token and an
-explicit `AGENT_A2A_PUBLIC_URL` (the card never trusts a request `Host`). See
-[a2a.md](a2a.md) for issuance, rotation, and the audit record.
+non-loopback bind (`--bind-public`) requires an explicit
+`AGENT_A2A_PUBLIC_URL` and non-zero daily quotas (the card never trusts a
+request `Host`), and a bearer token is optional. A bare loopback bind is
+unbudgeted; pass a budget flag to enable the budget there. The public-budget counters
+are not an environment variable: they live next to the index in
+`quota.json` (`--quota-file` overrides). See
+[a2a.md](a2a.md) for issuance, rotation, identity, the budget gates, and the
+audit record.
 
 The `EVAL_*` rows belong to the Python harness in `evals/`, not to a Go
 `envconfig` struct. `TestExampleEnvIsComplete` pins them with an explicit

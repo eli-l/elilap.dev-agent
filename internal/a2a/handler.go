@@ -8,14 +8,17 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"mime"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/eli-l/elilap.dev-agent/internal/agentloop"
 	"github.com/eli-l/elilap.dev-agent/internal/audit"
 	"github.com/eli-l/elilap.dev-agent/internal/auth"
+	"github.com/eli-l/elilap.dev-agent/internal/budget"
 	"github.com/eli-l/elilap.dev-agent/internal/logging"
 )
 
@@ -32,14 +35,25 @@ type Answerer interface {
 	Run(ctx context.Context, question string) (agentloop.Answer, error)
 }
 
+// Acquirer charges one answer to a caller; *budget.Limiter implements it. A
+// nil Acquirer disables the spend budget (private deployments and tests).
+// The charge happens after the message is validated and immediately before the
+// loop runs, so a malformed body costs no quota.
+type Acquirer interface {
+	Acquire(budget.Caller) (func(), error)
+}
+
 // Handler serves the A2A JSON-RPC endpoint (`message/send` and the task
-// methods) for one loop. Authentication, rate limiting, and request logging
-// are transport middleware in cmd/agent, so the handler stays testable with a
-// stub answerer.
+// methods) for one loop. Authentication, request logging, and the embedding
+// bucket are transport middleware in cmd/agent; the answer budget is here
+// because it is keyed by the peer's self-asserted identity, which only the
+// parsed message carries.
 type Handler struct {
 	Loop Answerer
 	// MaxElapsed bounds one task; zero uses agentloop.DefaultMaxElapsed.
 	MaxElapsed time.Duration
+	// Budget charges an answer; nil disables it.
+	Budget Acquirer
 }
 
 // NewHandler builds the JSON-RPC handler around a loop.
@@ -105,7 +119,11 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	switch req.Method {
 	case MethodSendMessage:
-		result, rpcErr := h.sendMessage(r, req.Params)
+		result, rpcErr, refusal := h.sendMessage(r, req.Params)
+		if refusal != nil {
+			writeBudgetError(w, req.ID, refusal, budget.PeerAddress(r))
+			return
+		}
 		if rpcErr != nil {
 			writeRPCError(w, http.StatusOK, req.ID, rpcErr)
 			return
@@ -130,45 +148,66 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 // sendMessage runs the grounded loop for one peer message and returns an A2A
-// agent Message carrying the answer plus citation metadata.
-func (h *Handler) sendMessage(r *http.Request, raw json.RawMessage) (*Message, *Error) {
+// agent Message carrying the answer plus citation metadata. A budget refusal is
+// reported separately so the transport can answer 429 with a Retry-After.
+func (h *Handler) sendMessage(r *http.Request, raw json.RawMessage) (*Message, *Error, *budget.Refusal) {
 	var params MessageSendParams
 	if len(raw) == 0 {
-		return nil, &Error{Code: CodeInvalidParams, Message: "params are required"}
+		return nil, &Error{Code: CodeInvalidParams, Message: "params are required"}, nil
 	}
 	if err := json.Unmarshal(raw, &params); err != nil {
-		return nil, &Error{Code: CodeInvalidParams, Message: "params must be a message/send object"}
+		return nil, &Error{Code: CodeInvalidParams, Message: "params must be a message/send object"}, nil
 	}
 	msg := params.Message
 	if msg == nil {
-		return nil, &Error{Code: CodeInvalidParams, Message: "message is required"}
+		return nil, &Error{Code: CodeInvalidParams, Message: "message is required"}, nil
 	}
 	if msg.Kind != "message" {
-		return nil, &Error{Code: CodeInvalidParams, Message: `message.kind must be "message"`}
+		return nil, &Error{Code: CodeInvalidParams, Message: `message.kind must be "message"`}, nil
 	}
 	if msg.Role != "user" {
-		return nil, &Error{Code: CodeInvalidParams, Message: `message.role must be "user"`}
+		return nil, &Error{Code: CodeInvalidParams, Message: `message.role must be "user"`}, nil
 	}
 	if strings.TrimSpace(msg.MessageID) == "" {
-		return nil, &Error{Code: CodeInvalidParams, Message: "message.messageId is required"}
+		return nil, &Error{Code: CodeInvalidParams, Message: "message.messageId is required"}, nil
 	}
 	// No task store exists, so a task id cannot refer to anything this service
 	// answered. Reporting it is more honest than inventing a task.
 	if msg.TaskID != "" {
-		return nil, &Error{Code: CodeTaskNotFound, Message: "Task not found"}
+		return nil, &Error{Code: CodeTaskNotFound, Message: "Task not found"}, nil
 	}
 	question, rpcErr := textFromParts(msg.Parts)
 	if rpcErr != nil {
-		return nil, rpcErr
+		return nil, rpcErr, nil
 	}
 	if len(question) > agentloop.MaxQuestionBytes {
-		return nil, &Error{Code: CodeInvalidParams, Message: fmt.Sprintf("question must be at most %d bytes", agentloop.MaxQuestionBytes)}
+		return nil, &Error{Code: CodeInvalidParams, Message: fmt.Sprintf("question must be at most %d bytes", agentloop.MaxQuestionBytes)}, nil
 	}
 	if rpcErr := checkOutputModes(params.Configuration); rpcErr != nil {
-		return nil, rpcErr
+		return nil, rpcErr, nil
 	}
 	if params.Configuration != nil && len(params.Configuration.PushNotificationConfig) > 0 {
-		return nil, &Error{Code: CodePushNotSupported, Message: "push notifications are not supported"}
+		return nil, &Error{Code: CodePushNotSupported, Message: "push notifications are not supported"}, nil
+	}
+
+	principal, rpcErr := a2aPrincipal(r, msg)
+	if rpcErr != nil {
+		return nil, rpcErr, nil
+	}
+	if h.Budget != nil {
+		release, err := h.Budget.Acquire(budget.Caller{
+			Principal: principal,
+			Address:   budget.PeerAddress(r),
+		})
+		if err != nil {
+			if refusal, ok := budget.AsRefusal(err); ok {
+				return nil, nil, refusal
+			}
+			log := logging.HTTP()
+			log.Error().Err(err).Msg("a2a budget unavailable")
+			return nil, &Error{Code: CodeInternalError, Message: "answer failed"}, nil
+		}
+		defer release()
 	}
 
 	maxElapsed := h.MaxElapsed
@@ -185,29 +224,30 @@ func (h *Handler) sendMessage(r *http.Request, raw json.RawMessage) (*Message, *
 		tokenID = tok.ID
 	}
 	entry := audit.Entry{
-		TokenID:  tokenID,
-		Method:   "a2a/" + MethodSendMessage,
-		Question: question,
-		Elapsed:  time.Since(start),
+		Principal: principal.String(),
+		TokenID:   tokenID,
+		Method:    "a2a/" + MethodSendMessage,
+		Question:  question,
+		Elapsed:   time.Since(start),
 	}
 	if err != nil {
 		switch {
 		case errors.Is(err, agentloop.ErrBudget), errors.Is(err, context.DeadlineExceeded):
 			entry.Outcome = audit.OutcomeTimeout
 			audit.Answer(entry)
-			return nil, &Error{Code: CodeServerError, Message: "answer timed out", Data: map[string]any{"retryable": true}}
+			return nil, &Error{Code: CodeServerError, Message: "answer timed out", Data: map[string]any{"retryable": true}}, nil
 		case errors.Is(err, context.Canceled):
 			// The peer disconnected. The backend did not fail, and nobody
 			// will read the response; record the task without an error log.
 			entry.Outcome = audit.OutcomeCanceled
 			audit.Answer(entry)
-			return nil, &Error{Code: CodeServerError, Message: "request canceled"}
+			return nil, &Error{Code: CodeServerError, Message: "request canceled"}, nil
 		default:
 			entry.Outcome = audit.OutcomeError
 			audit.Answer(entry)
 			log := logging.HTTP()
 			log.Error().Err(err).Msg("a2a task failed")
-			return nil, &Error{Code: CodeInternalError, Message: "answer failed"}
+			return nil, &Error{Code: CodeInternalError, Message: "answer failed"}, nil
 		}
 	}
 
@@ -250,7 +290,67 @@ func (h *Handler) sendMessage(r *http.Request, raw json.RawMessage) (*Message, *
 			"tool_iterations": answer.ToolIterations,
 			"elapsed_ms":      answer.ElapsedMS,
 		},
-	}, nil
+	}, nil, nil
+}
+
+// a2aPrincipal resolves who a peer's answer is charged to. A configured bearer
+// token is the only verified identity and wins; then the self-asserted agentId
+// from the message metadata or the X-Agent-Id header; then the peer address.
+func a2aPrincipal(r *http.Request, msg *Message) (budget.Principal, *Error) {
+	if tok, ok := auth.TokenFrom(r.Context()); ok {
+		return budget.Principal{Kind: budget.KindToken, ID: tok.ID}, nil
+	}
+	id := ""
+	if raw, ok := msg.Metadata["agentId"]; ok {
+		s, ok := raw.(string)
+		if !ok {
+			return budget.Principal{}, &Error{Code: CodeInvalidParams, Message: "metadata.agentId must be a string"}
+		}
+		id = strings.TrimSpace(s)
+	}
+	if id == "" {
+		id = strings.TrimSpace(r.Header.Get("X-Agent-Id"))
+	}
+	if id == "" {
+		return budget.Principal{Kind: budget.KindAddr, ID: budget.PeerAddress(r)}, nil
+	}
+	if !budget.ValidID(id) {
+		return budget.Principal{}, &Error{Code: CodeInvalidParams,
+			Message: "agentId must match [A-Za-z0-9._-]{1,64}"}
+	}
+	return budget.Principal{Kind: budget.KindAgent, ID: id}, nil
+}
+
+// budgetLog bounds refusal warnings: /a2a is reachable without credentials, so
+// one line per peer address per minute is the ceiling on this path.
+var budgetLog = logging.NewThrottle(time.Minute)
+
+// writeBudgetError writes the 429 the A2A transport uses for a budget refusal:
+// the real status (not JSON-RPC 200), a Retry-After header, and the scope in
+// the error data so a client can tell a minute burst from an exhausted day.
+func writeBudgetError(w http.ResponseWriter, id json.RawMessage, refusal *budget.Refusal, addr string) {
+	seconds := int(math.Ceil(refusal.RetryAfter.Seconds()))
+	if seconds < 1 {
+		seconds = 1
+	}
+	if budgetLog.Allow(addr) {
+		log := logging.HTTP()
+		log.Warn().
+			Str("peer", addr).
+			Str("scope", string(refusal.Scope)).
+			Int("retry_after_s", seconds).
+			Msg("a2a budget refused")
+	}
+	w.Header().Set("Retry-After", strconv.Itoa(seconds))
+	writeRPCError(w, http.StatusTooManyRequests, id, &Error{
+		Code:    CodeServerError,
+		Message: refusal.Message(),
+		Data: map[string]any{
+			"reason":              "quota_exceeded",
+			"scope":               string(refusal.Scope),
+			"retry_after_seconds": seconds,
+		},
+	})
 }
 
 // textFromParts joins the peer's text parts into one question. Files and

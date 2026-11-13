@@ -23,9 +23,10 @@ and runnable: ingestion (Ghost, Postiz, and the generic HTML `web` provider
 with per-site extraction strategies), resumable embeddings, hybrid retrieval
 (BM25 + vectors, RRF), the grounded tool-calling loop (`agent ask`), the dev
 JSON paths (`/v1/retrieve`, `/v1/ask`), and the A2A surface — agent card
-discovery, `message/send`, bearer tokens, a per-token rate limit, and the
-audit stream. Runtime data (SQLite index, WAL/SHM, backups, A2A token file)
-lives under `./data/`. The Ragas baseline is captured (12/15 correctness on
+discovery, `message/send`, bearer tokens (optional), the public spend budget
+(3/min per identity, 20/day per identity, 20/day per address, 60/day global),
+and the audit stream. Runtime data (SQLite index, WAL/SHM, backups, A2A token
+file, budget counters in `quota.json`) lives under `./data/`. The Ragas baseline is captured (12/15 correctness on
 `Spark-X2.6-4B-q8_0`); Phase 3 operations still open: `ingest --watch`,
 scheduling, and the full promptfoo scan. See
 [`PLAN.md`](./PLAN.md) for the build plan and
@@ -61,8 +62,11 @@ Website (HTML)    ─┘        ▲                                (hybrid RRF)
   retriever over HTTP (`/v1/retrieve`, `/v1/ask`) and as an **A2A v0.3
   agent** (`message/send` at `/a2a`, card at
   `/.well-known/agent-card.json`). Loopback is token-less for development;
-  a configured bearer token gates every surface, and a public bind requires
-  one.
+  a configured bearer token gates every surface. A **public bind is
+token-less too**: callers identify as an agent (`metadata.agentId`) or a user
+  (`X-User-Id`), and four gates — 3/min per identity, 20/day per identity,
+  20/day per address, 60/day global, plus 2 concurrent model calls — cap what
+  the endpoint can spend on the chat model.
 
 ## Quick reference
 
@@ -77,8 +81,8 @@ go build -tags sqlite_fts5 -o agent ./cmd/agent
 ./agent ask "what did I write about harnesses?"
 ./agent backup            # online VACUUM INTO snapshot next to the index
 ./agent serve             # 127.0.0.1:8080, token-less loopback
-./agent tokens add --id alice   # then re-run serve; prints id:token once
-./agent serve --bind-public --addr 0.0.0.0:8080   # requires a token
+./agent tokens add --id alice   # optional bearer token; prints id:token once
+./agent serve --bind-public --addr 0.0.0.0:8080   # requires daily quotas, not a token
 ```
 
 An A2A client discovers the agent at
@@ -136,6 +140,6 @@ because they need a model host and a populated `data/index.db`.
 
 * [`PLAN.md`](./PLAN.md) — full step-by-step build plan with exit criteria.
 * [`docs/runbook.md`](./docs/runbook.md) — build, ingest, query, ask, serve, the A2A surface.
-* [`docs/a2a.md`](./docs/a2a.md) — A2A v0.3 wire contract: agent card, `message/send`, tokens, rate limit, audit.
+* [`docs/a2a.md`](./docs/a2a.md) — A2A v0.3 wire contract: agent card, `message/send`, access modes, caller identity, spend budget, audit.
 * [`docs/red-team.md`](./docs/red-team.md) — promptfoo red-team suite for `/v1/ask`.
 * [`evals/`](./evals/README.md) — Ragas answer-quality harness: one tool (`evaluate.py`) scoring answers and refusals.

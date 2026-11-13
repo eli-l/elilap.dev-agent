@@ -19,7 +19,12 @@ smoke runs against its 15 answer + 14 refusal cases, and **promptfoo** has no
 captured report. **Phase 4's A2A surface shipped on 2026-11-05, ahead of
 Phase 3**, because it was the next product surface: `agent serve` now serves
 the A2A v0.3 agent card, `message/send`, bearer tokens, the per-token rate
-limit, and the audit stream, and `docs/a2a.md` is the wire contract. Phase 3
+limit, and the audit stream, and `docs/a2a.md` is the wire contract. A
+2026-11-13 pass added the public, token-less budget (Decision 25, Phase 4b):
+peers identify as an agent or a user, and four gates — 3/min per identity,
+20/day per identity, 20/day per address, 60/day global — bound what a public
+deployment can spend on the chat model, with counters persisted in
+`quota.json`. Phase 3
 operations (watch, scheduling, full eval runs) remain. The query-fan-out
 answer path was built, A/B'd, and **removed on 2026-11-05**, so the
 tool-calling loop is the only answer path (`docs/fanout-experiment.md`), and
@@ -126,10 +131,11 @@ original schema.
 | 18 | Answer path | **The tool-calling loop, only** (2026-11-05): one grounded tool `search_writing`, ≤3 iterations, retrieval-or-refusal. A second path — rewrite → fan-out retrieval → summed-RRF fuse → one answer call — was built behind `AGENT_SEARCH_MODE=fanout`, measured over three rounds, and removed | It never beat the loop on grounding (3/4, 3/4, 2/4, 1/5, 1/4) and was 2-3x slower (16-33s vs 5-12s), because one answer call over five excerpts at `low` effort spends 400-6,600 reasoning tokens; a switchable second path still had to be maintained, documented, and evaluated |
 | 19 | Reasoning budget | `reasoning_effort` pinned per call kind in the request (2026-11-03): `"none"` for the key-extraction call, `"low"` for every call made with excerpts in hand and for the forced no-tools answer | Unset means the backend's model config, which is unbounded on these templates: a two-sentence question burned all 4,096 completion tokens on `reasoning`, returned empty `content` with `finish_reason=length`, and the finalizer turned that into a refusal |
 | 20 | A2A statelessness | One synchronous agent `Message` per `message/send` (2026-11-05): no task store, no streaming, no resumption. `tasks/get`/`tasks/cancel` return `-32001 TaskNotFound`; `message/stream` is `-32004` | A peer gets a grounded answer in one round trip, and the service does not invent task state it cannot resume; the card advertises `streaming: false` so the contract is honest |
-| 21 | A2A credentials | Bearer tokens from `AGENT_A2A_TOKENS` (process-start pairs) plus a re-read `0600` `AGENT_A2A_TOKENS_FILE`; `agent tokens add`, `revoke`, and `list`; 30 model-touching requests/min per token via `--rate-limit`, failed auth capped via `--auth-limit`; the store latches secured once any token existed (2026-11-05) | Rotation without restart, a token id in the audit record, and a bucket that protects the single model host; a file-based store beats an env-only list for revocation |
+| 21 | A2A credentials | Bearer tokens from `AGENT_A2A_TOKENS` (process-start pairs) plus a re-read `0600` `AGENT_A2A_TOKENS_FILE`; `agent tokens add`, `revoke`, and `list`; 30 model-touching requests/min per token via `--rate-limit` (later superseded for answers by Decision 25's spend budget; `--rate-limit` now covers `/v1/retrieve` only), failed auth capped via `--auth-limit`; the store latches secured once any token existed (2026-11-05) | Rotation without restart, a token id in the audit record, and a bucket that protects the single model host; a file-based store beats an env-only list for revocation |
 | 22 | Website source | A generic `web` provider (`internal/sources/web`) indexes public HTML pages: sitemap/feed/seed discovery with path filters, robots.txt + delay politeness, and a **named strategy** per source (`auto`, `article`, `selectors`, `body`, or a Go `Adapter`). Items are `source_kind = web_page` with id `host+path`; `elilap.dev` uses the `elilap` adapter and the Ghost source keeps owning `read.elilap.dev` posts. Shipped 2026-11-09 | One provider reads any server-rendered site; a layout the generic passes cannot read is one small Go adapter, and the strategy choice is made offline with `agent sources inspect` instead of by a model at ingest time, so every run stays deterministic |
 | 23 | Model roles | **Embeddings and chat are configured independently** (2026-11-13): `EMBED_BASE_URL`/`EMBED_API_KEY`/`EMBED_MODEL`/`EMBED_DIMS` and `CHAT_BASE_URL`/`CHAT_API_KEY`/`CHAT_MODEL`/`CHAT_TOKEN_PARAM`, each defaulting to the local host. `EMBED_DIMS` (default 768) is the schema width: a read-write open rebuilds `chunks_vec` when it changes and clears the stamps, so the corpus re-embeds; read-only commands fail with `ErrVecDims` instead. `CHAT_TOKEN_PARAM` selects `max_tokens` (default) or `max_completion_tokens`, which OpenAI reasoning models require | Either role can move to any OpenAI-compatible cloud provider (the first is OpenAI `gpt6-luna`) without touching the other, and the index is not silently wrong when the embedder's width changes |
 | 24 | Answer shape | **The model writes the summary only; the loop attaches the evidence** (2026-11-13). The prompt forbids citation markers, chunk ids, and the model's own source list, and the tool payload no longer carries `chunk_id`, so the identifier never enters the model's context. The response is `answer` + `citations` (one per grounded excerpt: kind, url, title, section, published_at, excerpt) + `sources` (one per distinct document: kind, url, title, author, platform, published_at). Refusal is the same string with both arrays empty; an answer produced without a retrieved excerpt is refused. `chunk_id` is logged on the debug `rag: answer` line and in the retrieval trace, never returned | A summary is what a peer can actually quote, and evidence the service derives from its own retrieval record cannot be fabricated by the model. The trade-off is explicit: the old marker check verified every claim; the new backstop is "never answered without retrieved excerpts" |
+| 25 | Public budget | **Public, token-less access is bounded by spend, not credentials** (2026-11-13). A peer identifies itself as an **agent** (`message/send` `params.message.metadata.agentId`, or `X-Agent-Id`) or a **user** (`X-User-Id` on `/v1/ask`); a configured bearer token still wins over either. Every answer passes four gates in `internal/budget`: 3/min per identity, 20/day per identity, 20/day per source address, 60/day global, plus 2 concurrent model calls. Counters persist in `<db dir>/quota.json` (`0600`, atomic write, UTC-day keyed) because `serve` opens the index read-only and must never write it. `--bind-public` now requires the daily quotas instead of a token, and `/v1/retrieve` is not registered on a public bind unless `--allow-public-retrieve` | A self-asserted identifier is an accounting key, not a security boundary — a peer can rotate it — so the **global daily cap** is the real spend ceiling and the per-address cap backstops rotation. A daily cap, not a per-minute rate, is what bounds a model bill: 30/min is 43,200 requests a day, and the loop's own ceilings (3 iterations, 2,048 completion tokens) cap each answer at roughly $0.005–0.014 |
 
 ### 1.5 Verified environment (audited 2026-10-21; Go floor re-verified 2026-10-23; A2A path verified 2026-11-05)
 
@@ -212,7 +218,8 @@ elilap.dev-agent/
 │   ├── ingest/                       # ingest pipeline + ledger writes
 │   ├── llm/                          # one OpenAI-compatible HTTP client (LocalAI default)
 │   ├── logging/                      # zerolog root + six module loggers (incl. audit)
-│   ├── ratelimit/                    # per-token task bucket
+│   ├── ratelimit/                    # keyed minute bucket
+│   ├── budget/                       # public spend ceiling + quota.json
 │   ├── retrieval/                    # hybrid FTS + vec + RRF — the search_writing tool's engine
 │   ├── sources/                      # Provider interface, registry, Ghost/Postiz
 │   │   ├── provider.go
@@ -1063,7 +1070,9 @@ flag, rate limits, and the audit log.
 
 - [x] `agent serve`: binds `127.0.0.1:8080` by default; `--bind-public` is
   the only way to bind a non-loopback address and requires at least one
-  token. Token auth is `Authorization: Bearer <token>` on `/a2a` and the
+  token (**superseded by Phase 4b**: a public bind now requires non-zero
+  daily quotas and a token is optional). Token auth is
+  `Authorization: Bearer <token>` on `/a2a` and the
   `/v1/*` paths; the card stays public for discovery. (Container mode is
   still Phase 3: publish as `ports: "127.0.0.1:8081:8080"`.)
   `/v1/retrieve` and `/v1/ask` graduated unchanged — same
@@ -1111,7 +1120,10 @@ flag, rate limits, and the audit log.
   `data.retry_after_seconds`. Failed bearer-auth attempts have a separate
   `--auth-limit` budget (default 120/min per address, charged only on a
   failed lookup). The loop's own per-task budget (3 iterations, 3,000 excerpt
-  tokens, 90s wall clock) still applies underneath.
+  tokens, 90s wall clock) still applies underneath. **Superseded by Phase
+  4b**: answers are limited by the spend budget (3/min, 20/day per identity,
+  20/day per address, 60/day global, 2 in-flight), and `--rate-limit` now
+  covers only the private `/v1/retrieve` embedding path.
 - [x] Operational documentation: `docs/a2a.md` (wire contract, card,
   tokens, rotation, rate limit, audit, security), `docs/runbook.md`
   (serve modes, curl examples, rotation, troubleshooting), and
@@ -1125,8 +1137,9 @@ flag, rate limits, and the audit log.
   text is data, never instructions — the grounded prompt says so and the
   citation check is the backstop. Questions are capped at 8 KiB and
   bodies at 64 KiB.
-- Local bind by default; public bind requires an explicit flag, a token,
-  and an explicit `AGENT_A2A_PUBLIC_URL`.
+- Local bind by default; a public bind requires an explicit flag, an
+explicit `AGENT_A2A_PUBLIC_URL`, and non-zero daily quotas (Decision 25).
+A bearer token is optional and, when configured, still gates every path.
 - Audit log never contains the question text, chunk bodies, prompts, or
   user answers; it records a SHA-256 fingerprint and byte length of the
   question for correlation.
@@ -1158,6 +1171,75 @@ flag, rate limits, and the audit log.
 
 **Estimated effort**: 3–4 days (loop-over-A2A integration + card, auth,
 rate limits). Shipped in one pass on 2026-11-05.
+
+### Phase 4b — Public, token-less access with a spend ceiling
+
+**Status 2026-11-13: implemented.** Phase 4 shipped a token-gated surface, which
+is right for a private deployment but wrong for publishing the agent: handing a
+bearer token to every peer of a *public* agent does not scale, and a per-minute
+rate does not bound a monthly model bill (30/min = 43,200/day/token). This phase
+replaces "a token is the gate" with "a daily spend ceiling is the gate" for
+public binds, keeping the token path for private ones. Decision 25.
+
+**Tasks** (done 2026-11-13 unless noted)
+
+- [x] `internal/budget`: one `Acquire(principal)` call per answer that must pass
+  four gates — per-identity minute rate (reuses `internal/ratelimit`), per-identity
+  daily quota, per-source-address daily quota, and a global daily quota — plus a
+  non-blocking in-flight semaphore. A refusal carries its scope and a
+  `Retry-After` (seconds to the next UTC midnight for a daily gate).
+- [x] Counters persist in `<db dir>/quota.json` (`--quota-file` overrides),
+  written atomically with mode `0600` and keyed by UTC day, because `serve`
+  opens the index read-only and must never write it. A restart therefore does
+  not refund the day; an unreadable or unparsable file is a startup error
+  (fails closed), while a write error is logged and stays enforced in memory.
+  The identity map is capped, and an identity beyond the cap falls back to the
+  address + global gates so it cannot grow without bound.
+- [x] Identity is self-asserted: A2A peers send `params.message.metadata.agentId`
+  or `X-Agent-Id`, `/v1/ask` callers send `X-User-Id`; ids must match
+  `[A-Za-z0-9._-]{1,64}` (a 400 / `-32602` otherwise), and an absent id falls
+  back to `ip:<peer>`. A configured bearer token takes precedence over both and
+  is keyed `token:<id>`. Because the id is unauthenticated, the global daily cap
+  and the per-address cap are the security boundary; the per-identity quota is
+  fairness.
+- [x] Startup rules for `--bind-public`: still requires `AGENT_A2A_PUBLIC_URL`,
+  now requires `--ask-quota`, `--address-quota`, and `--quota-global` all `> 0`,
+  and no longer requires a token. `0` still means disabled, and negative values
+  stay startup errors. The budget is **on for every public bind and off for a
+  bare loopback bind**; passing any budget flag (`--ask-rate`, `--ask-quota`,
+  `--address-quota`, `--quota-global`, `--max-inflight`) enables it on loopback
+  with the defaults for the gates not named. This is deliberate: `evals/` and
+  `tests-ai/` start `agent serve --addr 127.0.0.1:18080` with no flags and post
+  `/v1/ask` without an identity, so a default loopback cap would throttle their
+  own suites to 20 answers a day.
+- [x] `/v1/retrieve` is private: it is not registered when the bind is public
+  unless `--allow-public-retrieve` is given, and it keeps its own embedding
+  bucket (`--rate-limit`, 30/min) instead of sharing the answer budget.
+- [x] Per-request caps are settable on `serve` (`--max-tokens`,
+  `--excerpt-tokens`) so a public deployment can trim the worst-case cost.
+- [x] Observability: the audit record gains `principal`
+  (`agent:<id>`/`user:<id>`/`token:<id>`/`ip:<addr>`) next to `token_id`;
+  refusals log `scope` and `retry_after_s` on the `http` module, once per key
+  per minute like the existing rate-limit warning; a refusal never burns quota
+  and a malformed body never burns it either (the charge happens after
+  validation, immediately before the loop).
+- [x] Docs: `docs/a2a.md` (access modes, identity, the four gates, 429 shapes),
+  `docs/runbook.md` (public recipe, quota inspection/reset, troubleshooting),
+  `docs/logging.md` (`principal`), `docs/environment.md` (quota file among the
+  runtime files), `AGENTS.md`, `README.md`.
+- [ ] Follow-up, not in this phase: an HTTP-layer flood limiter for the always-
+  public card and the 4xx paths (the budget deliberately guards spend, not
+  request count), and a per-identity usage view (`agent budget status`).
+
+**Security posture (public mode)**
+
+- The identifier is an accounting key, never an authorization decision: it
+  cannot unlock data, only spend a share of a global ceiling that the operator
+  set. Rotating it buys a peer no more than the per-address cap allows.
+- A public bind with quotas disabled is a startup error, so a typo cannot open
+  the tap.
+- Tokens remain available for private deployments and still win over a
+  self-asserted id when present.
 
 ---
 

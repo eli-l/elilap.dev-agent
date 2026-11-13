@@ -1,6 +1,7 @@
-// Package ratelimit is the per-token task budget the A2A surface enforces:
-// a token bucket refilled evenly over a one-minute window, so one peer cannot
-// pin the single chat-model host.
+// Package ratelimit is the keyed minute bucket behind the answer budget, the
+// private /v1/retrieve embedding path, and failed bearer-auth attempts: a token
+// bucket refilled evenly over a one-minute window, so one peer cannot pin the
+// single chat-model host.
 package ratelimit
 
 import (

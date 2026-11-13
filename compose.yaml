@@ -21,15 +21,19 @@ services:
     ports:
       - "127.0.0.1:8081:8080"
     volumes:
-      # Runtime data (index, WAL/SHM, backups, token file) stays on the host.
-      # Long syntax + create_host_path: false makes a missing ./data fail
-      # clearly instead of Compose creating a root-owned directory.
+      # Runtime data (index, WAL/SHM, backups, token file, budget counters) stays
+      # on the host. Long syntax + create_host_path: false makes a missing ./data
+      # fail clearly instead of Compose creating a root-owned directory.
       - type: bind
         source: ./data
         target: /data
         bind:
           create_host_path: false
-    # A missing token makes `agent serve --bind-public` exit. Create one first:
+    # The bind is public but published on loopback only, and it is token-less by
+    # default: answers are bounded by the spend budget, so the container runs
+    # with the default quotas (3/min per identity, 20/day per identity, 20/day
+    # per address, 60/day global) and writes ./data/quota.json. Add quotas to
+    # the command to tighten them, or issue a token to gate every request:
     #   docker compose run --rm agent agent tokens add --id local
     restart: unless-stopped
     read_only: true

@@ -113,8 +113,12 @@ On this CPU host an answer takes roughly 10-25 seconds.
 ./agent serve                          # 127.0.0.1:8080, token-less, loopback only
 ./agent serve --addr 127.0.0.1:18080 --db ./data/index.db   # the evaluation port
 ./agent tokens add --id alice          # issue a token; prints alice:<token> once
+
+# Public, token-less: quotas are the gate (no bearer token required).
 AGENT_A2A_PUBLIC_URL=https://agent.example \
-  ./agent serve --bind-public --addr 0.0.0.0:8080   # requires a token + URL
+  ./agent serve --bind-public --addr 0.0.0.0:8080 \
+    --ask-rate 3 --ask-quota 20 --address-quota 20 --quota-global 60 \
+    --max-inflight 2 --max-tokens 1024 --excerpt-tokens 2000
 ```
 
 The ports are split on purpose: **8080** is yours for interactive work,
@@ -123,41 +127,62 @@ which target it by default, and the container publishes the A2A service on
 **8081** (`docker compose up` maps `127.0.0.1:8081` to container 8080).
 
 Without a configured token the loopback server is the token-less dev surface.
-Once a token exists (env or `./data/a2a-tokens.txt`) every `/a2a` and `/v1/*`
+Once a token exists (env or `./data/a2a-tokens.txt`) every `/a2a` and `/v1/ask`
 request needs `Authorization: Bearer <token>`. `--bind-public` is the only way
-to bind a non-loopback address and it refuses to start without a token and an
-explicit `AGENT_A2A_PUBLIC_URL` (the card never derives its URL from an
-untrusted request `Host`).
+to bind a non-loopback address; it requires an explicit
+`AGENT_A2A_PUBLIC_URL` and **non-zero daily quotas instead of a token** (the
+card never derives its URL from an untrusted request `Host`). `--ask-quota`,
+`--address-quota`, and `--quota-global` are therefore startup requirements on a
+public bind: a public agent with no spend ceiling is refused.
+
+`/v1/retrieve` is a private debugging path and is **not registered** on a
+public bind unless you pass `--allow-public-retrieve`; the loop already
+retrieves internally, so peers do not need it.
 
 ```bash
 # Agent card (public, no token): the discovery document a peer reads first.
 curl -sS http://127.0.0.1:8080/.well-known/agent-card.json | jq .
 
 # A2A message/send: one grounded answer as an A2A Message with citations.
+# A token-gated server needs the Authorization header; a public, token-less
+# one credits the budget to metadata.agentId (or X-Agent-Id) instead.
 curl -sS -X POST http://127.0.0.1:8080/a2a \
-  -H "Authorization: Bearer $A2A_TOKEN" \
   -H 'Content-Type: application/json' \
-  -d '{"jsonrpc":"2.0","id":1,"method":"message/send","params":{"message":{
-        "kind":"message","role":"user","messageId":"m-1",
-        "parts":[{"kind":"text","text":"What does Eli say about harnesses?"}]}}}'
+  -d '{"jsonrpc":"2.0","id":1,"method":"message/send","params":{
+        "message":{"kind":"message","role":"user","messageId":"m-1",
+          "metadata":{"agentId":"peer-7"},
+          "parts":[{"kind":"text","text":"What does Eli say about harnesses?"}]}}}'
 
-# The plain JSON paths underneath it (same auth).
+# The plain JSON paths underneath it (private/debug; same auth).
 curl -sS -X POST http://127.0.0.1:8080/v1/retrieve \
   -H "Authorization: Bearer $A2A_TOKEN" -H 'Content-Type: application/json' \
   -d '{"query":"harness vendor lock-in","top_n":3,"source":"ghost"}'
 
 curl -sS -X POST http://127.0.0.1:8080/v1/ask \
-  -H "Authorization: Bearer $A2A_TOKEN" -H 'Content-Type: application/json' \
+  -H 'X-User-Id: eli' -H 'Content-Type: application/json' \
   -d '{"question":"What does Eli say about harnesses?"}'
 ```
 
-Rate limit: 30 model-touching requests per minute per token (`--rate-limit`,
-0 disables; a negative value is a startup error); this covers `/a2a`,
-`/v1/ask`, and `/v1/retrieve`. Failed bearer-auth attempts have a separate
-`--auth-limit` budget (default 120/min per address, 0 disables). Over-limit is
-HTTP 429 with `Retry-After`.
+Budget: every answer (`/a2a` `message/send` and `/v1/ask`) must pass four gates
+— **3/min** per identity (`--ask-rate`), **20/day** per identity
+(`--ask-quota`), **20/day** per peer address (`--address-quota`), and **60/day**
+global (`--quota-global`) — plus at most **2** concurrent model calls
+(`--max-inflight`). The budget is on for every `--bind-public` and **off** for a
+bare loopback bind (the dev/eval surface); passing any of those five flags
+enables it on loopback too. The identity is self-asserted (`agentId` for A2A,
+`X-User-Id` for `/v1/ask`, else the peer address), so the **global** and
+per-address caps are what actually bound the bill. `0` disables a gate on a
+loopback bind and is rejected with `--bind-public`. Counters live in
+`./data/quota.json` (`--quota-file`), survive restarts, and reset at 00:00 UTC.
+Over-limit is HTTP 429 with `Retry-After`; `/a2a` returns `-32000` with
+`data.scope` and `data.retry_after_seconds`. `/v1/retrieve` has its own
+embedding bucket (`--rate-limit`, default 30/min) and does not spend the answer
+quota. Failed bearer-auth attempts have a separate `--auth-limit` budget
+(default 120/min per address, 0 disables).
 Each task is bounded by the loop budget (3 tool iterations, 3,000 excerpt
-tokens, 90s wall clock) and a question is capped at 8 KiB. Tokens live in a
+tokens, 90s wall clock; `--excerpt-tokens` and `--max-tokens` trim the excerpt
+and completion budgets on `serve`) and a question is capped at 8 KiB. Tokens
+live in a
 `0600` file that is re-read on change, so add/revoke needs no restart:
 
 ```bash
@@ -266,6 +291,8 @@ docker compose run --rm agent agent stats
 For the A2A server on `127.0.0.1:8081`:
 
 ```bash
+# Optional: a token gates every request. Without one the public bind is
+# token-less and answers are charged to the self-asserted identity instead.
 docker compose run --rm agent agent tokens add --id local   # prints the token once
 docker compose up -d
 curl -sS http://127.0.0.1:8081/.well-known/agent-card.json | jq .
@@ -273,8 +300,10 @@ docker compose down
 ```
 
 `docker compose up` runs `agent serve --bind-public` inside the container, so
-it requires the token file and `AGENT_A2A_PUBLIC_URL` (compose defaults it to
-`http://127.0.0.1:8081`). The image runs as root so the `./data` bind mount
+it requires `AGENT_A2A_PUBLIC_URL` (compose defaults it to
+`http://127.0.0.1:8081`) and the default spend quotas, which bound the answers
+it will pay for and write to `data/quota.json`. The host publishes the port on
+loopback only. The image runs as root so the `./data` bind mount
 works on any host; compose drops all capabilities, sets `no-new-privileges`,
 and makes the container filesystem read-only. Compose uses
 `create_host_path: false`, so a missing `./data` is a clear error instead of a
@@ -303,13 +332,18 @@ work is:
 | `index has no embeddings` | `./agent embed` has not run or wrote no rows; run it, then check `agent stats`. |
 | `index vectors are stamped X, but EMBED_MODEL=Y expects Z` | The index was embedded by another model/text template. Run `./agent embed` (the tag makes every chunk pending) or point `EMBED_MODEL` at the model that built it. |
 | `index vector dimensions do not match EMBED_DIMS` | `EMBED_DIMS` changed (or the index came from another embedder). A read-write run rebuilds `chunks_vec` at the new width; run `./agent embed` to re-embed the corpus. |
-| `--addr ... is not loopback` | Use `127.0.0.1:<port>`, or `--bind-public` with a configured token. |
-| `--bind-public requires an A2A token` | Issue one with `./agent tokens add --id <id>`; the server will not expose an unauthenticated endpoint. |
+| `--addr ... is not loopback` | Use `127.0.0.1:<port>`, or `--bind-public` with quotas configured. |
+| `--bind-public requires --ask-quota, --address-quota, and --quota-global` | A public agent needs a spend ceiling; pass non-zero daily quotas (see the public recipe above). |
 | `--bind-public requires AGENT_A2A_PUBLIC_URL` | Set the absolute `https://…` URL peers should use; the card will not trust a request `Host` header. |
 | `AGENT_A2A_PUBLIC_URL must be an absolute http(s) URL` | Use a full URL with a host (a path prefix is fine); userinfo and relative values are rejected. |
-| `401 unauthorized` from `/a2a` or `/v1/*` | Send `Authorization: Bearer <token>`; confirm the id is listed by `agent tokens list`. |
+| `401 unauthorized` on `/a2a` or `/v1/*` | A token is configured, so send `Authorization: Bearer <token>`; confirm the id is listed by `agent tokens list`. Remove every token for a token-less public bind. |
 | `auth: token file ... must not be group/world-accessible` | `chmod 600` the token file; `agent tokens add` creates it correctly. |
-| `429 rate limit exceeded` | Wait for `Retry-After`; raise `--rate-limit` only if the model host can take it. |
+| `429 rate limit exceeded` | Per-minute bucket is empty. Wait for `Retry-After`; raise `--ask-rate` only if the model host can take it. |
+| `429 daily quota exhausted` / `/a2a` `data.scope: "global_daily"` | The day's spend ceiling is reached. Wait for the next UTC midnight (the `Retry-After` is the exact second count), or raise `--quota-global` deliberately. `identity_daily` means one agent/user hit its share; `address_daily` means one peer address did. |
+| `429` with `data.scope: "busy"` | `--max-inflight` answers are already running; retry after a second. |
+| No `quota.json` on a loopback server | The budget is off on a bare loopback bind by design. Pass a budget flag (e.g. `--ask-quota 20`) to enable it; a public bind always has it on. |
+| `budget: read ...quota.json` at startup | The counter file is corrupt or unreadable (it fails closed rather than resetting the day). Inspect it, then delete it only if you accept resetting today's counters. |
+| `budget: counter file ... is not writable` | The quota directory cannot be written (read-only mount, ownership). A memory-only budget would refund the day on every restart, so `serve` refuses to start. |
 | `llm: embeddings returned ...` / `chat returned 503` | The model host is down or the model is not loaded. Check `/readyz` and `curl $CHAT_BASE_URL/models` (or `$EMBED_BASE_URL/models`). |
 | Answers are refusals for answerable questions | Model non-determinism on a small chat model; retry once, then inspect `./agent query` for the same wording. If retrieval misses, improve the query or the index. |
 | `agent query` says `provider is not enabled`-style config errors | `sources.yaml` scope: run `./agent sources validate`. |
