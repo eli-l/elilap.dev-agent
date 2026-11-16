@@ -177,7 +177,7 @@ func TestRefusalDoesNotBurnDailyQuota(t *testing.T) {
 
 func TestCountersPersistAcrossRestart(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "quota.json")
-	l, _ := newLimiter(t, budget.Bounds{PerDay: 2}, path)
+	l, c := newLimiter(t, budget.Bounds{PerDay: 2}, path)
 
 	for i := 0; i < 2; i++ {
 		release, err := l.Acquire(agent("alice", "203.0.113.9"))
@@ -195,8 +195,10 @@ func TestCountersPersistAcrossRestart(t *testing.T) {
 		t.Errorf("counter file mode = %o, want 600", mode)
 	}
 
-	// A restart must not refund the day.
-	again, err := budget.New(budget.Config{Bounds: budget.Bounds{PerDay: 2}, Path: path})
+	// A restart must not refund the day. The reopened limiter uses the same
+	// clock: the first one wrote its counters for the clock's UTC day, and a
+	// real wall clock on another date would legitimately roll them over.
+	again, err := budget.New(budget.Config{Bounds: budget.Bounds{PerDay: 2}, Path: path, Now: c.Now})
 	if err != nil {
 		t.Fatalf("reopen: %v", err)
 	}
@@ -341,7 +343,7 @@ func TestUnwritableCounterPathFailsAtStartup(t *testing.T) {
 // stale snapshot cannot lose a count, and the final file holds them all.
 func TestConcurrentChargesAllPersist(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "quota.json")
-	l, _ := newLimiter(t, budget.Bounds{}, path)
+	l, c := newLimiter(t, budget.Bounds{}, path)
 
 	const n = 64
 	var wg sync.WaitGroup
@@ -365,7 +367,7 @@ func TestConcurrentChargesAllPersist(t *testing.T) {
 	if got := l.Snapshot().Global; got != n {
 		t.Errorf("in-memory global = %d, want %d", got, n)
 	}
-	reopened, err := budget.New(budget.Config{Bounds: budget.Bounds{}, Path: path})
+	reopened, err := budget.New(budget.Config{Bounds: budget.Bounds{}, Path: path, Now: c.Now})
 	if err != nil {
 		t.Fatalf("reopen: %v", err)
 	}
