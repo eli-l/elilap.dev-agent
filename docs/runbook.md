@@ -78,6 +78,70 @@ refuses to overwrite an existing destination. In container mode the default
 lands next to `AGENT_DB_PATH`, i.e. in `/data`. Open a snapshot with
 `./agent stats --db <snapshot>` to confirm its counts.
 
+The same command snapshots the **knowledge-request store** to
+`requests-<UTC stamp>.db` beside the index snapshot (and reports `skipped`
+when the store does not exist). That database is the one file a rebuild does
+not recreate, so it belongs in every backup: `--requests-db` overrides its
+path.
+
+## Deferred knowledge requests
+
+A peer that gets the refusal can submit the question instead of giving up on
+it. The question is stored in `requests.db` (beside the index, never inside
+it), you are notified, and the peer is told when the answer exists.
+
+On the owner side:
+
+```bash
+./agent requests list                     # newest first + pending count
+./agent requests show req_…               # question, reason, context, answer, push state
+./agent requests review req_… --note "worth a post"
+./agent requests resolve req_… --source-url https://read.elilap.dev/…
+./agent requests decline req_… --note "out of scope"
+./agent requests purge --older-than 180d  # closed requests only
+```
+
+`list`/`show` are read-only and no triage command will create a store at a
+wrong path; pass `--db` (and `--index` for the grounded `resolve`) if the
+server was started with explicit path flags. Peer-supplied text is stripped of
+terminal escape/control characters when printed; `--json` gives it escaped. `resolve` runs the grounded loop on the stored question
+first, against the current index. If the corpus still refuses, it fails and records nothing —
+that is the check that the post actually answers what was asked. So the
+sequence is: publish, `./agent ingest`, `./agent embed`, then `resolve`. The
+stored answer and its citations come from the index; `--no-ask --answer "..."`
+is the explicit override for a resolution recorded without a model run.
+
+To be notified when a request arrives, point a webhook at the server:
+
+```bash
+AGENT_REQUEST_NOTIFY_URL=http://127.0.0.1:18999/owner ./agent serve
+```
+
+One JSON POST per new submission (`{"event":"knowledge_request.created",
+"request":{…}}`), queued off the request path. The URL is your own
+configuration, so a local http hook is fine; a malformed value fails startup
+with exit 2 naming `AGENT_REQUEST_NOTIFY_URL` rather than silently disabling
+the notification.
+
+Peer delivery uses A2A push notifications and needs the flag:
+
+```bash
+./agent serve --addr 127.0.0.1:8080 --push-notifications
+# loopback testing with an http receiver:
+./agent serve --push-notifications --push-allow-insecure
+./agent requests resolve req_… --no-ask --answer "…" --push-allow-insecure
+```
+
+A peer-supplied webhook must be **https to a public host**. `--push-allow-insecure`
+allows http/private targets for loopback tests and is a **startup error with
+`--bind-public`**; `--push-allow-host` can restrict targets to a domain. If a
+peer registered no webhook, it polls `tasks/get` with its request id.
+
+A public bind also needs the submission caps non-zero
+(`--request-quota`, `--request-address-quota`, `--request-global-quota`), which
+it gets by default; `--max-pending` bounds the open inbox. Full workflow and
+wire contract: [requests.md](/requests.md).
+
 ## Query (no LLM)
 
 ```bash

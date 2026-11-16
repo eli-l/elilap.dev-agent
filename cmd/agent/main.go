@@ -86,7 +86,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	case "stats":
 		code = runStats(args[1:], rtCfg.DBPath, stdout, stderr)
 	case "backup":
-		code = runBackup(args[1:], rtCfg.DBPath, stdout, stderr)
+		code = runBackup(args[1:], rtCfg, stdout, stderr)
 	case "query":
 		code = runQuery(args[1:], rtCfg, stdout, stderr)
 	case "ask":
@@ -95,6 +95,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 		code = runServe(args[1:], rtCfg, stderr)
 	case "tokens":
 		code = runTokens(args[1:], rtCfg, stdout, stderr)
+	case "requests":
+		code = runRequests(args[1:], rtCfg, stdout, stderr)
 	default:
 		log.Error().Str("command", args[0]).Msg("unknown subcommand")
 		fmt.Fprintf(stderr, "agent: unknown subcommand %q\n\n", args[0])
@@ -156,14 +158,17 @@ Commands:
   backup             snapshot the index with VACUUM INTO
   serve              serve the read-only HTTP surface (A2A, card, /v1/*)
   tokens             issue, revoke, and list A2A bearer tokens
+  requests           owner inbox for deferred knowledge requests (list/show/
+                     review/resolve/decline/delete/purge)
 
 Missing credential variables warn in sources validate; --strict makes them errors.
 
 `+loggingFlagHelp+`
 Run "agent serve --help" for the server flags (default 127.0.0.1:8080; loopback
 is token-less, a public bind needs a token from "agent tokens add").
-Run "agent backup --help" for the snapshot flags, and "agent tokens add --help"
-for token issuance, and "agent sources list --help", "agent sources validate
---help", or "agent sources inspect --help" for source flags.
+Run "agent backup --help" for the snapshot flags, "agent tokens add --help"
+for token issuance, "agent requests --help" for the deferred-question inbox,
+and "agent sources list --help", "agent sources validate --help", or
+"agent sources inspect --help" for source flags.
 `)
 }

@@ -27,7 +27,9 @@ import (
 	"github.com/eli-l/elilap.dev-agent/internal/envcfg"
 	"github.com/eli-l/elilap.dev-agent/internal/llm"
 	"github.com/eli-l/elilap.dev-agent/internal/logging"
+	"github.com/eli-l/elilap.dev-agent/internal/notify"
 	"github.com/eli-l/elilap.dev-agent/internal/ratelimit"
+	"github.com/eli-l/elilap.dev-agent/internal/requests"
 	"github.com/eli-l/elilap.dev-agent/internal/retrieval"
 	"github.com/eli-l/elilap.dev-agent/internal/sources/shared"
 	"github.com/eli-l/elilap.dev-agent/internal/store"
@@ -62,6 +64,21 @@ const (
 	// defaultMaxInflight caps concurrent answers so a queue cannot outlive the
 	// server's write timeout.
 	defaultMaxInflight = 2
+	// defaultRequestRate is the per-identity submission rate: a submission is
+	// a durable write, so it is cheaper to allow than an answer but rarer in
+	// practice.
+	defaultRequestRate = 1
+	// defaultRequestQuota is the submissions allowed per identity per day.
+	defaultRequestQuota = 3
+	// defaultRequestAddressQuota is the submissions allowed per peer address
+	// per day: the backstop for a peer that rotates its self-asserted id.
+	defaultRequestAddressQuota = 5
+	// defaultRequestGlobalQuota is the submissions allowed per day across all
+	// peers. It bounds what a public agent's inbox can hold.
+	defaultRequestGlobalQuota = 20
+	// defaultMaxPending caps the open requests the inbox will hold before it
+	// refuses new ones; the owner must triage to make room.
+	defaultMaxPending = 500
 	// defaultAuthAttemptLimit caps failed bearer-auth attempts per address
 	// per minute. A successful lookup is not charged; failures are charged
 	// only after the lookup, so a valid token is never throttled behind NAT.
@@ -104,6 +121,16 @@ func runServe(args []string, rtCfg envcfg.Config, stderr io.Writer) int {
 	allowPublicRetrieve := fs.Bool("allow-public-retrieve", false, "serve /v1/retrieve on a public bind (private debug path by default)")
 	maxTokens := fs.Int("max-tokens", agentloop.DefaultMaxTokens, "completion token budget per chat request")
 	excerptTokens := fs.Int("excerpt-tokens", agentloop.DefaultExcerptTokens, "total excerpt token budget")
+	requestsDB := fs.String("requests-db", "", "durable knowledge-request store (default: requests.db beside the index)")
+	requestRate := fs.Int("request-rate", defaultRequestRate, "knowledge-request submissions per minute per identity (0 disables)")
+	requestQuota := fs.Int("request-quota", defaultRequestQuota, "knowledge-request submissions per day per identity (0 disables; required with --bind-public)")
+	requestAddressQuota := fs.Int("request-address-quota", defaultRequestAddressQuota, "knowledge-request submissions per day per peer address (0 disables; required with --bind-public)")
+	requestGlobalQuota := fs.Int("request-global-quota", defaultRequestGlobalQuota, "knowledge-request submissions per day across all peers (0 disables; required with --bind-public)")
+	maxPending := fs.Int("max-pending", defaultMaxPending, "open knowledge requests before new submissions are refused (0 disables)")
+	pushNotifications := fs.Bool("push-notifications", false, "accept peer A2A push-notification registrations (advertised in the card only when set)")
+	pushInsecure := fs.Bool("push-allow-insecure", false, "allow http/private push targets (loopback testing only; refused with --bind-public)")
+	var pushHosts hostList
+	fs.Var(&pushHosts, "push-allow-host", "restrict peer push targets to this host (repeatable; .suffix matches a subtree)")
 	if err := fs.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return 0
@@ -115,6 +142,7 @@ func runServe(args []string, rtCfg envcfg.Config, stderr io.Writer) int {
 		return 2
 	}
 	budgetOn := budgetActive(*bindPublic, fs)
+	submitOn := submitBudgetActive(*bindPublic, fs)
 	if *bindPublic {
 		if err := validatePublicAddr(*addr); err != nil {
 			fmt.Fprintf(stderr, "agent serve: %v\n", err)
@@ -135,6 +163,11 @@ func runServe(args []string, rtCfg envcfg.Config, stderr io.Writer) int {
 		{"--address-quota", *addressQuota},
 		{"--quota-global", *globalQuota},
 		{"--max-inflight", *maxInflight},
+		{"--request-rate", *requestRate},
+		{"--request-quota", *requestQuota},
+		{"--request-address-quota", *requestAddressQuota},
+		{"--request-global-quota", *requestGlobalQuota},
+		{"--max-pending", *maxPending},
 	} {
 		if limit.value < 0 {
 			fmt.Fprintf(stderr, "agent serve: %s must be >= 0 (0 disables)\n", limit.flag)
@@ -149,12 +182,45 @@ func runServe(args []string, rtCfg envcfg.Config, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "agent serve: --excerpt-tokens must be >= 0 (0 uses the default)\n")
 		return 2
 	}
+	// The request store follows this run's index unless the environment names
+	// an explicit file, exactly like the quota counters follow --db rather than
+	// the environment's index default.
+	requestsPath := strings.TrimSpace(*requestsDB)
+	if requestsPath == "" {
+		requestsPath = rtCfg.RequestsPath()
+		if strings.TrimSpace(rtCfg.RequestsDBPath) == "" {
+			requestsPath = filepath.Join(filepath.Dir(*dbFlag), envcfg.DefaultRequestsDBFile)
+		}
+	}
 	// A public agent is a spending surface: a peer with a URL and a question
 	// can move real money on a cloud chat model. Refusing a bind without a
 	// daily ceiling is the one configuration this service will not run.
 	if *bindPublic && (*askQuota <= 0 || *addressQuota <= 0 || *globalQuota <= 0) {
 		fmt.Fprintf(stderr, "agent serve: --bind-public requires --ask-quota, --address-quota, and --quota-global (a public agent needs a spend ceiling)\n")
 		return 2
+	}
+	// A public inbox is a write surface: without a daily cap any peer could
+	// fill it. The three quotas are what bound storage as well as abuse.
+	if *bindPublic && (*requestQuota <= 0 || *requestAddressQuota <= 0 || *requestGlobalQuota <= 0) {
+		fmt.Fprintf(stderr, "agent serve: --bind-public requires --request-quota, --request-address-quota, and --request-global-quota (a public inbox needs a daily cap)\n")
+		return 2
+	}
+	// https is mandatory where the service is public; the loopback escape
+	// hatch exists so a test webhook on localhost can be exercised.
+	if *bindPublic && *pushInsecure {
+		fmt.Fprintf(stderr, "agent serve: --push-allow-insecure is refused with --bind-public (a public agent delivers only to https URLs)\n")
+		return 2
+	}
+	// Validate the operator webhook now: a typo would otherwise disable the
+	// notification silently for the life of the process, and the operator
+	// would only notice the missing events. The error names the variable and
+	// never echoes the value (a URL may carry a credential in its query).
+	if notifyURL := rtCfg.RequestNotifyURL; notifyURL != "" {
+		probe := notify.New(notify.Policy{AllowInsecure: true})
+		if _, err := probe.ValidateURL(notifyURL); err != nil {
+			fmt.Fprintf(stderr, "agent serve: %s is not a usable webhook URL: %v\n", envcfg.EnvRequestNotifyURL, err)
+			return 2
+		}
 	}
 	// Tokens are optional: a token-less loopback bind is the dev deployment and a
 	// token-less public bind is the budgeted public one (Decision 25). A missing
@@ -194,6 +260,15 @@ func runServe(args []string, rtCfg envcfg.Config, stderr io.Writer) int {
 		return 1
 	}
 
+	// The request store is original data: it is opened read-write and survives
+	// an index rebuild, which is why it has its own file (Decision 26).
+	reqStore, err := requests.Open(requestsPath)
+	if err != nil {
+		fmt.Fprintf(stderr, "agent serve: %v\n", err)
+		return 1
+	}
+	defer reqStore.Close()
+
 	// The spend budget lives beside the index because the index itself is opened
 	// read-only: a public answer must be counted somewhere that survives a
 	// restart, and the index is derived data the operator may delete. A loopback
@@ -219,6 +294,44 @@ func runServe(args []string, rtCfg envcfg.Config, stderr io.Writer) int {
 			fmt.Fprintf(stderr, "agent serve: %v\n", err)
 			return 1
 		}
+	}
+
+	// Submissions get their own budget instance and counter file: a peer must
+	// not be able to spend answer quota on writes, or write quota on answers.
+	var submitBudget *budget.Limiter
+	if submitOn {
+		submitBudget, err = budget.New(budget.Config{
+			Bounds: budget.Bounds{
+				PerMinute:        *requestRate,
+				PerDay:           *requestQuota,
+				PerAddressPerDay: *requestAddressQuota,
+				GlobalPerDay:     *requestGlobalQuota,
+			},
+			Path: filepath.Join(filepath.Dir(requestsPath), "request-quota.json"),
+		})
+		if err != nil {
+			fmt.Fprintf(stderr, "agent serve: %v\n", err)
+			return 1
+		}
+	}
+
+	// Peer push targets are strict (https, public address); the owner's own
+	// notification URL is operator configuration and may be a local http hook.
+	var pushSender *notify.Sender
+	if *pushNotifications {
+		pushSender = notify.New(notify.Policy{
+			AllowInsecure: *pushInsecure,
+			AllowHosts:    pushHosts,
+		})
+	}
+	ownerNotifyURL := rtCfg.RequestNotifyURL
+	var ownerDispatcher *notify.Dispatcher
+	if ownerNotifyURL != "" {
+		ownerDispatcher = notify.NewDispatcher(notify.New(notify.Policy{
+			AllowInsecure: true,
+			MaxAttempts:   3,
+		}), 32)
+		defer ownerDispatcher.Close()
 	}
 
 	// Embeddings and chat each get their own endpoint and credential: the
@@ -248,7 +361,10 @@ func runServe(args []string, rtCfg envcfg.Config, stderr io.Writer) int {
 	limiter := ratelimit.New(*rateLimit)
 	authAttempts := ratelimit.New(*authLimit)
 
-	card := serveAgentCard(tokens.Secured, cardBase)
+	card := serveAgentCard(tokens.Secured, cardBase, a2a.CardOptions{
+		PushNotifications: *pushNotifications,
+		KnowledgeRequests: true,
+	})
 	mux := http.NewServeMux()
 	for _, path := range a2a.CardPaths {
 		mux.Handle("GET "+path, logging.RequestMiddleware(path, card))
@@ -256,6 +372,20 @@ func runServe(args []string, rtCfg envcfg.Config, stderr io.Writer) int {
 	a2aHandler := a2a.NewHandler(loop)
 	if spend != nil {
 		a2aHandler.Budget = spend
+	}
+	if submitBudget != nil {
+		a2aHandler.Submit = submitBudget
+	}
+	a2aHandler.Requests = reqStore
+	a2aHandler.Push = pushSender
+	a2aHandler.MaxPending = *maxPending
+	if ownerDispatcher != nil {
+		a2aHandler.OnSubmit = func(req requests.Request) {
+			ownerDispatcher.Publish(ownerNotifyURL, "", map[string]any{
+				"event":   "knowledge_request.created",
+				"request": req,
+			})
+		}
 	}
 	mux.Handle(a2a.CardURLPath, logging.RequestMiddleware(a2a.CardURLPath,
 		requireToken(tokens, surfaceRPC, authAttempts, a2aHandler)))
@@ -296,6 +426,7 @@ func runServe(args []string, rtCfg envcfg.Config, stderr io.Writer) int {
 		Int("tokens", tokens.Len()).
 		Str("quota_file", quotaPath).
 		Bool("budget_enabled", spend != nil).
+		Bool("submit_budget_enabled", submitBudget != nil).
 		Int("ask_rate_per_min", *askRate).
 		Int("ask_quota_per_day", *askQuota).
 		Int("address_quota_per_day", *addressQuota).
@@ -306,6 +437,16 @@ func runServe(args []string, rtCfg envcfg.Config, stderr io.Writer) int {
 		Int("excerpt_tokens", *excerptTokens).
 		Int("rate_limit_per_min", *rateLimit).
 		Int("auth_limit_per_min", *authLimit).
+		Str("requests_db", requestsPath).
+		Bool("push_notifications", *pushNotifications).
+		Bool("push_allow_insecure", *pushInsecure).
+		Strs("push_allow_hosts", pushHosts).
+		Int("max_pending_requests", *maxPending).
+		Bool("request_notify_enabled", ownerNotifyURL != "").
+		Int("request_rate_per_min", *requestRate).
+		Int("request_quota_per_day", *requestQuota).
+		Int("request_address_quota_per_day", *requestAddressQuota).
+		Int("request_global_per_day", *requestGlobalQuota).
 		Msg("server listening")
 
 	errCh := make(chan error, 1)
@@ -343,10 +484,12 @@ func runServe(args []string, rtCfg envcfg.Config, stderr io.Writer) int {
 // must be able to discover which scheme to authenticate with before it has a
 // token. secured is evaluated per request so a live token-store change is
 // reflected; baseURL is fixed at startup and never derived from a request.
-func serveAgentCard(secured func() bool, baseURL string) http.Handler {
+// opts names the optional capabilities this deployment actually serves, so the
+// card never advertises a method that would answer -32003.
+func serveAgentCard(secured func() bool, baseURL string, opts a2a.CardOptions) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json; charset=utf-8")
-		if err := json.NewEncoder(w).Encode(a2a.NewCard(baseURL, secured())); err != nil {
+		if err := json.NewEncoder(w).Encode(a2a.NewCardWithOptions(baseURL, secured(), opts)); err != nil {
 			log := logging.HTTP()
 			log.Error().Err(err).Msg("write agent card failed")
 		}
@@ -361,6 +504,35 @@ var budgetFlags = map[string]bool{
 	"address-quota": true,
 	"quota-global":  true,
 	"max-inflight":  true,
+}
+
+// requestBudgetFlags turn on the *submission* budget only. A write cap must
+// never enable the answer spend budget on a loopback bind the operator did not
+// ask to budget (and vice versa): the two counters are separate on purpose.
+var requestBudgetFlags = map[string]bool{
+	"request-rate":          true,
+	"request-quota":         true,
+	"request-address-quota": true,
+	"request-global-quota":  true,
+}
+
+// submitBudgetActive reports whether submissions are budgeted: on every public
+// bind (a public inbox needs a cap), and on a loopback bind only when a
+// submission flag was given explicitly. An answer flag must not turn it on.
+func submitBudgetActive(bindPublic bool, fs *flag.FlagSet) bool {
+	return bindPublic || requestBudgetActive(fs)
+}
+
+// requestBudgetActive reports whether a request-budget flag was given
+// explicitly. --max-pending is not one: it needs no limiter or counter file.
+func requestBudgetActive(fs *flag.FlagSet) bool {
+	active := false
+	fs.Visit(func(f *flag.Flag) {
+		if requestBudgetFlags[f.Name] {
+			active = true
+		}
+	})
+	return active
 }
 
 // budgetActive reports whether the spend budget applies to this bind. A public

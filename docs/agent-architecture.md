@@ -261,15 +261,29 @@ A2A v0.3 JSON-RPC binding, exposing the *agent*:
   refusing any answer produced without a retrieved excerpt are the
   prompt-injection backstops.
 
+## The one write surface
+
+The service is read-only against Ghost, Postiz, and the web, and the loop only
+reads the index. The single exception is the **deferred knowledge-request
+store** (`PLAN.md` Decision 26): a peer that got the refusal can explicitly
+submit its question over `message/send`, the request is persisted in its own
+SQLite file, and the operator answers it by publishing. Nothing is stored
+automatically, the submission runs no model call, the loop gains no tool, and
+a stored request is never corpus evidence — resolution re-runs this same loop
+and only records an answer the index grounds. The workflow, the A2A task
+surface, and the push/poll delivery are in
+[deferred knowledge requests](/requests.md).
+
 ## What moved, and what did not
 
 * Moved: the answer loop (which used to be "the caller's problem") now
   lives here; the peer-facing product is the agent, not bare retrieval.
 * Unchanged: ingest stays strictly read-only against Ghost, Postiz, and the
   website it reads as HTML;
-  the index stays a derived, rebuildable SQLite file; the API exposes no
-  writes; generation beyond the grounded loop stays a non-goal, as does
-  multi-agent orchestration inside this service.
+  the index stays a derived, rebuildable SQLite file; the only write the API
+  exposes is the deferred-request submit/triage path above, which never
+  touches the corpus; generation beyond the grounded loop stays a non-goal, as
+  does multi-agent orchestration inside this service.
 
 Implementation sequencing lives in `../PLAN.md`; this file records the
 architecture and its rationale, and [a2a.md](/a2a.md) records the wire

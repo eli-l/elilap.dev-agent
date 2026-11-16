@@ -39,7 +39,8 @@ func writeEnvFile(t *testing.T, content string) string {
 func TestLoadDefaults(t *testing.T) {
 	unsetFor(t, EnvDBPath, EnvEmbedBaseURL, EnvEmbedAPIKey, EnvEmbedModel, EnvEmbedDims,
 		EnvChatBaseURL, EnvChatAPIKey, EnvChatModel, EnvChatTokenParam,
-		EnvA2ATokens, EnvA2ATokensFile, EnvA2APublicURL)
+		EnvA2ATokens, EnvA2ATokensFile, EnvA2APublicURL,
+		EnvRequestsDBPath, EnvRequestNotifyURL)
 
 	cfg, err := Load()
 	if err != nil {
@@ -114,6 +115,8 @@ func TestLoadTreatsEmptyAsUnset(t *testing.T) {
 	t.Setenv(EnvA2ATokens, "")
 	t.Setenv(EnvA2ATokensFile, "")
 	t.Setenv(EnvA2APublicURL, "")
+	t.Setenv(EnvRequestsDBPath, "")
+	t.Setenv(EnvRequestNotifyURL, "")
 
 	cfg, err := Load()
 	if err != nil {
@@ -152,18 +155,20 @@ func TestLoadRejectsBadTokenParam(t *testing.T) {
 // from drifting: example.env, docs, and code all quote the constants.
 func TestConfigTagsMatchConstants(t *testing.T) {
 	want := map[string]string{
-		"DBPath":         EnvDBPath,
-		"EmbedBaseURL":   EnvEmbedBaseURL,
-		"EmbedAPIKey":    EnvEmbedAPIKey,
-		"EmbedModel":     EnvEmbedModel,
-		"EmbedDims":      EnvEmbedDims,
-		"ChatBaseURL":    EnvChatBaseURL,
-		"ChatAPIKey":     EnvChatAPIKey,
-		"ChatModel":      EnvChatModel,
-		"ChatTokenParam": EnvChatTokenParam,
-		"A2ATokens":      EnvA2ATokens,
-		"A2ATokensFile":  EnvA2ATokensFile,
-		"A2APublicURL":   EnvA2APublicURL,
+		"DBPath":           EnvDBPath,
+		"EmbedBaseURL":     EnvEmbedBaseURL,
+		"EmbedAPIKey":      EnvEmbedAPIKey,
+		"EmbedModel":       EnvEmbedModel,
+		"EmbedDims":        EnvEmbedDims,
+		"ChatBaseURL":      EnvChatBaseURL,
+		"ChatAPIKey":       EnvChatAPIKey,
+		"ChatModel":        EnvChatModel,
+		"ChatTokenParam":   EnvChatTokenParam,
+		"A2ATokens":        EnvA2ATokens,
+		"A2ATokensFile":    EnvA2ATokensFile,
+		"A2APublicURL":     EnvA2APublicURL,
+		"RequestsDBPath":   EnvRequestsDBPath,
+		"RequestNotifyURL": EnvRequestNotifyURL,
 	}
 	typ := reflect.TypeOf(Config{})
 	if typ.NumField() != len(want) {
@@ -213,6 +218,19 @@ func TestLoadTrimsValues(t *testing.T) {
 	}
 	if cfg != want {
 		t.Errorf("Load() = %+v, want %+v", cfg, want)
+	}
+}
+
+// TestRequestsPathFollowsTheIndex pins the default: the request store sits
+// beside the index, so the container's single /data mount covers it.
+func TestRequestsPathFollowsTheIndex(t *testing.T) {
+	cfg := Config{DBPath: "/data/index.db"}
+	if got, want := cfg.RequestsPath(), "/data/requests.db"; got != want {
+		t.Errorf("RequestsPath() = %q, want %q", got, want)
+	}
+	cfg.RequestsDBPath = "./state/requests.db"
+	if got, want := cfg.RequestsPath(), "./state/requests.db"; got != want {
+		t.Errorf("RequestsPath() = %q, want the explicit path %q", got, want)
 	}
 }
 

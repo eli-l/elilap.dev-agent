@@ -73,6 +73,8 @@ constants, not in struct tags, so there is exactly one definition.
 | `AGENT_A2A_TOKENS` | `internal/envcfg` | empty | Comma-separated `id:token` bearer list for the A2A surface; empty and loopback = token-less dev |
 | `AGENT_A2A_TOKENS_FILE` | `internal/envcfg` | `./data/a2a-tokens.txt` | `0600` token file, re-read on change (rotation without restart); gitignored, missing = no tokens |
 | `AGENT_A2A_PUBLIC_URL` | `internal/envcfg` | empty | Absolute service root advertised in the agent card; required with `--bind-public`, otherwise a loopback bind derives `http://<addr>` |
+| `AGENT_REQUESTS_DB_PATH` | `internal/envcfg` | empty → `<index dir>/requests.db` | Durable knowledge-request store; deliberately separate from the derived index so an index rebuild cannot lose a submitted question (Decision 26) |
+| `AGENT_REQUEST_NOTIFY_URL` | `internal/envcfg` | empty | Operator webhook for new knowledge requests (one JSON POST per request). Empty disables the notification; `agent requests list` remains. Operator config, so a local http hook is allowed. Validated at startup (a typo exits 2 naming the variable) and never echoed in an error |
 | `EVAL_BASE_URL` | `evals/` (Python) | `http://localhost:8000/v1` | Judge endpoint for the Ragas harness; the promptfoo `redteam.provider` mirrors it. Independent of `EMBED_*`/`CHAT_*` |
 | `EVAL_MODEL` | `evals/` (Python) | `mtplx-qwen36-35b-a3b-optimized-speed` | Model the harness scores; promptfoo generates (local-capable plugins) and grades with it |
 | `EVAL_API_KEY` | `evals/` (Python) | empty → `local` | Secret; local servers ignore its value. promptfoo's config uses the literal `local` |
@@ -82,8 +84,11 @@ constants, not in struct tags, so there is exactly one definition.
 | `POSTIZ_API_KEY` | `sources.yaml` ref | — | Secret |
 
 Runtime files (the SQLite index and its WAL/SHM siblings, `agent backup`
-snapshots, the A2A token file, and the public-budget counters in
-`quota.json`) live under `./data/` on the host and `/data` in the container.
+snapshots, the A2A token file, the knowledge-request store `requests.db`, and
+the budget counters in `quota.json` + `request-quota.json`) live under
+`./data/` on the host and `/data` in the container. `requests.db` is the one
+**original-data** file among them: the index and the counters are derived (or
+disposable), a request is not, and `agent backup` snapshots both databases.
 `.gitkeep` keeps the directory; its contents are gitignored and excluded from
 the image build context, and compose bind-mounts `./data:/data`.
 
@@ -137,7 +142,8 @@ non-loopback bind (`--bind-public`) requires an explicit
 request `Host`), and a bearer token is optional. A bare loopback bind is
 unbudgeted; pass a budget flag to enable the budget there. The public-budget counters
 are not an environment variable: they live next to the index in
-`quota.json` (`--quota-file` overrides). See
+`quota.json` (`--quota-file` overrides), and the submission counters beside
+the request store in `request-quota.json`. See
 [a2a.md](a2a.md) for issuance, rotation, identity, the budget gates, and the
 audit record.
 
@@ -151,6 +157,15 @@ suite in `tests-ai/` has no variables of its own: its
 the two files move together. See
 [RAG evaluation with Ragas](ragas-eval.md) and
 [Red-team evaluation with promptfoo](red-team.md).
+
+**The request variables are the write surface.** `AGENT_REQUESTS_DB_PATH`
+keeps the deferred-question store out of `index.db`; empty means
+`requests.db` in the index's directory, so the container's single `/data`
+mount covers it with no second setting. `AGENT_REQUEST_NOTIFY_URL` is the
+operator's own webhook and is trusted configuration (a local http hook is
+fine); peer-supplied push targets are https-only public hosts and are refused
+with `--bind-public` if `--push-allow-insecure` is set. See
+[deferred knowledge requests](requests.md).
 
 ## Adding a variable
 

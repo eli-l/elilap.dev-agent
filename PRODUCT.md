@@ -1,6 +1,8 @@
 # Product priorities
 
-Updated: 2026-11-09. Status: proposed product direction.
+Updated: 2026-11-13. Status: capability 3 (submit missing-knowledge requests)
+is implemented in `PLAN.md` Phase 5 / Decision 26; the rest is the proposed
+product direction.
 
 ## Product promise
 
@@ -39,7 +41,7 @@ do next without interpreting ambiguous prose.
 |---|---|---|---|
 | 1 | Grounded answers with reusable evidence | **Critical:** callers can incorporate your knowledge while preserving attribution and checking its basis. | Preserve the shipped Q&A loop and return a versioned structured answer with claims linked to evidence. Include exact supporting excerpts, chunk IDs, source URLs, titles, publication dates, and content hashes. Today citations carry chunk IDs and URLs, but do not provide this complete evidence package. |
 | 2 | Explicit answerability and failure outcomes | **Critical:** callers can distinguish missing evidence from a service failure and choose whether to narrow, retry, or consult another source. | Distinguish `answered`, `partial`, and `insufficient_evidence`; report unanswered parts. Keep timeout, backend failure, and budget exhaustion as operational failures with appropriate retry guidance. Preserve the refusal text for compatibility where required. The documented token-exhaustion-to-refusal behavior needs correction. |
-| 3 | Submit missing-knowledge requests and present them to Eli | **High for callers and Eli:** turns an unanswered question into an actionable request and reveals which knowledge other agents actually need. | After a missing or partial answer, let the caller explicitly submit its question and optional reason/context. Persist it durably, return a request ID, and present a reviewable inbox to Eli through the CLI. Ordinary questions and refusals do not automatically create requests. See the request workflow below. |
+| 3 | Submit missing-knowledge requests and present them to Eli | **High for callers and Eli:** turns an unanswered question into an actionable request and reveals which knowledge other agents actually need. — **Implemented 2026-11-13.** | An explicit `message/send` submission is persisted in its own store, answered with an A2A `Task`, triaged with `agent requests`, and delivered back by push or polling ([requests.md](docs/requests.md)). Ordinary questions and refusals do not automatically create requests. The workflow below is the shipped behaviour. |
 | 4 | Discoverable capabilities and a stable caller contract | **High:** agents can decide when to delegate and integrate without guessing response semantics. | Extend the existing agent card and integration docs with concrete examples, scope limits, response schema/version, supported filters, and error/retry behavior. Preserve existing clients when extending output. One working peer request and response should demonstrate evidence consumption. |
 | 5 | Corpus coverage and freshness | **High:** callers can judge whether the corpus is relevant and whether a negative result is meaningful. | Expose enabled indexed sources, indexed publication-date ranges, last successful sync per source, pending embedding count, and a corpus revision on answers. Distinguish the age of writing from the freshness of ingestion. Indexed date ranges must not imply complete historical coverage. |
 | 6 | Reliable unattended availability and refresh | **Critical for ongoing use:** callers can depend on the service and receive newly published knowledge without operator intervention. | Complete scheduled ingest followed by resumable embedding, deployment and recovery work already planned, and basic readiness visibility. Keep model failures distinguishable from corpus gaps. Capture full Ragas and promptfoo runs before treating the MVP as dependable. |

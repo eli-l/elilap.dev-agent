@@ -35,7 +35,7 @@ the whole process while log lines stay attributable:
 | Sources | `sources` | `logging.Sources()` | Upstream fetchers (Ghost, Postiz): pages listed, items fetched, request outcomes. |
 | DB | `db` | `logging.DB()` | Database: open, migrations applied, chunk and ledger writes, and the retrieval read path. |
 | Agent | `agent` | `logging.Agent()` | The grounded loop: the RAG request sent to the chat model, the messages it contains, the tool calls and results, and the reply. |
-| Audit | `audit` | `logging.Audit()` | One record per A2A/`/v1/ask` task: `principal` (the identity the budget charged), token id when present, method, question fingerprint (SHA-256 + byte length), outcome, iterations, citation count, elapsed. No question text, answer, prompt, or excerpt. |
+| Audit | `audit` | `logging.Audit()` | One record per A2A/`/v1/ask` task: `principal` (the identity the budget charged), token id when present, method, question fingerprint (SHA-256 + byte length), outcome, iterations, citation count, elapsed. No question text, answer, prompt, or excerpt. A deferred knowledge-request submission logs `outcome: "submitted"` with the same fingerprint; the stored question text never reaches this stream. |
 
 Before `Setup` runs, every module logger is a no-op, so library packages and
 tests stay silent by default.

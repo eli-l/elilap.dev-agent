@@ -48,7 +48,8 @@ Website (HTML)    ─┘        ▲                                (hybrid RRF)
 
 * **One Go binary** with subcommands: `ingest`, `embed`, `query`, `ask`,
   `stats`, `backup`, `serve` (A2A card + `message/send` + `/v1/retrieve` +
-  `/v1/ask`), and `tokens` (A2A bearer issuance/revocation).
+  `/v1/ask`), `tokens` (A2A bearer issuance/revocation), and `requests` (the
+  deferred-question inbox).
 * **One SQLite file** (`data/index.db`) you can `cp` to back up.
 * **Hybrid retrieval**: BM25 (FTS5) + vector (sqlite-vec) with RRF merging.
 * **Model-agnostic**: self-hosted LocalAI by default
@@ -68,6 +69,13 @@ token-less too**: callers identify as an agent (`metadata.agentId`) or a user
   20/day per address, 60/day global, plus 2 concurrent model calls — cap what
   the endpoint can spend on the chat model.
 
+  When the writing does not answer a question, a peer can **submit it** and
+  get a durable `Task` back: the request is stored beside the index, you are
+  notified, you answer it by publishing, and `./agent requests resolve`
+  re-runs the grounded loop before returning the answer to the peer's agent
+  over an A2A push webhook or `tasks/get`. See
+  [`docs/requests.md`](./docs/requests.md).
+
 ## Quick reference
 
 ```bash
@@ -82,6 +90,7 @@ go build -tags sqlite_fts5 -o agent ./cmd/agent
 ./agent backup            # online VACUUM INTO snapshot next to the index
 ./agent serve             # 127.0.0.1:8080, token-less loopback
 ./agent tokens add --id alice   # optional bearer token; prints id:token once
+./agent requests list           # deferred questions peers submitted
 ./agent serve --bind-public --addr 0.0.0.0:8080   # requires daily quotas, not a token
 ```
 

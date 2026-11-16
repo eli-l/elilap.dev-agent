@@ -36,20 +36,22 @@ func TestExampleEnvIsComplete(t *testing.T) {
 
 	// Values example.env must carry for settings that have a default.
 	defaults := map[string]string{
-		logging.EnvLevel:         logging.DefaultLevel,
-		logging.EnvFormat:        logging.DefaultFormat,
-		envcfg.EnvDBPath:         envcfg.DefaultDBPath,
-		envcfg.EnvEmbedBaseURL:   envcfg.DefaultModelBaseURL,
-		envcfg.EnvEmbedAPIKey:    "",
-		envcfg.EnvEmbedModel:     envcfg.DefaultEmbedModel,
-		envcfg.EnvEmbedDims:      strconv.Itoa(envcfg.DefaultEmbedDims),
-		envcfg.EnvChatBaseURL:    envcfg.DefaultModelBaseURL,
-		envcfg.EnvChatAPIKey:     "",
-		envcfg.EnvChatModel:      envcfg.DefaultChatModel,
-		envcfg.EnvChatTokenParam: envcfg.DefaultChatTokenParam,
-		envcfg.EnvA2ATokens:      "",
-		envcfg.EnvA2ATokensFile:  envcfg.DefaultA2ATokensFile,
-		envcfg.EnvA2APublicURL:   "",
+		logging.EnvLevel:           logging.DefaultLevel,
+		logging.EnvFormat:          logging.DefaultFormat,
+		envcfg.EnvDBPath:           envcfg.DefaultDBPath,
+		envcfg.EnvEmbedBaseURL:     envcfg.DefaultModelBaseURL,
+		envcfg.EnvEmbedAPIKey:      "",
+		envcfg.EnvEmbedModel:       envcfg.DefaultEmbedModel,
+		envcfg.EnvEmbedDims:        strconv.Itoa(envcfg.DefaultEmbedDims),
+		envcfg.EnvChatBaseURL:      envcfg.DefaultModelBaseURL,
+		envcfg.EnvChatAPIKey:       "",
+		envcfg.EnvChatModel:        envcfg.DefaultChatModel,
+		envcfg.EnvChatTokenParam:   envcfg.DefaultChatTokenParam,
+		envcfg.EnvA2ATokens:        "",
+		envcfg.EnvA2ATokensFile:    envcfg.DefaultA2ATokensFile,
+		envcfg.EnvA2APublicURL:     "",
+		envcfg.EnvRequestsDBPath:   "",
+		envcfg.EnvRequestNotifyURL: "",
 	}
 
 	// evals/ (Python, uv) reads EVAL_* directly; no Go envconfig struct

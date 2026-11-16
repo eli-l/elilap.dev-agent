@@ -24,6 +24,9 @@ const (
 	OutcomeTimeout  = "timeout"
 	OutcomeCanceled = "canceled"
 	OutcomeError    = "error"
+	// OutcomeSubmitted is a deferred knowledge request that was persisted: no
+	// model call ran, and the record proves only that the owner was told.
+	OutcomeSubmitted = "submitted"
 )
 
 // Entry is one task record. Question is hashed before it reaches the log; it

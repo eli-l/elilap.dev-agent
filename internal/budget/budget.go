@@ -52,6 +52,11 @@ const (
 	ScopeGlobalDaily Scope = "global_daily"
 	// ScopeBusy is the in-flight cap.
 	ScopeBusy Scope = "busy"
+	// ScopeInbox is the open-knowledge-request cap: a submission is refused
+	// once the owner's inbox is at the configured limit. The check is a soft
+	// bound (count then insert, no transaction), so a burst can overshoot it
+	// by a few rows; it protects disk from a flood, not state from a race.
+	ScopeInbox Scope = "inbox"
 )
 
 // Refusal reports which gate refused a request and when to come back. Callers
@@ -72,6 +77,8 @@ func (r *Refusal) Message() string {
 		return "rate limit exceeded"
 	case ScopeBusy:
 		return "too many concurrent answers"
+	case ScopeInbox:
+		return "too many pending knowledge requests"
 	default:
 		return "daily quota exhausted"
 	}

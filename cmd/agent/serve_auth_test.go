@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"flag"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -137,9 +138,61 @@ func TestWriteBudgetErrorReturns429(t *testing.T) {
 	}
 }
 
+// TestBudgetActivationIsSplit pins the decoupling: a submission flag must not
+// switch on the answer spend budget on a loopback bind (and vice versa), while
+// a public bind enables both.
+func TestBudgetActivationIsSplit(t *testing.T) {
+	newFlags := func() *flag.FlagSet {
+		fs := flag.NewFlagSet("serve", flag.ContinueOnError)
+		for name := range budgetFlags {
+			fs.Int(name, 1, "")
+		}
+		for name := range requestBudgetFlags {
+			fs.Int(name, 1, "")
+		}
+		return fs
+	}
+
+	fs := newFlags()
+	if err := fs.Parse([]string{"--request-quota", "2"}); err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if budgetActive(false, fs) {
+		t.Error("a request flag enabled the answer budget")
+	}
+	if !submitBudgetActive(false, fs) {
+		t.Error("--request-quota did not enable the submission budget")
+	}
+
+	fs = newFlags()
+	if err := fs.Parse([]string{"--ask-quota", "5"}); err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if !budgetActive(false, fs) {
+		t.Error("--ask-quota did not enable the answer budget")
+	}
+	if submitBudgetActive(false, fs) {
+		t.Error("an answer flag enabled the submission budget")
+	}
+
+	fs = newFlags()
+	if err := fs.Parse(nil); err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if !budgetActive(true, fs) {
+		t.Error("a public bind must budget answers")
+	}
+	if !submitBudgetActive(true, fs) {
+		t.Error("a public bind must budget submissions")
+	}
+	if submitBudgetActive(false, fs) {
+		t.Error("a bare loopback bind must not budget submissions")
+	}
+}
+
 func TestServeAgentCardUsesStaticBase(t *testing.T) {
 	secured := true
-	h := serveAgentCard(func() bool { return secured }, "https://agent.example")
+	h := serveAgentCard(func() bool { return secured }, "https://agent.example", a2a.CardOptions{})
 
 	// A hostile Host/forwarded header must not change the advertised URL.
 	req := httptest.NewRequest(http.MethodGet, "/.well-known/agent-card.json", nil)

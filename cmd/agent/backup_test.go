@@ -8,6 +8,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/eli-l/elilap.dev-agent/internal/envcfg"
+	"github.com/eli-l/elilap.dev-agent/internal/requests"
 	"github.com/eli-l/elilap.dev-agent/internal/store"
 )
 
@@ -38,7 +40,7 @@ func TestRunBackupWritesSnapshot(t *testing.T) {
 	out := filepath.Join(t.TempDir(), "snap.db")
 
 	var stdout, stderr bytes.Buffer
-	code := runBackup([]string{"--db", dbPath, "--out", out}, dbPath, &stdout, &stderr)
+	code := runBackup([]string{"--db", dbPath, "--out", out}, envcfg.Config{DBPath: dbPath}, &stdout, &stderr)
 	if code != 0 {
 		t.Fatalf("exit = %d, stderr = %q", code, stderr.String())
 	}
@@ -70,7 +72,7 @@ func TestRunBackupWritesSnapshot(t *testing.T) {
 func TestRunBackupDefaultPathSitsNextToIndex(t *testing.T) {
 	dbPath := seedBackupIndex(t)
 	var stdout, stderr bytes.Buffer
-	code := runBackup([]string{"--db", dbPath}, dbPath, &stdout, &stderr)
+	code := runBackup([]string{"--db", dbPath}, envcfg.Config{DBPath: dbPath}, &stdout, &stderr)
 	if code != 0 {
 		t.Fatalf("exit = %d, stderr = %q", code, stderr.String())
 	}
@@ -99,7 +101,7 @@ func TestRunBackupMissingIndexLeavesNoFile(t *testing.T) {
 	dbPath := filepath.Join(dir, "missing.db")
 	out := filepath.Join(dir, "snap.db")
 	var stdout, stderr bytes.Buffer
-	code := runBackup([]string{"--db", dbPath, "--out", out}, dbPath, &stdout, &stderr)
+	code := runBackup([]string{"--db", dbPath, "--out", out}, envcfg.Config{DBPath: dbPath}, &stdout, &stderr)
 	if code != 1 {
 		t.Fatalf("exit = %d, want 1", code)
 	}
@@ -118,7 +120,7 @@ func TestRunBackupRefusesExistingDestination(t *testing.T) {
 		t.Fatalf("seed destination: %v", err)
 	}
 	var stdout, stderr bytes.Buffer
-	code := runBackup([]string{"--db", dbPath, "--out", out}, dbPath, &stdout, &stderr)
+	code := runBackup([]string{"--db", dbPath, "--out", out}, envcfg.Config{DBPath: dbPath}, &stdout, &stderr)
 	if code != 1 {
 		t.Fatalf("exit = %d, want 1", code)
 	}
@@ -134,9 +136,101 @@ func TestRunBackupRefusesExistingDestination(t *testing.T) {
 	}
 }
 
+// TestBackupSnapshotsTheRequestStore pins the pairing: the request store is
+// original data, resolved from AGENT_REQUESTS_DB_PATH (rtCfg) rather than from
+// the index directory, and it lands beside the index snapshot.
+func TestBackupSnapshotsTheRequestStore(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := seedBackupIndex(t)
+	reqPath := filepath.Join(dir, "requests.db")
+	reqStore, err := requests.Open(reqPath)
+	if err != nil {
+		t.Fatalf("open requests: %v", err)
+	}
+	if _, _, err := reqStore.Create(requests.CreateInput{Question: "q", Principal: "agent:a"}); err != nil {
+		t.Fatalf("create request: %v", err)
+	}
+	reqStore.Close()
+
+	out := filepath.Join(dir, "index-backup.db")
+	var stdout, stderr bytes.Buffer
+	code := runBackup([]string{"--db", dbPath, "--out", out},
+		envcfg.Config{DBPath: dbPath, RequestsDBPath: reqPath}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("backup exit = %d, stderr = %s", code, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "requests-backup:") {
+		t.Errorf("backup output does not report the request snapshot: %s", stdout.String())
+	}
+	matches, err := filepath.Glob(filepath.Join(dir, "requests-*.db"))
+	if err != nil || len(matches) != 1 {
+		t.Fatalf("requests snapshots = %v, %v; want one", matches, err)
+	}
+	copied, err := requests.Open(matches[0])
+	if err != nil {
+		t.Fatalf("open request snapshot: %v", err)
+	}
+	defer copied.Close()
+	if n, err := copied.Pending(); err != nil || n != 1 {
+		t.Errorf("snapshot pending = %d, %v; want 1", n, err)
+	}
+}
+
+// TestBackupRequestSnapshotNamesAreUnique pins the pairing when two snapshots
+// are taken in the same second: the request snapshot gets its own free name
+// instead of failing after the index snapshot already succeeded.
+func TestBackupRequestSnapshotNamesAreUnique(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := seedBackupIndex(t)
+	reqStore, err := requests.Open(filepath.Join(dir, "requests.db"))
+	if err != nil {
+		t.Fatalf("open requests: %v", err)
+	}
+	reqStore.Close()
+
+	cfg := envcfg.Config{DBPath: dbPath, RequestsDBPath: filepath.Join(dir, "requests.db")}
+	for _, name := range []string{"a.db", "b.db"} {
+		var stdout, stderr bytes.Buffer
+		if code := runBackup([]string{"--db", dbPath, "--out", filepath.Join(dir, name)}, cfg,
+			&stdout, &stderr); code != 0 {
+			t.Fatalf("backup %s exit = %d, stderr = %s", name, code, stderr.String())
+		}
+	}
+	matches, err := filepath.Glob(filepath.Join(dir, "requests-*.db"))
+	if err != nil || len(matches) != 2 {
+		t.Errorf("request snapshots = %v, %v; want two distinct files", matches, err)
+	}
+}
+
+// TestUniqueBackupPathSurvivesAnUnprobeableName pins the non-ENOENT path: an
+// output directory that cannot be stat'ed must return a candidate (so Backup
+// reports the error) instead of minting names forever.
+func TestUniqueBackupPathSurvivesAnUnprobeableName(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root can stat inside a 0000 directory")
+	}
+	dir := t.TempDir()
+	locked := filepath.Join(dir, "locked")
+	if err := os.Mkdir(locked, 0o000); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(locked, 0o700) })
+
+	done := make(chan string, 1)
+	go func() { done <- uniqueBackupPath(locked, "requests-stamp") }()
+	select {
+	case got := <-done:
+		if got == "" {
+			t.Error("uniqueBackupPath returned an empty path")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("uniqueBackupPath spun on an unprobeable directory")
+	}
+}
+
 func TestRunBackupRejectsExtraArgument(t *testing.T) {
 	var stdout, stderr bytes.Buffer
-	if code := runBackup([]string{"extra"}, "index.db", &stdout, &stderr); code != 2 {
+	if code := runBackup([]string{"extra"}, envcfg.Config{DBPath: "index.db"}, &stdout, &stderr); code != 2 {
 		t.Fatalf("exit = %d, want 2", code)
 	}
 }

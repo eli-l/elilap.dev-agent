@@ -4,7 +4,14 @@ Build plan for a local-first RAG agent over Eli's published writing.
 This document is the source of truth for scope, sequencing, and exit criteria.
 Update it as we learn.
 
-**Last refined**: 2026-11-11 (operator small wins + CI + containers + Ragas
+**Last refined**: 2026-11-13 (deferred knowledge requests). A refused
+question can now be **submitted** instead of only refused: it is persisted in
+its own durable store (Decision 26), the owner is notified and answers it by
+publishing, and the peer's agent is told when the answer exists — over an A2A
+push-notification webhook it registered, or by polling `tasks/get`. The store
+is the one intentional write surface, and `tasks/get`/`tasks/cancel`/push
+methods are now real for those tasks. Previous refinement: 2026-11-11
+(operator small wins + CI + containers + Ragas
 gates). Runtime data lives under `./data/` by default, the container path is
 implemented, CI gates gofmt/vet/unit tests, and Ragas now has enforceable
 quality gates plus a 12/15 correctness baseline on `Spark-X2.6-4B-q8_0`.
@@ -83,12 +90,18 @@ original schema.
    LAN — no host Go toolchain, no ollama, no codex required.
 8. Config-driven imports: every provider is declared in one file, so it can
    be enabled, disabled, and reconfigured without touching Go code.
+9. A deferred-question loop (Decision 26): when the writing does not answer a
+   peer's question, the peer can submit it as a durable request; the operator
+   is notified, answers it by publishing, and the peer is notified (or polls)
+   when the grounded answer exists.
 
 **Non-goals (deliberately not in scope)**
 
 * Membership/auth/payments on the A2A surface — token-gated, read-only.
 * Corpus mutation: ingest stays strictly read-only against Ghost and
-  Postiz; the loop reads the index, it never writes upstream.
+  Postiz; the loop reads the index, it never writes upstream. The one write
+  surface is the **knowledge-request store** (Decision 26), which holds peer
+  submissions and their triage — never corpus content.
 * Free-form open-domain chat: the loop exists to answer *from the
   corpus*; off-corpus questions get the refusal string, not improvisation.
 * Multi-agent orchestration inside this service: one loop, one internal
@@ -99,6 +112,9 @@ original schema.
 * Real-time streaming indexes. Hourly polling is fine.
 * Model serving at scale (multi-GPU, clustering) — the single self-hosted
   LocalAI instance is the ceiling; this repo never operates a model server.
+* Auto-recording an unanswered question. A refusal never stores the question;
+  only an explicit submission does (Decision 26), and a recorded request is
+  not a promise that Eli will answer it.
 * Browser-rendered crawling. The HTML provider (§2.6, Decision 22) shipped on
   2026-11-09, but it reads server-rendered HTML only: a page whose content
   exists after hydration stays out of scope, and so do pagination following
@@ -130,12 +146,13 @@ original schema.
 | 17 | Embedding pass | **Separate resumable command after ingest** (decided 2026-11-02): `agent embed` pages over pending chunks, batches `/v1/embeddings`, and stamps `embedded_with = localai:<model>/text-v1`; `--full` re-embeds the corpus. Ingest never calls the model host | Keeps upstream sync independent of model availability, makes an interrupted run resume at the first unembedded chunk, and turns a model/template change into an explicit invalidation instead of a hidden side effect |
 | 18 | Answer path | **The tool-calling loop, only** (2026-11-05): one grounded tool `search_writing`, ≤3 iterations, retrieval-or-refusal. A second path — rewrite → fan-out retrieval → summed-RRF fuse → one answer call — was built behind `AGENT_SEARCH_MODE=fanout`, measured over three rounds, and removed | It never beat the loop on grounding (3/4, 3/4, 2/4, 1/5, 1/4) and was 2-3x slower (16-33s vs 5-12s), because one answer call over five excerpts at `low` effort spends 400-6,600 reasoning tokens; a switchable second path still had to be maintained, documented, and evaluated |
 | 19 | Reasoning budget | `reasoning_effort` pinned per call kind in the request (2026-11-03): `"none"` for the key-extraction call, `"low"` for every call made with excerpts in hand and for the forced no-tools answer | Unset means the backend's model config, which is unbounded on these templates: a two-sentence question burned all 4,096 completion tokens on `reasoning`, returned empty `content` with `finish_reason=length`, and the finalizer turned that into a refusal |
-| 20 | A2A statelessness | One synchronous agent `Message` per `message/send` (2026-11-05): no task store, no streaming, no resumption. `tasks/get`/`tasks/cancel` return `-32001 TaskNotFound`; `message/stream` is `-32004` | A peer gets a grounded answer in one round trip, and the service does not invent task state it cannot resume; the card advertises `streaming: false` so the contract is honest |
+| 20 | A2A statelessness | One synchronous agent `Message` per `message/send` (2026-11-05): no task store, no streaming, no resumption. `tasks/get`/`tasks/cancel` return `-32001 TaskNotFound`; `message/stream` is `-32004`. **Amended 2026-11-13 (Decision 26):** an explicitly *submitted* knowledge request is a real `Task` with persisted state, and `tasks/get`/`tasks/cancel`/`tasks/pushNotificationConfig/*` answer for it; ordinary questions stay stateless | A peer gets a grounded answer in one round trip, and the service does not invent task state it cannot resume; the card advertises `streaming: false` so the contract is honest |
 | 21 | A2A credentials | Bearer tokens from `AGENT_A2A_TOKENS` (process-start pairs) plus a re-read `0600` `AGENT_A2A_TOKENS_FILE`; `agent tokens add`, `revoke`, and `list`; 30 model-touching requests/min per token via `--rate-limit` (later superseded for answers by Decision 25's spend budget; `--rate-limit` now covers `/v1/retrieve` only), failed auth capped via `--auth-limit`; the store latches secured once any token existed (2026-11-05) | Rotation without restart, a token id in the audit record, and a bucket that protects the single model host; a file-based store beats an env-only list for revocation |
 | 22 | Website source | A generic `web` provider (`internal/sources/web`) indexes public HTML pages: sitemap/feed/seed discovery with path filters, robots.txt + delay politeness, and a **named strategy** per source (`auto`, `article`, `selectors`, `body`, or a Go `Adapter`). Items are `source_kind = web_page` with id `host+path`; `elilap.dev` uses the `elilap` adapter and the Ghost source keeps owning `read.elilap.dev` posts. Shipped 2026-11-09 | One provider reads any server-rendered site; a layout the generic passes cannot read is one small Go adapter, and the strategy choice is made offline with `agent sources inspect` instead of by a model at ingest time, so every run stays deterministic |
 | 23 | Model roles | **Embeddings and chat are configured independently** (2026-11-13): `EMBED_BASE_URL`/`EMBED_API_KEY`/`EMBED_MODEL`/`EMBED_DIMS` and `CHAT_BASE_URL`/`CHAT_API_KEY`/`CHAT_MODEL`/`CHAT_TOKEN_PARAM`, each defaulting to the local host. `EMBED_DIMS` (default 768) is the schema width: a read-write open rebuilds `chunks_vec` when it changes and clears the stamps, so the corpus re-embeds; read-only commands fail with `ErrVecDims` instead. `CHAT_TOKEN_PARAM` selects `max_tokens` (default) or `max_completion_tokens`, which OpenAI reasoning models require | Either role can move to any OpenAI-compatible cloud provider (the first is OpenAI `gpt6-luna`) without touching the other, and the index is not silently wrong when the embedder's width changes |
 | 24 | Answer shape | **The model writes the summary only; the loop attaches the evidence** (2026-11-13). The prompt forbids citation markers, chunk ids, and the model's own source list, and the tool payload no longer carries `chunk_id`, so the identifier never enters the model's context. The response is `answer` + `citations` (one per grounded excerpt: kind, url, title, section, published_at, excerpt) + `sources` (one per distinct document: kind, url, title, author, platform, published_at). Refusal is the same string with both arrays empty; an answer produced without a retrieved excerpt is refused. `chunk_id` is logged on the debug `rag: answer` line and in the retrieval trace, never returned | A summary is what a peer can actually quote, and evidence the service derives from its own retrieval record cannot be fabricated by the model. The trade-off is explicit: the old marker check verified every claim; the new backstop is "never answered without retrieved excerpts" |
 | 25 | Public budget | **Public, token-less access is bounded by spend, not credentials** (2026-11-13). A peer identifies itself as an **agent** (`message/send` `params.message.metadata.agentId`, or `X-Agent-Id`) or a **user** (`X-User-Id` on `/v1/ask`); a configured bearer token still wins over either. Every answer passes four gates in `internal/budget`: 3/min per identity, 20/day per identity, 20/day per source address, 60/day global, plus 2 concurrent model calls. Counters persist in `<db dir>/quota.json` (`0600`, atomic write, UTC-day keyed) because `serve` opens the index read-only and must never write it. `--bind-public` now requires the daily quotas instead of a token, and `/v1/retrieve` is not registered on a public bind unless `--allow-public-retrieve` | A self-asserted identifier is an accounting key, not a security boundary — a peer can rotate it — so the **global daily cap** is the real spend ceiling and the per-address cap backstops rotation. A daily cap, not a per-minute rate, is what bounds a model bill: 30/min is 43,200 requests a day, and the loop's own ceilings (3 iterations, 2,048 completion tokens) cap each answer at roughly $0.005–0.014 |
+| 26 | Deferred knowledge requests | **A refusal can be submitted as durable work, not just declined** (2026-11-13). An explicit `message/send` whose `message.metadata.knowledgeRequest` is `{}` (optionally `{reason, context, idempotencyKey, origin}`) is persisted in a **separate SQLite file** (`AGENT_REQUESTS_DB_PATH`, default `requests.db` beside the index) and answered with a `Task` in `submitted`; `tasks/get` reports `working`/`completed`/`rejected`/`canceled`, `tasks/cancel` withdraws, and `tasks/pushNotificationConfig/set` registers a webhook that receives the completed Task. The owner triages with `agent requests list|show|review|resolve|decline|delete|purge`; `resolve` runs the grounded loop on the stored question by default and refuses to resolve while the corpus still refuses. Peer push targets are **https-only public hosts**, dialed through a vetted resolver (SSRF); `--push-allow-insecure` exists for loopback testing and is a **startup error with `--bind-public`**. A separate submission budget (`--request-rate`, `--request-quota`, `--request-address-quota`, `--request-global-quota`, `--max-pending`) is required on a public bind, and the owner is notified through `AGENT_REQUEST_NOTIFY_URL` | The question a peer actually needed answered is the most useful signal the corpus can get, and it only exists if it is stored somewhere an index rebuild cannot erase. Keeping it out of `index.db` also keeps `serve`'s read-only index invariant intact, and the two budgets keep a public deployment's storage bound. The trade-off is explicit: the store holds peer text, so it is local-only, never in the audit stream, and never corpus evidence |
 
 ### 1.5 Verified environment (audited 2026-10-21; Go floor re-verified 2026-10-23; A2A path verified 2026-11-05)
 
@@ -199,12 +216,13 @@ elilap.dev-agent/
 ├── go.mod / go.sum                   # dependency source of truth
 ├── vendor/                           # local only (gitignored); `go mod vendor`
 ├── data/                             # runtime: index + WAL/SHM, backups,
-│                                     # token file (contents gitignored)
+│                                     # token file, requests.db, quota files
 ├── cmd/
 │   └── agent/                        # one binary; subcommand dispatch +
 │                                     # one file per subcommand: ingest.go,
 │                                     # embed.go, query.go, ask.go, stats.go,
-│                                     # backup.go, serve.go, tokens.go
+│                                     # backup.go, serve.go, tokens.go,
+│                                     # requests.go
 ├── internal/
 │   ├── a2a/                          # A2A v0.3 wire types, agent card,
 │   │                                 # message/send handler
@@ -220,6 +238,8 @@ elilap.dev-agent/
 │   ├── logging/                      # zerolog root + six module loggers (incl. audit)
 │   ├── ratelimit/                    # keyed minute bucket
 │   ├── budget/                       # public spend ceiling + quota.json
+│   ├── requests/                     # durable knowledge-request store (own DB)
+│   ├── notify/                       # webhook sender: SSRF guard, HMAC, retries
 │   ├── retrieval/                    # hybrid FTS + vec + RRF — the search_writing tool's engine
 │   ├── sources/                      # Provider interface, registry, Ghost/Postiz
 │   │   ├── provider.go
@@ -1230,6 +1250,7 @@ public binds, keeping the token path for private ones. Decision 25.
 - [ ] Follow-up, not in this phase: an HTTP-layer flood limiter for the always-
   public card and the 4xx paths (the budget deliberately guards spend, not
   request count), and a per-identity usage view (`agent budget status`).
+  (The deferred-question store shipped as Phase 5, Decision 26.)
 
 **Security posture (public mode)**
 
@@ -1240,6 +1261,89 @@ public binds, keeping the token path for private ones. Decision 25.
   the tap.
 - Tokens remain available for private deployments and still win over a
   self-asserted id when present.
+
+---
+
+### Phase 5 — Deferred knowledge requests and the owner inbox
+
+**Status 2026-11-13: implemented.** A peer that gets the refusal string can
+submit the unanswered question instead of giving up on the agent. The request
+is persisted outside the disposable index, the operator is notified and
+answers it by publishing, and the peer is told when the grounded answer
+exists. Decision 26 is the scope; this phase is its task list.
+
+**Goal**: turn "not in my published writing" into a durable request the
+operator can act on, without turning the agent into a write API or the corpus
+into a suggestion box.
+
+**Tasks** (all done 2026-11-13)
+
+- [x] `internal/requests`: a durable store in its own SQLite file
+  (`AGENT_REQUESTS_DB_PATH`, default `<db dir>/requests.db`) with an embedded
+  schema, `new|reviewed|resolved|declined|canceled` transitions, per-principal
+  idempotency keys, a pending count, `delete`/`purge`, push-registration
+  state, and `VACUUM INTO` snapshots. It is opened read-write by `serve` and
+  by `agent requests`; the writing index stays read-only for serving.
+- [x] `message/send` submission branch: `message.metadata.knowledgeRequest`
+  (object or `true`, strict fields `reason`/`context`/`idempotencyKey`/`origin`)
+  stores the question and returns an A2A **`Task`** (`submitted`) carrying the
+  request id and the peer's `contextId`. A retry with the same key returns the
+  same task; a different question under the same key is `-32602`. Without a
+  store the method answers `-32004`.
+- [x] `tasks/get` / `tasks/cancel`: real task state for submitted requests
+  (`submitted`/`working`/`completed`/`rejected`/`canceled`); a completed task
+  carries the grounded answer as an artifact with `citations`/`sources`
+  metadata, and canceling a closed request is `-32002`.
+- [x] Push notifications: `tasks/pushNotificationConfig/set|get|list|delete`
+  plus an optional send-time registration, served only when
+  `--push-notifications` is set (the card advertises the capability only
+  then). Delivery is a JSON `Task` POST with `X-A2A-Notification-Token` and an
+  HMAC-SHA256 body signature, three attempts, bounded queue on the owner side,
+  and recorded state per request.
+- [x] `internal/notify`: one sender for both directions. Peer-supplied URLs
+  must be **https** and resolve to a public address, are dialed by the vetted
+  IP (DNS-rebinding safe), never follow redirects, and can be restricted to an
+  operator allowlist. `--push-allow-insecure` allows http/private targets for
+  loopback testing and is refused with `--bind-public`; the owner notification
+  URL is operator config and may be a local http hook.
+- [x] Owner inbox: `agent requests list|show|review|resolve|decline|delete|
+  purge`, the only reader of stored question text. `resolve` runs the grounded
+  loop on the stored question by default and refuses to record a resolution
+  while the corpus still refuses (`--no-ask --answer` is the explicit
+  override); on success it stores the answer/citations/sources, flips the task
+  to `completed`, and delivers the peer notification.
+- [x] Budgets and caps: a separate submission budget
+  (`--request-rate` 1/min, `--request-quota` 3/day per identity,
+  `--request-address-quota` 5/day per address, `--request-global-quota` 20/day,
+  `--max-pending` 500) with counters in `request-quota.json`, required
+  non-zero on `--bind-public`, so a public inbox is bounded in storage as well
+  as abuse.
+- [x] Disclosure: a refusal's `metadata.requestSubmission` (and the card's
+  `knowledge-request` extension) explains how to submit, that it stores the
+  question, and that it is not a promise of an answer.
+- [x] Backup: `agent backup` snapshots the request store beside the index
+  (`requests-<stamp>.db`) and skips it when it does not exist.
+- [x] Docs: [deferred knowledge requests](/docs/requests.md), `docs/a2a.md`
+  (submission, task states, push, https rule), `docs/environment.md` (two new
+  variables, two runtime files), `docs/runbook.md` (owner workflow, local http
+  hook), `docs/logging.md` (the `submitted` audit outcome), `AGENTS.md`.
+
+**Exit criteria**
+
+- [x] A peer gets a task id from `message/send` and can read the task back
+  with `tasks/get` after the owner resolves it. Verified on loopback: submit,
+  owner notification delivered, `resolve --no-ask`, peer webhook received the
+  completed Task with its artifact, `tasks/get` returned `completed`.
+- [x] An ordinary refusal still stores nothing, and a deployment without a
+  request store does not advertise submissions.
+- [x] An index rebuild does not touch the request store (`rm data/index.db*`
+  leaves `requests.db` intact, and `agent backup` snapshots both).
+- [ ] Follow-up, not in this phase: request digests to the owner, caller-facing
+  status subscriptions, an email/SMTP sender (the webhook is the only
+  transport), and a per-request corpus revision on the answer.
+
+**Estimated effort**: 2–3 days (store, A2A task surface, push/SSRF guard,
+owner CLI, docs). Implemented in one pass on 2026-11-13.
 
 ---
 
@@ -1269,6 +1373,10 @@ public binds, keeping the token path for private ones. Decision 25.
 | Loop grounds on weak retrieval (model calls the tool once, answers from thin context) | Medium | Confident but uncited or wrong answers on A2A | Prompt requires a citation for every claim and the refusal string otherwise; Phase 2 eval grades loop answers, not just raw retrieval; the iteration budget forces a second retrieval attempt |
 | Prompt injection via a peer's task text | Low | Refusal bypass or fabricated citations | Peer text is data, never instructions (grounded prompt); citations must resolve to retrieved `chunk_id`s; the API is read-only, capping the blast radius |
 | Agent sandbox lacks network for embeddings/API calls | Medium | Slow dev loop | Run networked steps with explicit permission or outside the sandbox; never bake keys into the repo |
+| Peer webhook becomes an SSRF pivot into the operator's network | Medium | Internal service reachable from the agent host | https-only, public-address-only, vetted-IP dialing (no re-resolution), no redirects, optional host allowlist; `--push-allow-insecure` is refused with `--bind-public` |
+| The request store fills with spam or junk submissions | Medium | Disk growth and a useless inbox | Separate submission budget (rate, per-identity, per-address, global daily) required on a public bind, plus `--max-pending`; owner `delete`/`purge` |
+| Stored question text leaks into logs or answers | Low | Privacy breach for a peer | Questions live only in `requests.db`; the audit module records a fingerprint, never the text; a stored request is never corpus evidence |
+| The owner marks a request resolved without publishing about it | Medium | Peer receives an answer the corpus cannot support | `agent requests resolve` runs the grounded loop by default and refuses while the corpus refuses; `--no-ask` is an explicit, documented override |
 
 ---
 
@@ -1320,6 +1428,10 @@ public binds, keeping the token path for private ones. Decision 25.
    `agent ask`, and streaming would change the answer contract; revisit
    only if a Phase 4 peer asks for `message/stream`, in which case it
    arrives as an A2A capability, not a dev-endpoint feature.
+10. Should a submitted request expire? **Default (2026-11-13)**: no automatic
+    expiry. Open requests stay open until the owner triages them, because a
+    dropped request is a silent failure; `agent requests purge --older-than`
+    handles housekeeping for closed ones.
 
 ---
 
@@ -1338,6 +1450,9 @@ The project is "done" when:
   citation-carrying answer produced by the in-service loop. **Satisfied
   2026-11-05** (live `message/send` with a cited Ghost chunk;
   `docs/runs/a2a-surface-2026-11-05.md`).
+* An unanswered question can be submitted, survives an index rebuild, reaches
+  the operator, and comes back to the submitting agent as a completed task.
+  **Satisfied 2026-11-13** (Decision 26, Phase 5; verified on loopback).
 * It runs unattended for a month without manual intervention.
 
 We are not done at MVP. We are not done at Phase 2. The A2A half of

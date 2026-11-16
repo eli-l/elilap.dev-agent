@@ -20,6 +20,8 @@ import (
 	"github.com/eli-l/elilap.dev-agent/internal/auth"
 	"github.com/eli-l/elilap.dev-agent/internal/budget"
 	"github.com/eli-l/elilap.dev-agent/internal/logging"
+	"github.com/eli-l/elilap.dev-agent/internal/notify"
+	"github.com/eli-l/elilap.dev-agent/internal/requests"
 )
 
 const (
@@ -54,6 +56,31 @@ type Handler struct {
 	MaxElapsed time.Duration
 	// Budget charges an answer; nil disables it.
 	Budget Acquirer
+	// Submit charges a knowledge-request submission; nil means submissions
+	// are free (loopback dev), and has no effect when Requests is nil.
+	Submit Acquirer
+	// Requests is the durable deferred-question store. Nil means this
+	// deployment does not accept knowledge requests, and the refusal result
+	// does not advertise them.
+	Requests *requests.Store
+	// Push validates and delivers peer webhooks; nil disables push
+	// registration even when Requests is set.
+	Push *notify.Sender
+	// OnSubmit is called after a submission is durable. It must not block:
+	// `serve` uses it to enqueue the owner notification.
+	OnSubmit func(requests.Request)
+	// MaxPending caps open requests; 0 means unlimited.
+	MaxPending int
+	// Now overrides the clock in tests; nil means time.Now.
+	Now func() time.Time
+}
+
+// now returns the handler clock.
+func (h *Handler) now() time.Time {
+	if h.Now != nil {
+		return h.Now()
+	}
+	return time.Now()
 }
 
 // NewHandler builds the JSON-RPC handler around a loop.
@@ -120,25 +147,28 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	switch req.Method {
 	case MethodSendMessage:
 		result, rpcErr, refusal := h.sendMessage(r, req.Params)
-		if refusal != nil {
-			writeBudgetError(w, req.ID, refusal, budget.PeerAddress(r))
-			return
-		}
-		if rpcErr != nil {
-			writeRPCError(w, http.StatusOK, req.ID, rpcErr)
-			return
-		}
-		writeRPCResult(w, req.ID, result)
-	case MethodGetTask, MethodCancelTask:
-		// This service answers each message synchronously and keeps no task
-		// store: it never returns a Task, so no task id can be known here.
-		writeRPCError(w, http.StatusOK, req.ID, &Error{Code: CodeTaskNotFound, Message: "Task not found"})
+		h.respond(w, r, req.ID, result, rpcErr, refusal)
+	case MethodGetTask:
+		result, rpcErr := h.getTask(r, req.Params)
+		h.respond(w, r, req.ID, result, rpcErr, nil)
+	case MethodCancelTask:
+		result, rpcErr := h.cancelTask(r, req.Params)
+		h.respond(w, r, req.ID, result, rpcErr, nil)
+	case MethodPushConfigSet:
+		result, rpcErr := h.setPushConfig(r, req.Params)
+		h.respond(w, r, req.ID, result, rpcErr, nil)
+	case MethodPushConfigGet:
+		result, rpcErr := h.getPushConfig(r, req.Params)
+		h.respond(w, r, req.ID, result, rpcErr, nil)
+	case MethodPushConfigList:
+		result, rpcErr := h.listPushConfigs(r, req.Params)
+		h.respond(w, r, req.ID, result, rpcErr, nil)
+	case MethodPushConfigDelete:
+		result, rpcErr := h.deletePushConfig(r, req.Params)
+		h.respond(w, r, req.ID, result, rpcErr, nil)
 	case MethodStreamMessage, MethodResubscribe:
 		writeRPCError(w, http.StatusOK, req.ID, &Error{Code: CodeUnsupported,
 			Message: "streaming is not supported"})
-	case MethodPushConfigSet, MethodPushConfigGet, MethodPushConfigList, MethodPushConfigDelete:
-		writeRPCError(w, http.StatusOK, req.ID, &Error{Code: CodePushNotSupported,
-			Message: "push notifications are not supported"})
 	case MethodExtendedCard:
 		writeRPCError(w, http.StatusOK, req.ID, &Error{Code: CodeExtendedCardNotConfigured,
 			Message: "authenticated extended card is not configured"})
@@ -147,10 +177,32 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// respond writes the result/error pair the task methods return, including the
+// budget refusal that only a message/send can produce.
+func (h *Handler) respond(w http.ResponseWriter, r *http.Request, id json.RawMessage, result any, rpcErr *Error, refusal *budget.Refusal) {
+	if refusal != nil {
+		writeBudgetError(w, id, refusal, budget.PeerAddress(r))
+		return
+	}
+	if rpcErr != nil {
+		writeRPCError(w, http.StatusOK, id, rpcErr)
+		return
+	}
+	if result == nil {
+		// A successful method with no payload (pushNotificationConfig/delete)
+		// must still carry a result member: Response.Result is omitempty, and
+		// omitting it makes the response invalid JSON-RPC.
+		result = json.RawMessage("null")
+	}
+	writeRPCResult(w, id, result)
+}
+
 // sendMessage runs the grounded loop for one peer message and returns an A2A
-// agent Message carrying the answer plus citation metadata. A budget refusal is
-// reported separately so the transport can answer 429 with a Retry-After.
-func (h *Handler) sendMessage(r *http.Request, raw json.RawMessage) (*Message, *Error, *budget.Refusal) {
+// agent Message carrying the answer plus citation metadata - or, when the peer
+// explicitly submits its unanswered question, a Task for the deferred request.
+// A budget refusal is reported separately so the transport can answer 429 with
+// a Retry-After.
+func (h *Handler) sendMessage(r *http.Request, raw json.RawMessage) (any, *Error, *budget.Refusal) {
 	var params MessageSendParams
 	if len(raw) == 0 {
 		return nil, &Error{Code: CodeInvalidParams, Message: "params are required"}, nil
@@ -186,13 +238,31 @@ func (h *Handler) sendMessage(r *http.Request, raw json.RawMessage) (*Message, *
 	if rpcErr := checkOutputModes(params.Configuration); rpcErr != nil {
 		return nil, rpcErr, nil
 	}
+	spec, wantsSubmission, subErr := submissionFrom(msg)
+	if subErr != nil {
+		return nil, subErr, nil
+	}
+	// A push registration on the answer path has nothing to notify about; on
+	// the submission path it registers the webhook for the returned task.
+	var sendPush *PushNotificationConfig
 	if params.Configuration != nil && len(params.Configuration.PushNotificationConfig) > 0 {
-		return nil, &Error{Code: CodePushNotSupported, Message: "push notifications are not supported"}, nil
+		if !wantsSubmission {
+			return nil, &Error{Code: CodePushNotSupported,
+				Message: "push notifications apply to knowledge requests; use tasks/pushNotificationConfig/set for a task"}, nil
+		}
+		cfg, rpcErr := pushConfigFromMap(params.Configuration.PushNotificationConfig)
+		if rpcErr != nil {
+			return nil, rpcErr, nil
+		}
+		sendPush = cfg
 	}
 
 	principal, rpcErr := a2aPrincipal(r, msg)
 	if rpcErr != nil {
 		return nil, rpcErr, nil
+	}
+	if wantsSubmission {
+		return h.submitRequest(r, msg, question, spec, principal, sendPush)
 	}
 	if h.Budget != nil {
 		release, err := h.Budget.Acquire(budget.Caller{
@@ -277,20 +347,63 @@ func (h *Handler) sendMessage(r *http.Request, raw json.RawMessage) (*Message, *
 	if contextID == "" {
 		contextID = newID()
 	}
+	metadata := map[string]any{
+		"citations":       citations,
+		"sources":         sources,
+		"refused":         answer.Refused,
+		"tool_iterations": answer.ToolIterations,
+		"elapsed_ms":      answer.ElapsedMS,
+	}
+	// A refusal is the one answer that can be turned into a deferred request;
+	// advertise that here rather than making the peer discover the extension.
+	if answer.Refused && h.Requests != nil {
+		metadata["requestSubmission"] = requestSubmissionHint(h.Push != nil)
+	}
 	return &Message{
 		Kind:      "message",
 		Role:      "agent",
 		MessageID: newID(),
 		ContextID: contextID,
 		Parts:     []Part{{Kind: "text", Text: answer.Answer}},
-		Metadata: map[string]any{
-			"citations":       citations,
-			"sources":         sources,
-			"refused":         answer.Refused,
-			"tool_iterations": answer.ToolIterations,
-			"elapsed_ms":      answer.ElapsedMS,
-		},
+		Metadata:  metadata,
 	}, nil, nil
+}
+
+// pushConfigFromMap reads the send-time pushNotificationConfig object, which
+// the wire type models as a generic map because only these two fields matter.
+func pushConfigFromMap(raw map[string]any) (*PushNotificationConfig, *Error) {
+	cfg := &PushNotificationConfig{}
+	for key, value := range raw {
+		s, ok := value.(string)
+		switch key {
+		case "url":
+			if !ok {
+				return nil, invalidParam("configuration.pushNotificationConfig.url must be a string")
+			}
+			cfg.URL = strings.TrimSpace(s)
+		case "token":
+			if !ok {
+				return nil, invalidParam("configuration.pushNotificationConfig.token must be a string")
+			}
+			cfg.Token = strings.TrimSpace(s)
+		case "authentication", "id":
+			// Accepted and ignored: this service authenticates its delivery
+			// with the shared token header, not a peer-chosen scheme, and a
+			// client may echo the config it read back from `get`.
+		default:
+			// Unknown fields are ignored, matching the wire-type parsers used
+			// by tasks/pushNotificationConfig/set, so an otherwise-valid client
+			// is not rejected for a field we do not use.
+			continue
+		}
+	}
+	if cfg.URL == "" {
+		return nil, invalidParam("configuration.pushNotificationConfig.url is required")
+	}
+	if len(cfg.Token) > maxPushTokenBytes {
+		return nil, invalidParam(fmt.Sprintf("configuration.pushNotificationConfig.token must be at most %d bytes", maxPushTokenBytes))
+	}
+	return cfg, nil
 }
 
 // a2aPrincipal resolves who a peer's answer is charged to. A configured bearer

@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 
@@ -73,6 +74,14 @@ const (
 	// EnvA2APublicURL is the absolute service root the agent card advertises.
 	// Empty derives it from each request (Host plus scheme).
 	EnvA2APublicURL = EnvPrefix + "_A2A_PUBLIC_URL"
+	// EnvRequestsDBPath is the durable knowledge-request store. Empty means
+	// `requests.db` beside the index, so a container writes it into /data
+	// without a second variable.
+	EnvRequestsDBPath = EnvPrefix + "_REQUESTS_DB_PATH"
+	// EnvRequestNotifyURL is the operator webhook told about every new
+	// knowledge request. Empty disables the notification (the inbox CLI still
+	// lists submissions).
+	EnvRequestNotifyURL = EnvPrefix + "_REQUEST_NOTIFY_URL"
 )
 
 // Defaults for the settings above. They are exported so callers, docs, and
@@ -101,6 +110,9 @@ const (
 	// lives with the other runtime data and is gitignored; a missing file
 	// simply means no tokens are configured.
 	DefaultA2ATokensFile = "./data/a2a-tokens.txt"
+	// DefaultRequestsDBFile is the request store's filename. Its directory is
+	// the index's directory, so the container gets /data/requests.db for free.
+	DefaultRequestsDBFile = "requests.db"
 )
 
 // EmbedWidth is the vector width of the embeddings model (EMBED_DIMS). It
@@ -159,6 +171,12 @@ type Config struct {
 	// A2APublicURL is the card's advertised service root; empty derives it
 	// from the request.
 	A2APublicURL string `envconfig:"AGENT_A2A_PUBLIC_URL"`
+	// RequestsDBPath is the durable knowledge-request store; empty means
+	// requests.db beside the index (see RequestsPath).
+	RequestsDBPath string `envconfig:"AGENT_REQUESTS_DB_PATH"`
+	// RequestNotifyURL is the operator webhook for new knowledge requests;
+	// empty disables the push notification.
+	RequestNotifyURL string `envconfig:"AGENT_REQUEST_NOTIFY_URL"`
 }
 
 // Load decodes Config from the environment, applying defaults for unset *and
@@ -185,10 +203,13 @@ func Load() (Config, error) {
 		cfg.EmbedDims = DefaultEmbedDims
 	}
 	cfg.A2ATokensFile = DefaultOr(cfg.A2ATokensFile, DefaultA2ATokensFile)
-	// The token list and public URL are legitimately empty; trimming keeps a
-	// stray space out of the pair syntax and the advertised URL.
+	// The token list, public URL, requests path, and notify URL are
+	// legitimately empty; trimming keeps a stray space out of the pair syntax,
+	// the advertised URL, and a file path.
 	cfg.A2ATokens = strings.TrimSpace(cfg.A2ATokens)
 	cfg.A2APublicURL = strings.TrimRight(strings.TrimSpace(cfg.A2APublicURL), "/")
+	cfg.RequestsDBPath = strings.TrimSpace(cfg.RequestsDBPath)
+	cfg.RequestNotifyURL = strings.TrimSpace(cfg.RequestNotifyURL)
 	// An empty API key or token param value is a legitimate value, not a
 	// missing one.
 	cfg.EmbedAPIKey = strings.TrimSpace(cfg.EmbedAPIKey)
@@ -200,6 +221,17 @@ func Load() (Config, error) {
 			EnvChatTokenParam, llm.FieldMaxTokens, llm.FieldMaxCompletionTokens)
 	}
 	return cfg, nil
+}
+
+// RequestsPath resolves the durable knowledge-request store. An explicit
+// AGENT_REQUESTS_DB_PATH wins; otherwise the file sits beside the index, so a
+// host run keeps it in ./data and the container keeps it in /data (the only
+// writable mount) without a second setting.
+func (c Config) RequestsPath() string {
+	if p := strings.TrimSpace(c.RequestsDBPath); p != "" {
+		return p
+	}
+	return filepath.Join(filepath.Dir(c.DBPath), DefaultRequestsDBFile)
 }
 
 // LoadDotEnv loads DotEnvPath into the process environment. It is the one

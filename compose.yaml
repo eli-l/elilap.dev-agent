@@ -13,6 +13,8 @@ services:
         required: false
     environment:
       AGENT_DB_PATH: /data/index.db
+      # The deferred-question store defaults to /data/requests.db (beside the
+      # index), and its budget counters to /data/request-quota.json.
       AGENT_A2A_TOKENS_FILE: /data/a2a-tokens.txt
       # The host publishes 8081 -> container 8080, and --bind-public requires
       # this absolute URL in the agent card. Override it if the host differs.
@@ -35,6 +37,10 @@ services:
     # per address, 60/day global) and writes ./data/quota.json. Add quotas to
     # the command to tighten them, or issue a token to gate every request:
     #   docker compose run --rm agent agent tokens add --id local
+    # Peer push notifications are off by default; add --push-notifications to
+    # the command (https targets only) and set AGENT_REQUEST_NOTIFY_URL in .env
+    # to be told about new submissions. Questions are triaged on the host:
+    #   docker compose run --rm agent agent requests list
     restart: unless-stopped
     read_only: true
     tmpfs:

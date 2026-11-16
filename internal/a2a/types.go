@@ -115,9 +115,10 @@ type AgentProvider struct {
 
 // AgentCapabilities declares the optional A2A features this agent supports.
 type AgentCapabilities struct {
-	Streaming              bool `json:"streaming"`
-	PushNotifications      bool `json:"pushNotifications"`
-	StateTransitionHistory bool `json:"stateTransitionHistory"`
+	Streaming              bool             `json:"streaming"`
+	PushNotifications      bool             `json:"pushNotifications"`
+	StateTransitionHistory bool             `json:"stateTransitionHistory"`
+	Extensions             []AgentExtension `json:"extensions,omitempty"`
 }
 
 // AgentSkill describes the one skill this agent exposes.
@@ -188,6 +189,53 @@ type TaskStatus struct {
 	State     string   `json:"state"`
 	Message   *Message `json:"message,omitempty"`
 	Timestamp string   `json:"timestamp,omitempty"`
+}
+
+// A2A task states. This service produces only the subset a deferred knowledge
+// request can occupy: a submission is `submitted`, owner triage makes it
+// `working`, and it ends `completed`, `rejected`, or `canceled`.
+const (
+	TaskStateSubmitted = "submitted"
+	TaskStateWorking   = "working"
+	TaskStateCompleted = "completed"
+	TaskStateRejected  = "rejected"
+	TaskStateCanceled  = "canceled"
+)
+
+// TaskIDParams is the params object of `tasks/get`, `tasks/cancel`, and the
+// push-config get/list/delete methods. Unknown members (such as the spec's
+// `historyLength`) are ignored.
+type TaskIDParams struct {
+	ID       string         `json:"id"`
+	TaskID   string         `json:"taskId,omitempty"`
+	Metadata map[string]any `json:"metadata,omitempty"`
+}
+
+// PushNotificationConfig is the peer's webhook registration.
+type PushNotificationConfig struct {
+	URL            string         `json:"url"`
+	Token          string         `json:"token,omitempty"`
+	Authentication map[string]any `json:"authentication,omitempty"`
+}
+
+// TaskPushNotificationConfig binds a push config to one task.
+type TaskPushNotificationConfig struct {
+	TaskID                 string                 `json:"taskId"`
+	PushNotificationConfig PushNotificationConfig `json:"pushNotificationConfig"`
+}
+
+// SetTaskPushNotificationConfigParams is `tasks/pushNotificationConfig/set`.
+type SetTaskPushNotificationConfigParams struct {
+	TaskID                 string                 `json:"taskId"`
+	PushNotificationConfig PushNotificationConfig `json:"pushNotificationConfig"`
+}
+
+// AgentExtension is one advertised A2A extension.
+type AgentExtension struct {
+	URI         string         `json:"uri"`
+	Description string         `json:"description,omitempty"`
+	Required    bool           `json:"required,omitempty"`
+	Params      map[string]any `json:"params,omitempty"`
 }
 
 // Artifact is one task output.
